@@ -7,3 +7,4 @@ runs/
 .pytest_cache/
 dist/
 build/
+node_modules/

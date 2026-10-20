@@ -1,6 +1,8 @@
 # Part 2 harness: which base, and the Harness² experiment
 
 > Written 2026-10-19 while the RLM training run was paused. This is the research behind the choice of base. Rishi chose the thin build on 2026-10-19. Paths such as `rlm_rl/` and `documentation/production-spec.md` refer to the training repo, [RishiJain905/RLM](https://github.com/RishiJain905/RLM). Sources are at the end.
+>
+> **Superseded in part on 2026-10-20.** The harness is now a TypeScript app on Bun driving a Python engine, so it has its own CLI and UI rather than borrowing DeepSeek Harness's through MCP. The MCP server wrapper below is deferred until a real use for it appears. The thin-build choice and the Harness² experiment stand. Current design: [architecture.md](architecture.md).
 
 ## 1. Recommendation
 
