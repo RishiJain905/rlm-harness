@@ -3,6 +3,15 @@
 > Written 2026-10-19 while the RLM training run was paused. This is the research behind the choice of base. Rishi chose the thin build on 2026-10-19. Paths such as `rlm_rl/` and `documentation/production-spec.md` refer to the training repo, [RishiJain905/RLM](https://github.com/RishiJain905/RLM). Sources are at the end.
 >
 > **Superseded in part on 2026-10-20.** The harness is now a TypeScript app on Bun driving a Python engine, so it has its own CLI and UI rather than borrowing DeepSeek Harness's through MCP. The MCP server wrapper below is deferred until a real use for it appears. The thin-build choice and the Harness² experiment stand. Current design: [architecture.md](architecture.md).
+>
+> **Superseded further on 2026-10-21 and 2026-10-23:**
+> - **No Docker and no WSL.** The REPL runs as a local Python process with permission prompts instead of the training container, so the harness runs natively on macOS, Windows and Linux.
+> - **Model clients move into the Bun app** (the "model gateway"), so Python never sees a key.
+> - **Keys** are pasted into a `/providers` screen and kept in the OS credential store. They are never used for a call the user didn't ask for.
+> - **Harness² moves up from v2 to v1.**
+> - **Borrowing** from OMP and DeepSeek Harness is now by copying ideas and MIT code, not by plugging into either.
+>
+> §8's version plan below is out of date. The current one is in [architecture.md](architecture.md#versions) and [v0-build-plan.md](v0-build-plan.md).
 
 ## 1. Recommendation
 

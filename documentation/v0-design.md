@@ -1,122 +1,104 @@
 # v0 design
 
-> Updated 2026-10-20 for the Bun app and Python engine split, for review before anything is built. The overall picture is in [architecture.md](architecture.md).
+> Updated 2026-10-24 as the v0 spec, for review before anything is built. The overall picture is in [architecture.md](architecture.md), and the steps to build this are in [v0-build-plan.md](v0-build-plan.md). Choices still open are marked with their decision number from the build plan (for example 2a).
 
 ## Goal
 
-Run any OpenAI-compatible model as an RLM root, with any model for sub-calls, from a terminal command that shows the run live. With the default profile, the root sees exactly the messages the trained LoRA saw in training (prompt v4). It works on long text (read mode, v0a) and then on a code repository (repo mode, v0b).
+`rlmh` runs any model as an RLM root, with any model for sub-calls, from an interactive terminal app on macOS, Windows or Linux. You install it with one command, paste a key into `/providers` and start. With the `training-v4` profile, the root sees exactly the messages the trained LoRA saw in training. It works on long text (read mode) and on a code repository (repo mode).
 
 **Not in v0:**
-- The full-screen TUI, the web UI, `rlm()` recursion and a native Anthropic client (v1).
-- Harness² (v2).
-- The Windows desktop app, and a sandbox without WSL (v3). v0 needs Linux or WSL2 with Docker, like training.
+- Harness², `rlm()` recursion and follow-up conversation within a run (v1).
+- Full TUI polish and the web UI (v2).
+- The Windows desktop app (v3).
 - MCP (deferred).
+- An OS sandbox beyond permission prompts (later).
 - Grading. This repo never holds gold answers; scoring stays in the RLM repo.
 
 ## Layout
 
-One repo, two folders:
+One repo, two halves:
 
 ```
 rlm-harness/
-  engine/                     # Python 3.12, managed with uv
-    pyproject.toml            # deps: openai; dev: pytest
-    rlm_engine/
-      __init__.py             # run(), Result, load_models(), load_profile()
-      __main__.py             # python -m rlm_engine serve
-      rpc.py                  # JSON-RPC over stdio: requests in, events out
-      contract.py             # copy of the RLM repo's bridge.py: prompt v4, limits, observation text, code extraction
-      loop.py                 # the run loop: env.run_episode without the training parts
-      client.py               # OpenAI-compatible client: root turns, sub-calls, limiter, retries, usage, cost
-      config.py               # models.toml and profile folders
-      runlog.py               # one JSON line per run
-      sandbox/
-        docker.py             # copy of sandbox.py, with the EpisodeBridge socket server
-        worker.py             # copy of repl_worker.py (runs inside the container)
-        tools.py              # copy of repl_tools.py (repo mode, v0b)
-        workspace.py          # the repo-copy and diff parts of editbox.py (v0b)
-    profiles/default/profile.toml
-    tests/
-  app/                        # TypeScript on Bun
-    package.json              # bin: rlmh; no runtime dependencies in v0
+  app/                          # TypeScript on Bun: the interface and the model gateway
+    package.json                # bin: rlmh
     src/
-      cli.ts                  # argument parsing and the commands
-      engine.ts               # starts the engine, sends requests, reads events
-      render.ts               # the live view in the terminal
+      main.ts                   # entry: interactive app, run, batch, config
+      link.ts                   # JSON-RPC over the engine's stdio, both directions
+      engine.ts                 # gets Python through uv and starts the engine
+      settings.ts               # one schema for /settings and `rlmh config`
+      interface/                # Ink screens: prompt box, status line, sub-call panel, approvals, slash commands
+      gateway/
+        providers.ts            # the provider list and how each one is called
+        keys.ts                 # Bun.secrets, with the owner-only file fallback
+        catalog.ts              # loads the bundled model catalog
+        openai.ts               # every OpenAI-compatible endpoint, through the openai SDK
+        anthropic.ts            # Anthropic, through @anthropic-ai/sdk
+        cache.ts                # cache markers and the llm_batch prefix rule
+        usage.ts                # tokens, cost and cache hits
+    catalog/models.json         # bundled catalog data, with its attribution
     test/
+  engine/                       # Python 3.12, standard library only
+    pyproject.toml
+    rlm_engine/
+      __main__.py               # python -m rlm_engine serve
+      link.py                   # the engine side of the JSON-RPC link
+      contract.py               # copy of the RLM repo's bridge.py: prompt v4, limits, texts, code extraction
+      callformat.py             # fenced python text, and the native python tool
+      loop.py                   # env.run_episode without the training parts
+      bridge.py                 # sub-call budget and size limits, and fetch
+      permissions.py            # modes and approval requests
+      runlog.py                 # one JSON line per run
+      worker/
+        manager.py              # starts, feeds, times out and restarts the worker
+        worker.py               # copy of repl_worker.py; runs as the REPL process
+        hooks.py                # audit hooks that raise approval requests
+        tools.py                # copy of repl_tools.py, plus fetch
+      profiles/
+        training-v4/profile.toml
+        default/profile.toml, guidance.md
+    tests/
+  install.sh, install.ps1
   documentation/
 ```
 
-**Copy, don't import.** The training repo pulls in ART, W&B and the reward code, and it is shaped by training needs. Copying about 3,000 lines keeps the engine light. Two checks stop the copies drifting from training (see Tests).
+**Every module starts with a cache note,** as in DeepSeek Harness: one line saying whether the module can change the bytes sent to the model, and if so, how it keeps them stable.
+
+**Copy, don't import.** The training repo pulls in ART, W&B and the reward code. Copying the contract, the worker and the tools keeps the engine small and free of dependencies. Two checks stop the copies drifting from training (see Tests).
 
 ## The frozen contract (`contract.py`)
 
 This is what the trained LoRA learned, copied from `rlm_rl/bridge.py` at RLM commit `0b9af69`:
 
 - **Names in the REPL:** `context`, `llm`, `llm_batch`, `submit`. Repo mode adds `read_file`, `find_files`, `grep`, `edit_file`, `write_file`, `shell` and `diff`. All are synchronous.
-- **Prompt text:** the v4 system prompt, the first user message templates, and every observation and error string.
-- **Turn format:** the first fenced `python` block in the reply. As in v3/v4, a `<function=python>` tool-call block is also accepted, because base Qwen sometimes answers that way.
-- **Observation:** `REPL output:` cut to 8,000 characters, `(N turns left, M sub-calls left)`, and the last-turn line.
-- **Hash:** `sha256` of `PROMPTS["v4"]` must equal `a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6`, the training repo's value.
+- **Prompt text:** the v4 system prompts, the first user message templates, and every observation and error string, including the restart texts ("The cell timed out after … The REPL was restarted and all variables were lost").
+- **Observation:** `REPL output:` cut to 8,000 characters, then `(N turns left, M sub-calls left)`, and the last-turn line.
+- **Hash:** the engine computes its copy's hash the same way the training repo builds `PROMPT_HASHES` (sha256 of the sorted JSON of `PROMPTS["v4"]`). It must equal `a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6`.
+- **Repo path:** the v4 repo-mode texts name `/work/repo`, the container path used in training. Decision 3a covers how a native run handles it. The default is to keep the text and have the tools map `/work/repo` onto the real workspace.
 
-A profile may append guidance to the system prompt (see Configuration). The default profile appends nothing, so its prompt hashes the same as training.
+## Call formats (`callformat.py`)
 
-## App and engine
-
-**How the app finds the engine.** `rlmh` starts the engine as a child process and talks to it over the child's stdin and stdout. In a checkout it runs `uv run --project engine python -m rlm_engine serve`. `RLMH_ENGINE` overrides the command. On Windows the app runs natively and prefixes the command with `wsl -d Ubuntu --`. It also turns Windows paths (the config folder, `--context-file`, `--repo`) into WSL paths, and forwards the key variables named in `models.toml` into WSL through `WSLENV`.
-
-**Protocol.** JSON-RPC 2.0, one JSON object per line. The engine writes only protocol messages to stdout and sends its own logs to stderr, which the app shows with `--verbose`. One engine can hold several runs at once, which is how `rlmh batch --jobs N` works.
-
-Requests from the app:
-
-| Method | Params | Result |
+| Model | How a turn arrives | How the observation goes back |
 |---|---|---|
-| `run.start` | `question` and `context_path` (read mode), or `task` and `repo_path` (repo mode); `root`, `sub` (names in `models.toml`); `profile`; `log_dir` | `{run_id}` |
-| `run.cancel` | `run_id` | `{}`; the run then finishes with `infra_error = "cancelled"` |
-| `models.list` | none | Model names, endpoints and whether each key variable is set. Never the keys |
-| `models.ping` | `name` | `{ok, seconds, error}` from a one-token request |
+| API models (decision 6b) | One native tool call named `python`, whose single argument `code` is the cell | As the tool result, with the same observation text |
+| The LoRA and local models | The first fenced `python` block in the reply text | As the next user message, exactly as in training |
 
-Events from the engine, all carrying `run_id`:
+The engine also accepts a `<function=python>` block written in plain text, as v4 does, because base Qwen sometimes answers that way. A reply with no code uses up the turn and gets the contract's no-code error, as in training. There are no other native tools.
 
-| Event | Fields |
-|---|---|
-| `run.reply` | `turn`, the root's reply text |
-| `run.cell` | `turn`, `code`, `output` (as the model saw it), `error`, `seconds` |
-| `run.subcall` | `turn`, `prompt_chars`, `output_chars`, `seconds`, `error` |
-| `run.usage` | Running totals: root and sub-call tokens, `cost_usd`, sub-calls used |
-| `run.finished` | `answer`, `submitted`, `turns`, `subcalls`, `cost_usd`, `infra_error`, `log_path` |
+## Profiles
 
-The protocol carries what happened, never what to do next: every decision about the model's messages stays in the engine.
+A profile is a folder holding behaviour: `profile.toml` and an optional `guidance.md` appended to the system prompt.
 
-## Configuration
+- **`training-v4`:** the exact training text and limits. Parity runs and evaluations use it, and its prompt hashes the same as training.
+- **`default`:** v4 plus a short guidance block. The block documents `fetch` and says which shell `shell()` runs on this machine. Its hash differs from training on purpose.
 
-Both files live in your own config folder: `~/.config/rlm-harness/` on Linux, `%APPDATA%\rlm-harness\` on Windows, or the folder named by `RLMH_CONFIG`. The app passes that folder to the engine.
+Your own profiles go in `profiles/` in the config folder. Harness² (v1) will edit profile folders, and only levers 3 and 4 (see [architecture.md](architecture.md#why-the-model-makes-sub-calls-instead-of-doing-the-work-itself)).
 
-**Models: `models.toml`.** Endpoints and the names of key variables, nothing about behaviour.
-
-```toml
-[deepseek]
-base_url = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
-api_key_env = "DEEPSEEK_API_KEY"   # the key is read from this variable, never stored
-max_in_flight = 16
-usd_per_m_input = 0.0              # optional, fill in from the provider's price page for cost in the run log
-usd_per_m_output = 0.0
-
-[qwen-local]
-base_url = "http://localhost:8000/v1"   # vLLM, Ollama, LM Studio or llama.cpp server
-model = "Qwen/Qwen3.8-27B"
-api_key_env = "LOCAL_KEY"               # local servers accept any value
-extra_body = { chat_template_kwargs = { enable_thinking = false } }   # passed through unchanged
-```
-
-Thinking is set per model through `extra_body`, because every provider spells it differently. To match training exactly on repo tasks, the sub-call model needs a second entry with Qwen thinking at "low".
-
-**Profiles: one folder each.** A profile holds behaviour: `profile.toml`, plus an optional `guidance.md`. The engine ships `default`; your own profiles go in `profiles/` in the config folder. The default profile is the training setup:
+`training-v4/profile.toml`:
 
 ```toml
 contract = "v4"
-guidance = ""            # a file appended to the system prompt; empty keeps it identical to training
+guidance = ""            # empty keeps the prompt identical to training
 
 [root]
 temperature = 1.0
@@ -133,7 +115,7 @@ subcall_max_chars = 60000
 subcall_max_tokens = 4096
 subcall_oversize = "error"   # an oversize prompt raises in the REPL, so the model splits it
 
-[repo]                   # training v4 edit limits (v0b)
+[repo]                   # training v4 edit limits
 max_turns = 30
 max_subcalls = 80
 root_max_tokens = 4096
@@ -144,92 +126,245 @@ subcall_max_tokens = 4096
 subcall_oversize = "error"
 ```
 
-Harness² (v2) will edit profile folders, adding `helpers.py`, skills and a sub-call system prompt. v0 reads only what is listed here.
+`default/profile.toml` is the same with `guidance = "guidance.md"`.
 
-## Interfaces
+## The link between app and engine
 
-**CLI (`rlmh`).** The name avoids clashing with other RLM packages.
+**Processes.** `rlmh` starts the engine as a child process and talks to it over the child's stdin and stdout. The engine starts one REPL worker per run, also as a child process, and talks to it over the worker's stdin and stdout. In a checkout the app runs `uv run --project engine python -m rlm_engine serve`. `RLMH_ENGINE` overrides the command.
+
+**Framing.** JSON-RPC 2.0, one JSON object per line. Both sides send requests, and each side numbers its own. The engine writes only protocol messages to stdout and its logs to stderr, which the app shows with `--verbose`. One engine holds several runs at once, which is how `rlmh batch --jobs N` works.
+
+**Requests from the app to the engine:**
+
+| Method | Params | Result |
+|---|---|---|
+| `run.start` | `mode` (`read` or `repo`); `question` and `inputs` (file paths) for read mode, or `task` and `repo_path` for repo mode; `profile`; `root` and `sub` model refs; `permission_mode` | `{run_id}` |
+| `run.cancel` | `run_id` | `{}`; the run finishes with `infra_error = "cancelled"` |
+| `run.vars` | `run_id` | The REPL's variables: name, type and size of each. For `/context` |
+| `engine.info` | none | Engine version, contract hash and available profiles |
+
+A model ref is `{provider, model, thinking}`. The engine passes it back unchanged in `model.complete` and never learns anything about keys.
+
+**Requests from the engine to the app:**
+
+| Method | Params | Result |
+|---|---|---|
+| `model.complete` | `run_id`, `role` (`root` or `sub`), the model ref, `messages`, `tools` (the `python` tool for API models, or none), `max_tokens`, `temperature`; for sub-calls also `origin` (turn and cell line) and `batch` (batch id, index, size) | `{text, tool_call, reasoning, usage, finish_reason}`, or an error |
+| `approval.request` | `run_id`, `kind` (`write`, `shell` or `network`), and the detail: path, command or host | `{allow, remember_for_run}` |
+
+The gateway streams each answer to the screen as it arrives and returns the whole answer to the engine at the end. The engine never needs the stream.
+
+**Events from the engine,** all carrying `run_id`:
+
+| Event | Fields |
+|---|---|
+| `run.started` | mode, profile, models, input size, limits |
+| `run.reply` | `turn`, the root's reply text |
+| `run.cell` | `turn`, `code`, `output` (as the model saw it), `error`, `seconds` |
+| `run.subcall` | sub-call id, `origin`, `batch`, prompt size, `error` (the gateway fills in the rest of the panel itself) |
+| `run.budget` | turns left, sub-calls left |
+| `run.finished` | `answer`, `submitted`, `turns`, `subcalls`, `usage`, `cost_usd`, `infra_error`, `log_path` |
+
+The link carries what happened and requests to deliver. Every decision about the model's messages stays in the engine.
+
+## Model gateway
+
+**Providers (decision 5a):**
+
+| Provider | Client | Caching |
+|---|---|---|
+| Anthropic | `@anthropic-ai/sdk` | Breakpoints at the end of the system prompt and on the latest message |
+| OpenAI | `openai` | Automatic; `prompt_cache_key` = run id |
+| DeepSeek | `openai`, DeepSeek's endpoint | Automatic |
+| OpenRouter | `openai`, OpenRouter's endpoint | `session_id` = run id |
+| Google Gemini | `openai`, Gemini's OpenAI-compatible endpoint | What the endpoint offers |
+| Local server: vLLM, Ollama, LM Studio, llama.cpp | `openai`, a localhost URL | The server's prefix cache |
+| Custom | `openai`, any OpenAI-compatible URL | What the endpoint offers |
+
+**Keys (decision 5b):**
+- `/providers` lists the providers. You pick one, paste the key and it is saved. Each provider can hold several keys, and any of them can be deleted.
+- Keys go into the OS credential store through `Bun.secrets`. Bun describes this API as new and experimental. If it fails, the key goes into `keys.json` in the config folder, readable only by you.
+- Environment variables override saved keys, for scripts: each provider's usual name, such as `ANTHROPIC_API_KEY`.
+- **Saving a key makes no network request.** The only check is the key's format. A test proves it (see Tests).
+- A provider's error at first use (401 or 403) becomes a clear message: which provider rejected which key, and that `/providers` can re-enter or delete it.
+
+**Catalog (decision 5c):**
+- `app/catalog/models.json` ships with the app. It is a subset of OMP's MIT-licensed catalog (`packages/catalog/src/models.json`), with attribution.
+- For each model it gives the context window, the maximum output, input and output prices, cache write and read prices, and whether the model takes tools and reasoning settings.
+- "Refresh models" in `/providers` calls the provider's `/models` endpoint, only when clicked, and merges the result.
+
+**Clients:**
+- Every request streams.
+- Retries: up to 6, with jittered backoff from 2 s, on 429s, 5xx errors and timeouts.
+- A per-provider cap on requests in flight, 16 by default.
+- Reasoning text is shown in the sub-call view when the provider returns it, but it is never put back into the messages, as in training.
+
+**Caching (`cache.ts`):**
+- Anthropic breakpoints as in the table.
+- **The `llm_batch` rule.** The gateway finds the longest prefix the prompts in a batch share. When that prefix reaches the model's minimum cacheable length (512 to 4,096 tokens, from the catalog), it marks it, sends the first call, waits for that call's first token, then sends the rest.
+- Nothing else touches the bytes.
+
+**Usage and cost (`usage.ts`):**
+- Token counts come from each response's usage fields, priced from the catalog.
+- Cache reads and writes are counted separately, which gives the hit rate.
+- Totals are kept per run and per role (root and sub-calls).
+
+**Context window.** v0 runs are one-shot and capped, so they normally fit. Before each root call the gateway checks the request against the model's window. If it would not fit, the run stops with a clear error instead of being cut. Compaction arrives in v1, with follow-up conversation.
+
+## REPL worker and tools
+
+**The worker:**
+- A plain local Python process, started with `python -I -m rlm_engine.worker`.
+- Its working folder is the workspace in repo mode, or a scratch folder in the config home in read mode.
+- Variables whose names look like keys or tokens are stripped from its environment, as in training.
+- Globals persist from cell to cell for the whole run.
+- **The link can't be corrupted by a cell.** At start the worker keeps a private copy of its original stdout for the protocol, then points file descriptors 1 and 2 at its capture buffer, so nothing a cell prints can break the link.
+
+**Timeouts and crashes:**
+- The cell timeout counts compute time: time blocked waiting for sub-calls or approvals doesn't count, as in training.
+- A timeout kills the worker's process tree and starts a fresh worker, and the model gets the training restart text.
+- A crash does the same with the crash text.
+- v0 sets no memory or CPU limits beyond the timeout.
+
+**Input:**
+- Read mode: `context` is the text of the one input file. With several files, they are joined with a `=== path ===` line before each.
+- Repo mode: `context` holds the task and the repository's file list with sizes, as in training.
+
+**Tools (`tools.py`):**
+- `read_file`, `find_files`, `grep`, `edit_file`, `write_file` and `diff` behave as in training.
+- Paths are relative to the workspace. Under decision 3a, paths starting `/work/repo` map onto it.
+- `diff()` shows what the run changed since it started. At run start the engine records the working tree as a git tree object through a temporary index, leaving your branch and index alone. v0 repo mode needs a git repository; outside one, `diff()` says it is unavailable.
+- `shell(cmd)` runs `sh -c` on macOS and Linux. On Windows it uses Git Bash if installed, otherwise PowerShell (decision 4a). It has a per-call timeout and capped output, as in training.
+- `fetch(url)` makes a GET request through the bridge. The engine performs it and returns the text, capped at 200,000 characters. The worker opens no connection.
+
+**Bridge (`bridge.py`):**
+- It enforces the run's sub-call budget and the 60,000-character prompt limit on the host side.
+- It tags each sub-call with the turn and the cell line that made it, then sends it to the app as `model.complete`.
+- `llm_batch` sends its prompts as one batch, so the gateway can apply the prefix rule.
+
+## Permissions
+
+**Audit hooks (`hooks.py`)** are installed before any model code runs, and Python doesn't allow removing them. The events they watch:
+
+| Event | Kind |
+|---|---|
+| `open` for writing, outside the workspace | `write` |
+| `open` for writing, inside the workspace | `write` (allowed in `accept-edits`) |
+| `subprocess.Popen`, `os.system`, `os.exec*`, `os.spawn*` | `shell` |
+| `socket.connect`, and the first `fetch` to each host | `network` |
+
+**Modes (decision 4b):**
+
+| Mode | Asks for |
+|---|---|
+| `default` | Writes, shell commands and network |
+| `accept-edits` | Shell commands, network, and writes outside the workspace |
+| `bypass` | Nothing |
+
+**The round trip.**
+1. The hook pauses the cell and sends `approval.request` through the engine to the app.
+2. The app shows the action (the path, command or host) with three choices: allow, allow for the rest of this run, or deny.
+3. A denial raises `PermissionError` in the cell, so the model reads it in its output and can try something else.
+
+**Limits, stated plainly.** This stops accidents, not a determined attacker, the same as Claude Code's prompts. Code can get around audit hooks, for example through `ctypes`. An optional OS sandbox can come later.
+
+## Interface
+
+**`rlmh` opens the interactive app** in the current folder: a prompt box, the transcript of the current run above it, and a status line below.
+
+**Starting a run (decision 6c):**
+- A question with `@path` mentions starts a read-mode run, with those files as `context`.
+- A question with no mention starts a repo-mode run on the folder `rlmh` was opened in.
+- Each run is one-shot (decision 6a): one task, a fresh REPL, and then the answer. Esc cancels a run.
+
+**Slash commands:**
+
+| Command | What it does |
+|---|---|
+| `/providers` | Add, list and delete keys per provider. "Refresh models" runs only when you click it |
+| `/model` | Pick the root and sub-call models (the two roles) and each one's thinking level |
+| `/settings` | Every setting, drawn from the one schema that `rlmh config get` and `set` also use |
+| `/permissions` | Switch mode, and see what was allowed in this run |
+| `/context` | The root's prompt broken down (system, first message, turns) against its window, and the REPL's variables with their sizes |
+| `/runs` | Past runs from the run log; open one to replay it read-only |
+| `/help`, `/quit` | |
+
+**Status line:** root and sub-call models, the context used out of the window, cost (root plus sub-calls), cache hit rate, and turns and sub-calls left.
+
+**Sub-call panel.**
+- Each `llm_batch` fan-out shows as a block of rows, one per sub-call, with its status, tokens and time. A single `llm` call is a block of one.
+- Opening a row gives a subagent-style view:
+  - the full prompt
+  - the answer as it streams
+  - the reasoning, when the provider exposes it
+  - tokens, cost and time
+  - the cell line that issued the call
+- Every sub-call passes through the gateway, so this needs no extra plumbing in the engine. In v1, `rlm()` recursion turns a sub-call into a nested run with its own turns, which this view will show as a true sub-agent.
+
+**Approval prompts** appear inline above the prompt box while a cell waits.
+
+**Non-interactive:**
 
 ```
-rlmh run --root deepseek --sub deepseek --question "Which ...?" --context-file big.txt
-rlmh run --root qwen-local --sub qwen-local --task "Fix the failing test" --repo ./project   # v0b
-rlmh batch tasks.jsonl --root deepseek --sub deepseek --jobs 4 --out runs/smoke
-rlmh models   # lists models and pings each one
+rlmh run --question "Which ...?" --input big.txt
+rlmh run --task "Fix the failing test" --repo ./project
+rlmh run ... --root deepseek/deepseek-chat --sub deepseek/deepseek-chat --profile training-v4 --json
+rlmh batch tasks.jsonl --jobs 4 --out runs/smoke --json
+rlmh config get root.model
 ```
 
-`rlmh run` shows the run as it happens: each turn's plan, the code, the output the model saw, a line per batch of sub-calls, and a footer with turns left, sub-calls left, tokens and cost. Ctrl+C sends `run.cancel`. `--quiet` prints only the answer, and `--json` prints the raw events, one per line, for scripts.
+- `--json` prints the events and the gateway's usage, one JSON object per line, for scripts. The RLM repo's evaluations use `rlmh batch --json`.
+- Each line of `tasks.jsonl` is `{"id": ..., "question": ..., "input": ...}`, with no gold answers.
 
-Each line of `tasks.jsonl` is `{"id": ..., "question": ..., "context_file": ...}`, with no gold answers. `rlmh batch` shows one status line per run and a summary at the end.
+## Configuration
 
-**Python.** The engine can also be imported directly. The RLM repo's parity and grading scripts use this, with no app involved.
+Everything lives in `~/.rlm-harness/` on every OS (decision 2b), or in the folder named by `RLMH_HOME`:
 
-```python
-from rlm_engine import run, load_models, load_profile
-
-models = load_models()
-result = await run(question="Which ...?", context=text,
-                   root=models["deepseek"], sub=models["deepseek"],
-                   profile=load_profile("default"), log_dir="runs/")
-result.answer, result.submitted, result.turns, result.subcalls, result.cost_usd, result.infra_error
+```
+~/.rlm-harness/
+  settings.toml     # models, thinking levels, permission mode, default profile, display
+  keys.json         # only if the OS credential store is unavailable; owner-only
+  profiles/         # your own profiles
+  runs/             # the run log
+  python/           # the uv-managed Python 3.12
 ```
 
-Repo mode (v0b) is the same call with `task=` and `repo=` (a local path) instead of `question=` and `context=`. The result also carries `diff`.
+## Run log (`runlog.py`)
 
-## Engine components
+Each run is one line of `runs/<batch>/runs.jsonl`. Interactive runs go under `runs/interactive/`. Each line holds:
 
-**Loop (`loop.py`).** This is `env.run_episode` with the training parts removed: token ids, prompt logprobs, reward, detectors, grader, broken-reply redraws and format penalties. What stays:
+- **Identity:** run id, harness version, contract and prompt hash, profile name and hash, root and sub-call model refs, call format.
+- **Input:** question or task, input size and sha256 (the input itself is not stored).
+- **Trajectory:** the messages, each turn (reply, code, output, error, timings, tokens) and each sub-call (prompt, answer, error, seconds, origin).
+- **Outcome:** answer, `submitted`, usage, cost, cache hits, wall time and `infra_error`.
 
-1. Build the first messages from the contract and the profile.
-2. Run each turn: ask the root, extract the code, run the cell, then append the observation.
-3. Stop on `submit` or the turn limit.
-4. In repo mode, add the pacing line (`pace_message`) that training used from halfway.
+The log stays on your machine. `/runs` reads it, and so will Harness² in v1.
 
-A reply with no code block gets the contract's error text and uses up the turn, as in training. The loop emits an event at each of these points; with no app attached, the events go nowhere.
+## Failures
 
-**Client (`client.py`).** One `AsyncOpenAI` client per model entry. It keeps a per-model cap on requests in flight (`max_in_flight`) and retries up to 6 times with jittered backoff from 2 s, on 429s, 5xx errors and timeouts. Root turns send the message list, never storing reasoning text back into it, as in training. Sub-calls send one user message, as in training. Token counts and cost are added up per run.
-
-**Sandbox (`sandbox/`).** This is the training Docker sandbox unchanged: a fresh container per run, `--network none`, a read-only root, CPU, memory and process limits, and the context mounted read-only. The bridge is the only way out, through a Unix socket. The bridge enforces the sub-call budget and the prompt size on the host. The image is built locally from `python:3.12-slim` pinned by digest, with no network during the build.
-
-**Failures.** A cell timeout or REPL crash restarts the container and tells the model, as in training. If a model call still fails after retries, or Docker fails, the run stops with `infra_error` set. The model is never shown a fake answer. If the app exits, the engine sees stdin close, cancels its runs and removes their containers.
-
-**Run log (`runlog.py`).** Each run is one line of `runs/<batch>/runs.jsonl` with these fields:
-- **Identity:** run id, harness version, contract and prompt hash, profile name and hash, root and sub model names.
-- **Input:** question, context size and sha256 (the context itself is not stored).
-- **Trajectory:** the messages, each turn (reply, code, output, error, timings, tokens) and each sub-call (prompt, output, error, seconds).
-- **Outcome:** answer, `submitted`, usage, cost, wall time and `infra_error`.
-
-The `runs/` folder is gitignored. The v1 web UI and Harness² (v2) both read these logs.
+- **A model call fails after retries:** the run stops with `infra_error` set, and the model is never shown a fake answer. A rejected key gets the `/providers` message.
+- **A cell times out or the worker crashes:** the worker restarts and the model is told, as in training.
+- **The app exits:** the engine sees its stdin close, cancels its runs and kills their workers.
+- **The engine exits:** the app shows its last stderr lines and marks the runs failed.
 
 ## Tests
 
 | Test | Checks | Needs |
 |---|---|---|
 | `test_contract` | Prompt v4 hash equals the training value; code extraction matches training on sample replies | Nothing |
-| `test_loop` | A scripted fake root and fake sandbox produce the exact expected messages: counters, last-turn line, no-code error, truncation | Nothing |
-| `test_rpc` | `run.start` with fakes emits the events in order and `run.finished` matches the result; nothing but protocol reaches stdout | Nothing |
-| `test_sandbox` | `print(len(context))`, `llm` through a fake model, budget exhaustion error, timeout restart text | Docker |
-| `test_client` | Retries, the in-flight cap and cost sums, against a fake HTTP server | Nothing |
-| `bun test` | The app against a fake engine script: argument parsing, Windows path and `WSLENV` handling, rendering, Ctrl+C sends `run.cancel` | Bun |
-| Parity (script in the RLM repo) | Replays recorded training episodes and checks the engine produces identical messages. The recorded replies stand in for the root and the recorded sub-call outputs for the sub model, against the real sandbox and the task's real context | Training transcripts and task data on the PC |
+| `test_callformat` | Fenced text, `<function=python>` and the native `python` tool yield the same code, and the observation goes back in the right place | Nothing |
+| `test_loop` | A scripted fake app produces the exact expected messages: counters, last-turn line, no-code error, truncation, pacing line | Nothing |
+| `test_link` | Requests both ways, interleaved; nothing but protocol reaches stdout; stdin closing cancels runs | Nothing |
+| `test_worker` | Globals persist; timeout and crash restart with the training texts; a cell printing to fd 1 can't break the link | Each OS in CI |
+| `test_tools` | The seven tools against a fixture repo, the `/work/repo` mapping, `diff()` from the run-start snapshot, `shell` on each OS | Each OS in CI |
+| `test_permissions` | Each event kind in each mode, and a denial reaching the cell as `PermissionError` | Each OS in CI |
+| `bun test` gateway | Against a fake HTTP server: retries, the in-flight cap, cost sums, Anthropic breakpoints, the `llm_batch` prefix rule, `prompt_cache_key` and `session_id`. **Saving a key makes zero network requests** | Bun |
+| `bun test` interface | Screens against a fake engine, including a 20-way fan-out in the sub-call panel and an approval prompt | Bun |
+| Parity (script in the RLM repo) | Replays recorded training episodes through the engine, with a fake app answering `model.complete` from the recorded replies and sub-call outputs, and checks that the engine's requests match the recorded messages | Training transcripts and task data on the PC |
 
-The parity script lives in the RLM repo, because task contexts and transcripts stay there. It imports the engine.
-
-## Build order
-
-Each step ends with its check passing before the next starts.
-
-1. **Skeleton.** The engine answers `models.list` over stdio; `rlmh --help` and `rlmh models` work through it, natively on Windows with the engine in WSL.
-2. **Contract.** `contract.py`; `test_contract`.
-3. **Sandbox.** Copy the sandbox, worker and bridge, then build the image in WSL; `test_sandbox`.
-4. **Client and config.** `models.toml`, profiles, `rlmh models` pings both test models; `test_client`.
-5. **Loop, events and run log.** `rlmh run` with the live view; `test_loop`, `test_rpc`, `bun test` and one real run.
-6. **Parity.** The script in the RLM repo shows identical messages on 3 recorded read-family episodes.
-7. **Smoke run (end of v0a).** `rlmh batch` on 5 held-out context-search tasks with two models, graded by a script in the RLM repo. The report covers accuracy, sub-calls and turns per run, and cost.
-8. **Repo mode (v0b).** Add tools, workspace and diff. Parity on 2 recorded edit episodes and one held-out find-and-fix task.
-
-Steps 1 to 6 cost nothing. Step 7 costs whatever the two chosen models charge for 10 runs. It never uses W&B credit.
+CI runs everything except parity on macOS, Windows and Linux. The parity script lives in the RLM repo, because task contexts and transcripts stay there.
 
 ## Open questions
 
-1. Which two models for the smoke run? I suggest one API model and one local model.
-2. Licence: Apache-2.0, the same as Qwen and Harness². This was chosen by default and is easy to change before the first release.
+1. Which two models for the smoke run (decision 9a)? I suggest one API model and one local model.
+2. Licence: Apache-2.0, the same as Qwen and Harness². It was chosen by default and is easy to change before the first release.
