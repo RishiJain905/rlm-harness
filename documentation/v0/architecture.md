@@ -56,7 +56,8 @@ rlm-harness/
   .github/workflows/ci.yml           2 +10   test + build on macos/windows/ubuntu
   .github/workflows/release.yml      10      binaries to GitHub Releases on a tag
   .gitignore                         exists  +2 adds *.bun-build, *.tsbuildinfo; .bun/ stays in .git/info/exclude
-  .gitattributes                     2 ◆     * text=auto eol=lf, so hashes and profiles match on every OS (D-43)
+  .gitattributes                     exists  +2 ◆ adds * text=auto eol=lf, so hashes and profiles match on every OS (D-43); keeps scripts/*.sh LF
+  scripts/verify.ps1, verify.sh      exists  the verify gate (see CLAUDE.md); gains stages as engine/ and app/ land
   protocol/examples.json             2 ◆     one example of every method, result, error and event (D-02)
   install.sh, install.ps1            10
   app/

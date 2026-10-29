@@ -23,7 +23,7 @@
 ## Starting state
 
 - Step 1 is `done`. The repo is at `e3ae151` plus `documentation/v0/`. There is no `app/`, `engine/`, `protocol/` or `.github/`.
-- `.gitignore` already lists `dist/`, `node_modules/`, `.venv/` and `.pytest_cache/`. There is no `.gitattributes`.
+- `.gitignore` already lists `dist/`, `node_modules/`, `.venv/` and `.pytest_cache/`. `.gitattributes` exists with one line, `scripts/*.sh text eol=lf`, which keeps the verify gate's bash script LF on a Windows checkout.
 - Bun 1.4.4 is at `F:\Personal\RLM\rlm-harness\.bun\bin\bun.exe` (git-excluded). uv and gh are installed.
 
 ## Deliverables
@@ -116,7 +116,7 @@ Writes loop until every byte is out (a pipe `write` can be partial). Windows: se
 - **Steps, in order:** `git config --global core.autocrlf false`; `actions/checkout`; `oven-sh/setup-bun` with `bun-version: 1.4.4`; `astral-sh/setup-uv`; `uv run --project engine pytest engine/tests`; in `app/`: `bun install --frozen-lockfile`, `bun run typecheck`, `bun test`; `bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile ../dist/rlmh-<target>[.exe]`; the smoke steps; `actions/upload-artifact` of `dist/rlmh-<target>[.exe]` with artifact name `rlmh-<target>` (`if-no-files-found: error`; step 10's install job downloads these by name). Use each action's current major tag, and check its README.
 - **Smoke steps** (from the repo root, with `RLMH_ENGINE="uv run --project engine python -X utf8 -m rlm_engine serve"`): `dist/rlmh-<target> --version` prints `rlmh 0.1.0`; `dist/rlmh-<target> info` is piped into `bun -e` that fails unless `engine.protocol === 1` and `app.version === engine.version`; the binary with `RLMH_ENGINE` unset and `info` must exit 1 with a message naming `RLMH_ENGINE` (this checks the compiled binary does not mistake the checkout for a source run); `dist/rlmh-<target> < /dev/null` must exit 1.
 - **`.gitignore`:** add `*.bun-build` (Bun's temp files from a failed compile) and `*.tsbuildinfo`. `release.yml` and the `darwin-x64` binary are step 10's.
-- **`.gitattributes`** (new, D-43): `* text=auto eol=lf`, plus `*.png binary` and `*.ico binary`. With `core.autocrlf false` in CI, every OS checks out the same bytes, so the step 3 hashes and profiles agree.
+- **`.gitattributes`** (D-43): add `* text=auto eol=lf`, plus `*.png binary` and `*.ico binary`, above the existing `scripts/*.sh` line. With `core.autocrlf false` in CI, every OS checks out the same bytes, so the step 3 hashes and profiles agree.
 
 **Windows specifics.**
 

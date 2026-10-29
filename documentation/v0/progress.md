@@ -23,3 +23,4 @@ Newest at the bottom. One line each: `YYYY-MM-DD step N (thread): what happened`
 
 - 2026-10-28 docs: documentation/v0 created (README, architecture, decisions, progress, ten specs). Nothing built yet.
 - 2026-10-29 docs: all ten specs reviewed against architecture.md. architecture.md gained the names the specs needed (Engine, error constructors, SCHEMA, paths, protocol.ts types, Session.keys/catalog, call.delta reset, LOCAL_PRESETS, catalog layout, RECORD_KEYS, host_traceback, setup and .installed.json). D-42 to D-51 added; D-01, D-14, D-16 and D-33 amended.
+- 2026-10-29 docs: CLAUDE.md and the verify gate (scripts/verify.ps1, scripts/verify.sh) added. `.gitattributes` now exists with `scripts/*.sh text eol=lf`; architecture.md §2 and the step 2 spec say step 2 adds the D-43 lines to it rather than creating it.
