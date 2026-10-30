@@ -7,7 +7,7 @@
 | **Depends on** | 6 (and through it 2 to 5) |
 | **Unblocks** | 9 |
 | **Parallel with** | 7 |
-| **Decisions it uses** | 2b: the script sets `RLMH_HOME`. 3a: the training text and the `/work/repo` mapping stay. 4a: Git Bash, else PowerShell. 4b: the script passes `default` mode itself. 6b: the script passes `call_format: "fenced"` itself. S-13, S-14, S-19. D-07, D-09, D-17, D-34, D-35, D-37, D-42, D-46, D-49 |
+| **Decisions it uses** | 2b: the script sets `RLMH_HOME`. 3a: the training text and the `/work/repo` mapping stay. 4a: Git Bash, else PowerShell. 4b: the script passes its own mode, `accept-edits` by default like the app (S-27). 6b: the script passes `call_format: "fenced"` itself. S-13, S-14, S-19. D-07, D-09, D-17, D-34, D-35, D-37, D-42, D-46, D-49 |
 
 ## Goal
 
@@ -16,8 +16,8 @@ A script in the RLM repo replays 5 recorded v4 training episodes (3 read, 2 edit
 ## Read first
 
 - [../architecture.md §3 to §5.4](../architecture.md#3-the-link) (the link, `run.start`, `model.complete`, events, one run in order), [§6.3](../architecture.md#63-the-models-context), [§7.6](../architecture.md#76-step-3--4-6-8-contract-call-format-profiles), [§7.8](../architecture.md#78-step-6--7-8-9-runs-run-log-commands), [§7.9](../architecture.md#79-steps-8-and-9-scripts-in-the-rlm-repo).
-- [../decisions.md](../decisions.md): D-07, D-09, D-17, D-34, D-35, D-37, and open decisions 3a, 4a, 6b.
-- [../../v0-build-plan.md § Step 8](../../v0-build-plan.md#step-8-parity-with-training), [../../v0-design.md § Tests](../../v0-design.md#tests) (the Parity row).
+- [../decisions.md](../decisions.md): D-07, D-09, D-17, D-34, D-35, D-37, and S-25 (3a), S-26 (4a), S-27 (4b) and S-30 (6b).
+- [../../legacy/v0-build-plan.md § Step 8](../../legacy/v0-build-plan.md#step-8-parity-with-training), [../../legacy/v0-design.md § Tests](../../legacy/v0-design.md#tests) (the Parity row).
 - Training, `git -C F:\Personal\RLM\RLM show 0b9af69:rlm_rl/<file>`:
   - `transcripts.py`: `episode_record`, `TranscriptLog`, `find_logs`.
   - `env.py`: `run_episode` (how `messages` grow; `resample_broken` redraws before a reply enters `messages`; `pace_nudge`; `Task`).
@@ -51,7 +51,7 @@ All in `F:\Personal\RLM\RLM`, except the last row.
 
 ```
 python scripts\harness_parity.py --harness F:\Personal\RLM\rlm-harness [--read 3] [--edit 2] [--episodes ID,ID,…]
-    [--runs prod-v2,prod-v1] [--permission-mode default|bypass] [--engine-cmd "CMD"] [--work-dir DIR]
+    [--runs prod-v2,prod-v1] [--permission-mode accept-edits|default|bypass] [--engine-cmd "CMD"] [--work-dir DIR]
     [--keep-work] [--strict] [--write-summary] [--date YYYY-MM-DD] [--episode-timeout-s 1800]
 ```
 
@@ -89,10 +89,10 @@ python scripts\harness_parity.py --harness F:\Personal\RLM\rlm-harness [--read 3
 9. [ ] **Replay each episode, in order, one at a time** (D-35: the same engine must carry no state across runs).
    - `run.start`, read: `{mode:"read", question, inputs:[<utf-8 file holding the context, written with write_bytes>], …}`. One input means the exact text (D-10).
    - `run.start`, repo: `{mode:"repo", task: record["question"], repo_path, test_hint, language, n_files, context, …}`, taken from `task.edit` and `task.context` (D-07).
-   - Common: `profile`, `root` and `sub` = `{provider:"parity", model:"recorded", thinking:null}`, `permission_mode` from the flag (default `default`), `call_format:"fenced"`, `interactive:true`, `tag:<episode_id>`, `batch:"parity"`, `log_dir:<report dir>\runlogs`.
+   - Common: `profile`, `root` and `sub` = `{provider:"parity", model:"recorded", thinking:null}`, `permission_mode` from the flag (default `accept-edits`, S-27), `call_format:"fenced"`, `interactive:true`, `tag:<episode_id>`, `batch:"parity"`, `log_dir:<report dir>\runlogs`.
    - **Root `model.complete` number k** (its `turn` must be k): answer `{text: turns[k-1].reply, tool_call:null, reasoning:null, finish_reason: turns[k-1].finish_reason, usage: zeros, served_model:"recorded", seconds:0}`. Past the last recorded turn: error -32001, kind `other`, and the verdict `extra_root_call`.
    - **Sub-call `model.complete`:** its `messages` must be one `user` message. Look the text up in a map from recorded prompt to a queue of records (exact match; duplicates are consumed in order, since concurrent `llm_batch` calls arrive in any order). A record with `error` is answered as -32001, kind `bad_request`, status 400, message = the error. Otherwise `{text: output, …}`. **No recorded prompt matches:** answer -32001, kind `other` (the run stops with `infra_error`, D-06), and record `subcall_unmatched` with the prompt's length, its sha256 and the longest common prefix against the closest recorded prompt. Wait for `run.finished`, and fail the episode if recorded prompts remain unused.
-   - **`approval.request`:** `{allow:true, remember_for_run:false}`, counted by kind. With `--permission-mode bypass` none arrive.
+   - **`approval.request`:** `{allow:true, remember_for_run:false}`, counted by kind. With `accept-edits`, writes inside the workspace don't ask, and with `bypass` none arrive.
 10. [ ] **Compare** (below), classify every difference (below), write `report.json` and `report.md`, and with `--write-summary` the summary doc. Set the exit code.
 11. [ ] Run it, read the report, and for each `unexplained` difference either fix the engine (add a test to the matching engine test file, rerun `uv run --project engine pytest engine/tests`) or, only if it fits the rule below, add a class to the script's `ACCEPTED` table. Repeat until exit 0. Run it twice on the final engine: the verdicts must be identical.
 12. [ ] Write the summary, update progress.md (Hand-off), and tell Rishi the result. Don't commit either repo.
@@ -182,8 +182,9 @@ Everything else is `unexplained`. Differences the first run will probably show, 
 
 ## If a decision goes the other way
 
-- **2b (other config folder):** only the `RLMH_HOME` line in task 8 changes, to whatever variable `paths.ts` reads.
-- **3a (real path in the text):** the first message names the real folder, so `training-v4`'s repo text and hash change and edit episodes fail on that one line. Add an accepted class `repo-path-text` for it ("by decision 3a, on purpose; the model sees the path it works in"), compare edit first messages with the real path replaced by `/work/repo`, and skip the `prompt_hash == training_hash` check for repo mode only. Read episodes still must match exactly.
-- **4a (always PowerShell, or Git Bash required):** nothing in the script changes. Expect more `replaced(toolchain)` episodes from POSIX commands under PowerShell, and print the shell kind in the header.
-- **4b (`accept-edits` default):** the script still passes `--permission-mode` itself, so only its default value changes; fewer `approval.request` lines appear.
-- **6b (fenced text everywhere):** no change. Parity always sends `call_format: "fenced"`, so it holds under either pick.
+Every decision below was settled at step 1 (2026-10-30; [decisions.md](../decisions.md) S-22 to S-34). Each line names the pick and says what would change if Rishi reversed it. Picks that went the alternative way are already written into this spec.
+
+- **2b, other config folder** (settled: `~/.rlm-harness/`, S-24): only the `RLMH_HOME` line in task 8 changes, to whatever variable `paths.ts` reads.
+- **3a, real path in the text** (settled: keep `/work/repo`, S-25): the first message names the real folder, so `training-v4`'s repo text and hash change and edit episodes fail on that one line. Add an accepted class `repo-path-text` for it ("by decision 3a, on purpose; the model sees the path it works in"), compare edit first messages with the real path replaced by `/work/repo`, and skip the `prompt_hash == training_hash` check for repo mode only. Read episodes still must match exactly.
+- **4a, always PowerShell or Git Bash required** (settled: Git Bash, else PowerShell, S-26): nothing in the script changes. Expect more `replaced(toolchain)` episodes from POSIX commands under PowerShell, and print the shell kind in the header.
+- **6b, fenced text everywhere** (settled: native for API models, S-30): no change. Parity always sends `call_format: "fenced"`, so it holds under either pick.

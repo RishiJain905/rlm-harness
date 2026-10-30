@@ -16,17 +16,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `rlmh` is a model-agnostic harness for Recursive Language Models: the model never reads a long input directly; it writes Python against it in a REPL, hands pieces to sub-calls (`llm`, `llm_batch`), and calls `submit`. Any provider can be the root or sub-call model, including the RL-trained Qwen LoRA from the training repo ([RishiJain905/RLM](https://github.com/RishiJain905/RLM), local at `F:\Personal\RLM\RLM`).
 
-**Status: design only.** There is no code yet. `documentation/` holds the design and a v0 build kit, and code lands in ten steps (step 2 creates `app/`, `engine/` and CI). Native on macOS, Windows and Linux, with no Docker and no WSL. Rishi's machine is Windows 11, the riskiest OS for this design.
+**Status: design only.** There is no code yet. The v0 spec was frozen at step 1 (2026-10-30). `documentation/` holds the design and a v0 build kit, and code lands in ten steps (step 2 creates `app/`, `engine/` and CI). Native on macOS, Windows and Linux, with no Docker and no WSL. Rishi's machine is Windows 11, the riskiest OS for this design.
 
 ## Working on a v0 step
 
 The build kit in `documentation/v0/` is written so one thread can build one step without asking.
 
 - **Read order:** `documentation/v0/README.md`, then `v0/architecture.md` (pins every shared path, message and signature), then `v0/decisions.md`, then your spec in `v0/specs/` and the parent-doc sections it lists under "Read first".
-- **Which doc wins:** spec, then `v0/architecture.md`, then `documentation/v0-design.md` for gaps. If `v0/architecture.md` contradicts a parent doc (`documentation/architecture.md`, `v0-design.md`, `v0-build-plan.md`), the parent wins and `v0/architecture.md` gets fixed.
+- **Which doc wins:** spec, then `v0/architecture.md`, then `documentation/legacy/v0-design.md` for gaps. If `v0/architecture.md` contradicts a parent doc (`documentation/legacy/architecture.md`, `v0-design.md`, `v0-build-plan.md`), the parent wins and `v0/architecture.md` gets fixed.
 - **`v0/progress.md`:** a step starts only when every step it depends on is `done` (or `review` if Rishi says so). Re-read the file just before editing it, change only your own row, and add a log line.
 - **New calls** go into `decisions.md` as the next D-number (D-51 is the latest). Changing a shared interface (a §7 signature, a wire message, a path) means updating `v0/architecture.md` too and saying so in the log.
-- **Open decisions:** specs assume the default in the open-decisions table. 9a (the smoke-run models) has no default, so step 9 must ask. Step 1 is waiting on Rishi's answers.
+- **Decisions:** step 1 settled every open decision (S-22 to S-34 in `decisions.md`). Three went the alternative way: 1a MIT, 4b `accept-edits` as the default mode, and 9a two API models with slot b forced to fenced. Step 9 still asks which two API models before it estimates.
 - **"OMP" in these docs** means the oh-my-pi repo, the MIT source of the model catalog and some ideas. It is not a reason to run `omp`.
 
 ## Architecture
@@ -88,7 +88,7 @@ This repo is public, and `rlmh` holds other people's API keys and runs model-wri
 - **Keys live only in the app.** They're stored in `Bun.secrets` (service `rlm-harness`, entry `<provider>:<id>`), with an owner-only `keys.json` as the fallback. `key-index.json` never holds a key. A key never appears in `run.start`, events, the run log, stderr or an error message.
 - **Strip key-like env vars at both hops.** The app removes variables whose names match `KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH` (any case) before it starts the engine, and the engine removes them again for the worker (D-29). Keep both when you change how a process is launched.
 - **No subscription logins** (Claude Pro or Max OAuth), and nothing that imitates Claude Code to Anthropic's servers (S-07).
-- **Permission prompts stop accidents, not attackers.** They come from PEP 578 audit hooks with three modes: `default`, `accept-edits` and `bypass`. Don't describe them as a sandbox. Non-interactive runs deny anything that would ask (D-15). The default mode is open decision 4b, so changing it is Rishi's call.
+- **Permission prompts stop accidents, not attackers.** They come from PEP 578 audit hooks with three modes: `default`, `accept-edits` and `bypass`. Don't describe them as a sandbox. Non-interactive runs deny anything that would ask (D-15). The default mode is `accept-edits` (4b, S-27), and changing it is Rishi's call.
 - **Binary build flags.** Compiled binaries always use `--no-compile-autoload-dotenv --no-compile-autoload-bunfig`, so `rlmh` never loads a `.env` (keys) or a `bunfig.toml` preload (code) from the folder it runs in (D-44).
 - **Spending.** Step 9 spends Rishi's own API keys, and only after he has seen the estimate and said go. Nothing here uses W&B credit.
 - **Git and releases.** Never commit or push without Rishi's say-so. Each push, tag, release and `workflow_dispatch` run is its own OK.

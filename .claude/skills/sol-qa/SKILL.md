@@ -92,6 +92,7 @@ Ignore the `DEP0190` deprecation warning that node prints. It is harmless. Poll 
 - **Never write the env file's literal file name in the task text.** Write "the env file" instead. The forwarder passes the task text through a Bash call, and the guard hook blocks any Bash text that names an env file, so the call fails before Sol starts. Seen 2026-10-03.
 - **Sandbox limits on this machine** (verified 2026-10-03): inside Sol's sandbox, `python`, `uv` and `pytest` can't launch, `D:` is readable but not writable, and `git` and `ruff` work. So don't ask Sol to run the test suite or write data. Run tests yourself and give Sol the results if it needs them.
 - **Setup problems.** If the call says Codex is missing or not authenticated, stop and tell Rishi to run `/codex:setup` (or `!codex login`).
+- **Cloud sessions (claude.ai/code containers).** Sol isn't reachable there: no `codex` CLI, no `~/.codex`, no `codex:codex-rescue` agent type, and the plugin catalog has no official Codex plugin, only community ones that need the CLI and a login (checked 2026-10-30). Check the agent list once; if `codex:codex-rescue` is missing, skip the Sol task and tell Rishi in one line, as he asked on 2026-10-30. Don't install a plugin or hand the task to another reviewer in its place.
 
 ## 5. If Sol is out of usage (weekly or 5-hour limit)
 

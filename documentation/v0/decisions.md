@@ -1,12 +1,12 @@
 # v0 decisions
 
-> Updated 2026-10-28. One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague. Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. Open decisions are numbered as in [../v0-build-plan.md](../v0-build-plan.md).
+> Updated 2026-10-30, when step 1 froze the spec. One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague; Rishi reviewed them at step 1 and kept every one (S-34). Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. The decisions that were open are numbered as in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md).
 
 ## Settled decisions
 
 ### With Rishi
 
-- **S-01** (2026-10-19) A thin custom build, not a fork of DeepSeek Harness, because the fork would carry a large surface we'd then have to keep native on three OSes ([../options-research.md](../options-research.md)).
+- **S-01** (2026-10-19) A thin custom build, not a fork of DeepSeek Harness, because the fork would carry a large surface we'd then have to keep native on three OSes ([../legacy/options-research.md](../legacy/options-research.md)).
 - **S-02** (2026-10-20) A TypeScript app on Bun drives a Python engine, because the screens and provider code belong in TypeScript and the trained loop is Python.
 - **S-03** (2026-10-20) MCP is deferred, because nothing in v0 needs it.
 - **S-04** (2026-10-21) Native on macOS, Windows and Linux: no Docker, no WSL, because a user tool must install with one command.
@@ -27,6 +27,22 @@
 - **S-19** (2026-10-24) Parity, smoke and grading scripts live in the RLM repo, because task data, gold answers and transcripts never enter this public repo.
 - **S-20** (2026-10-24) CI on GitHub Actions on macOS, Windows and Linux, because it's free for a public repo and Windows is the riskiest OS.
 - **S-21** (2026-10-24) Every module opens with a KV-cache note, as in DeepSeek Harness, because a broken prefix is the costliest silent bug.
+
+Settled at step 1 (2026-10-30), when the spec was frozen. Three went the alternative way: 1a, 4b and 9a.
+
+- **S-22** (2026-10-30) 1a Licence: MIT, the alternative. `LICENSE` holds the MIT text with `Copyright (c) 2026 Rishi Jain`, and step 2's `license` fields say `MIT`. The MIT notices of code taken from OMP and DeepSeek Harness are kept. Why: Rishi's pick (no reason given).
+- **S-23** (2026-10-30) 2a Terminal UI library: Ink, the default. Why: accepted default.
+- **S-24** (2026-10-30) 2b Config folder: `~/.rlm-harness/` on every OS, with `RLMH_HOME` overriding it, the default. Why: accepted default.
+- **S-25** (2026-10-30) 3a `/work/repo` in repo mode: keep the training text, and the tools map `/work/repo` onto the workspace, the default. `training-v4` still hashes to `TRAINING_HASH`. Why: accepted default.
+- **S-26** (2026-10-30) 4a Windows shell for `shell()`: Git Bash if found, otherwise PowerShell, the default. Why: accepted default.
+- **S-27** (2026-10-30) 4b Default permission mode: `accept-edits`, the alternative. Writes inside the workspace go through without asking; shell commands, network and writes outside the workspace still ask. `permissions.mode` defaults to `accept-edits`. Why: Rishi's pick (no reason given).
+- **S-28** (2026-10-30) 5a Providers in v0: Anthropic, OpenAI, DeepSeek, OpenRouter, Gemini, local (vLLM, Ollama, LM Studio, llama.cpp) and custom, the default. Why: accepted default.
+- **S-29** (2026-10-30) 5c Catalog source: a subset of OMP's `packages/catalog/src/models.json` (MIT), with attribution, the default. Why: accepted default.
+- **S-30** (2026-10-30) 6b Call format: the native `python` tool for API models, fenced text for the LoRA and local models, and the setting can force either, the default. Why: accepted default.
+- **S-31** (2026-10-30) 6c What an interactive question runs on: `@path` mentions mean read mode on those files, and no mention means repo mode on the current folder, the default. Why: accepted default.
+- **S-32** (2026-10-30) 9a Smoke-run models: two API models, the alternative, with slot b forced to `--call-format fenced` so the LoRA's fenced format still meets a real model. Step 9 asks which two models before it estimates anything (D-41) and adds their ids here. Why: Rishi's pick (no reason given); he also took the recommended fenced slot.
+- **S-33** (2026-10-30) 10a How Python reaches the user: uv fetches Python 3.12 on first run, after asking, the default. Why: accepted default.
+- **S-34** (2026-10-30) D-01 to D-51 all stay as written. Rishi reviewed the calls that change what the model or a user notices (D-01, D-08, D-09, D-11, D-13 to D-16, D-33, D-42, D-44, D-46) and the gap fills, and changed none. Why: accepted as written.
 
 ### Calls made in these docs (2026-10-28)
 
@@ -70,7 +86,7 @@
 - **D-38** Run ids are `r_` plus 12 lowercase hex characters, used as OpenAI's `prompt_cache_key` and OpenRouter's `session_id`.
 - **D-39** The gateway passes the provider's tool-call ids through. The fake provider uses `call_<n>`.
 - **D-40** `rlmh batch` exits 0 when every run finished without `infra_error`, 1 when any run had one, and 2 on a usage error.
-- **D-41** 9a may stay open after step 1 is done. Step 9 asks for it before it estimates anything, because only step 9 uses it.
+- **D-41** 9a may stay open after step 1 is done. Step 9 asks for it before it estimates anything, because only step 9 uses it. (Step 1 settled 9a as two API models, S-32; step 9 still asks which two.)
 
 Added on 2026-10-29 while reviewing the specs:
 
@@ -87,21 +103,21 @@ Added on 2026-10-29 while reviewing the specs:
 
 ## Open decisions
 
-**Open: specs assume the default.** Rishi answers with the number and the pick, for example "4a always PowerShell". Each spec says in one line what changes under the alternative.
+**None are open.** Step 1 settled every one on 2026-10-30 (S-22 to S-33); 5b and 6a were already settled (S-06, S-11). Step 9 still asks which two API models to use (S-32, D-41). The table is the record of what was asked.
 
-| # | Question | Default (specs assume this) | Alternative | Used by |
-|---|---|---|---|---|
-| 1a | Licence | Apache-2.0, already in `LICENSE`; MIT notices kept for code taken from OMP and DeepSeek Harness | MIT | 1, 2, 5 |
-| 2a | Terminal UI library | Ink (React for the terminal) | OpenTUI | 2, 7 |
-| 2b | Config folder | `~/.rlm-harness/` on every OS, `RLMH_HOME` overrides | each OS's standard folder | 2, 5, 6, 10 |
-| 3a | `/work/repo` in repo mode | keep the training text; tools map `/work/repo` onto the workspace | show the real path; the training-v4 hash then breaks | 3, 4, 8 |
-| 4a | Windows shell for `shell()` | Git Bash if found, otherwise PowerShell | always PowerShell; or require Git Bash | 4, 10 |
-| 4b | Default permission mode | `default`: asks for writes, shell and network | `accept-edits` | 4, 6, 7 |
-| 5a | Providers in v0 | Anthropic, OpenAI, DeepSeek, OpenRouter, Gemini, local (vLLM, Ollama, LM Studio, llama.cpp), custom | fewer, e.g. Anthropic, OpenAI and local | 5, 7 |
-| 5b | Key storage | settled as S-06: `Bun.secrets` with the owner-only file fallback | an owner-only file only | 5 |
-| 5c | Catalog source | subset of OMP's `packages/catalog/src/models.json` (MIT), with attribution | models.dev (licence unchecked); or hand-written | 5 |
-| 6a | One-shot runs | settled as S-11 | follow-ups in v0 | 6 |
-| 6b | Call format per provider | native `python` tool for API models, fenced text for the LoRA and local models; the setting can force either | fenced text everywhere | 3, 5, 6 |
-| 6c | What an interactive question runs on | `@path` mentions mean read mode on those files; no mention means repo mode on the current folder | always ask which mode | 7 |
-| 9a | Which two models for the smoke run | **no default:** Rishi must pick. The build plan suggests one API model (e.g. DeepSeek) and one local model (e.g. base Qwen) | two API models | 9 |
-| 10a | How Python reaches the user | uv fetches Python 3.12 on first run, after asking | bundle a standalone Python in each release | 10 |
+| # | Question | Pick | Default offered | Alternative offered | Used by |
+|---|---|---|---|---|---|
+| 1a | Licence | **MIT** (S-22, the alternative) | Apache-2.0, already in `LICENSE`; MIT notices kept for code taken from OMP and DeepSeek Harness | MIT | 1, 2, 5 |
+| 2a | Terminal UI library | Ink (S-23) | Ink (React for the terminal) | OpenTUI | 2, 7 |
+| 2b | Config folder | `~/.rlm-harness/` (S-24) | `~/.rlm-harness/` on every OS, `RLMH_HOME` overrides | each OS's standard folder | 2, 5, 6, 10 |
+| 3a | `/work/repo` in repo mode | keep the training text (S-25) | keep the training text; tools map `/work/repo` onto the workspace | show the real path; the training-v4 hash then breaks | 3, 4, 8 |
+| 4a | Windows shell for `shell()` | Git Bash, else PowerShell (S-26) | Git Bash if found, otherwise PowerShell | always PowerShell; or require Git Bash | 4, 10 |
+| 4b | Default permission mode | **`accept-edits`** (S-27, the alternative) | `default`: asks for writes, shell and network | `accept-edits` | 2, 4, 6, 7, 8 |
+| 5a | Providers in v0 | all seven (S-28) | Anthropic, OpenAI, DeepSeek, OpenRouter, Gemini, local (vLLM, Ollama, LM Studio, llama.cpp), custom | fewer, e.g. Anthropic, OpenAI and local | 5, 7 |
+| 5b | Key storage | `Bun.secrets` with the file fallback (S-06) | `Bun.secrets` with the owner-only file fallback | an owner-only file only | 5 |
+| 5c | Catalog source | OMP subset (S-29) | subset of OMP's `packages/catalog/src/models.json` (MIT), with attribution | models.dev (licence unchecked); or hand-written | 5 |
+| 6a | One-shot runs | one-shot (S-11) | one task, a fresh REPL, then the answer | follow-ups in v0 | 6 |
+| 6b | Call format per provider | native for API models, fenced for the LoRA and local (S-30) | native `python` tool for API models, fenced text for the LoRA and local models; the setting can force either | fenced text everywhere | 3, 5, 6 |
+| 6c | What an interactive question runs on | `@path` means read mode (S-31) | `@path` mentions mean read mode on those files; no mention means repo mode on the current folder | always ask which mode | 7 |
+| 9a | Which two models for the smoke run | **two API models, slot b forced fenced** (S-32, the alternative); ids asked at step 9 | no default. The build plan suggested one API model (e.g. DeepSeek) and one local model (e.g. base Qwen) | two API models | 9 |
+| 10a | How Python reaches the user | uv on first run (S-33) | uv fetches Python 3.12 on first run, after asking | bundle a standalone Python in each release | 10 |

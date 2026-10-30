@@ -11,9 +11,9 @@ It runs natively on macOS, Windows and Linux, with no Docker and no WSL. It neve
 
 **Status:** design. Nothing is built yet; this is an open build.
 
-- [Architecture](documentation/architecture.md): the three parts, how a run works, why the model delegates, caching, safety and the roadmap.
-- [v0 design](documentation/v0-design.md): the v0 spec: the link between app and engine, contract, call formats, gateway, worker, permissions, interface and tests.
-- [v0 build plan](documentation/v0-build-plan.md): the ten steps to v0, with the decisions each one needs.
-- [Options research](documentation/options-research.md): why a thin build and not a fork of DeepSeek Harness, and the Harness² experiment.
+- [Architecture](documentation/legacy/architecture.md): the three parts, how a run works, why the model delegates, caching, safety and the roadmap.
+- [v0 design](documentation/legacy/v0-design.md): the v0 spec: the link between app and engine, contract, call formats, gateway, worker, permissions, interface and tests.
+- [v0 build plan](documentation/legacy/v0-build-plan.md): the ten steps to v0, with the decisions each one needs.
+- [Options research](documentation/legacy/options-research.md): why a thin build and not a fork of DeepSeek Harness, and the Harness² experiment.
 
-Licence: Apache-2.0.
+Licence: MIT.

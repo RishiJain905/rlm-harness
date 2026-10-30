@@ -7,7 +7,7 @@
 | **Depends on** | 4, 5 (and through them 2, 3) |
 | **Unblocks** | 7, 8, and through them 9 and 10 |
 | **Parallel with** | none |
-| **Decisions it uses** | 4b: `default` permission mode. 6a: one-shot runs (settled as S-11). 6b: native `python` tool for API models, fenced text for `local` and `custom`. 2b: `~/.rlm-harness/`. Relies on S-11, D-06, D-07, D-08, D-10, D-11, D-12, D-15, D-17, D-26, D-27, D-28, D-31, D-35, D-38, D-39, D-40, D-49, D-50, D-51 |
+| **Decisions it uses** | 4b: `accept-edits` is the default permission mode (S-27). 6a: one-shot runs (settled as S-11). 6b: native `python` tool for API models, fenced text for `local` and `custom`. 2b: `~/.rlm-harness/`. Relies on S-11, D-06, D-07, D-08, D-10, D-11, D-12, D-15, D-17, D-26, D-27, D-28, D-31, D-35, D-38, D-39, D-40, D-49, D-50, D-51 |
 
 ## Goal
 
@@ -16,7 +16,7 @@ A whole run works end to end. `loop.run` plays training's `run_episode` against 
 ## Read first
 
 - [../architecture.md](../architecture.md) §5 (all of it; §5.4 fixes the order of one run), §6.2, §6.3, §7.2, §7.4, §7.5, §7.8, §9, §10, §11. [../decisions.md](../decisions.md) for the D-numbers above.
-- [../../v0-design.md](../../v0-design.md) § Run log, § Failures, § Non-interactive. [../../v0-build-plan.md](../../v0-build-plan.md) § Step 6.
+- [../../legacy/v0-design.md](../../legacy/v0-design.md) § Run log, § Failures, § Non-interactive. [../../legacy/v0-build-plan.md](../../legacy/v0-build-plan.md) § Step 6.
 - `git -C F:\Personal\RLM\RLM show 0b9af69:rlm_rl/env.py`: `run_episode` (copy the turn loop), `_cap_output`, `_cell_dict`.
 - Same commit: `transcripts.py` (`episode_record`, `TranscriptLog.append` and its torn-line reader), `tasks/editreal.py` (`_context`), `bridge.py` (`observation`, `pace_message`), `repl_tools.py` (`_files_under`, `FALLBACK_SKIP_DIRS`), `editdata.py` (`LANGS`, `detect_runner`).
 - Code from steps 2 to 5, read in place: `engine/rlm_engine/{appport,errors,link,contract,callformat,profiles,workspace,bridge,permissions}.py`, `worker/manager.py`, `engine/tests/fakeapp.py`, `app/src/{link,engine,bus,settings,protocol}.ts`, `app/src/gateway/{gateway,fake,providers}.ts`.
@@ -116,7 +116,7 @@ A whole run works end to end. `loop.run` plays training's `run_episode` against 
     - Batch name: `<stem with [^A-Za-z0-9._-] replaced by _>-<YYYYMMDD-HHMMSS>` (D-26). `--out DIR` becomes `logDir`.
     - A pool of `--jobs` workers shares one `Session`: `start({ tag: id, interactive: false, batch, logDir })`, then await that run's `run.finished` (the same map as in `run.ts`). A start failure counts as a failed run; the others go on. Ctrl-C cancels every running run, starts no more, returns 130.
     - `--json`: all event lines, then `{"type":"batch.finished","runs","failed","cost_usd"}` last. Plain: one stdout line per finished run (`id  status  turns  sub-calls  $cost  seconds`) and a totals line. `failed` counts runs with `infra_error` plus start failures. Exit 0, 1 or 2 (D-40).
-    - When the effective permission mode is `default` and any task is repo mode, print a stderr warning: with no one to ask, every edit is denied, so pass `--permission-mode accept-edits`.
+    - When the effective permission mode is `default` (set by flag or settings, since the default is `accept-edits`, S-27) and any task is repo mode, print a stderr warning: with no one to ask, every edit is denied, so pass `--permission-mode accept-edits`.
 15. [ ] **`config.ts` and `main.ts`.** `list` prints `key = value` for every key the schema has (§8), in schema order. `get KEY` prints the bare value. `set KEY VALUE` passes the raw string to `setSetting` (coerce by the type of `getSetting` if it wants typed values), saves, and prints `KEY = VALUE`. An unknown key or invalid value prints the message and returns 2. It never starts the engine and makes no request. `main.ts` calls the three commands with the real `process` streams and `home()`.
 16. [ ] Run everything on Windows (`.bun\bin\bun.exe test`, `uv run --project engine pytest engine/tests`). Commit nothing until Rishi says so. Update progress.md (see Hand-off).
 
@@ -154,7 +154,7 @@ All offline, with the scripted fake. Engine tests use a temporary `home`. Tests 
 - `test_eight_runs_at_once`: 8 read runs on one engine: distinct ids, 8 lines in one `runs.jsonl`, each record's `answer` and `tag` match, all scratch folders gone.
 - `test_stdin_close_cancels`: closing the link with a blocked run writes its `cancelled` record and leaves no worker process.
 
-**`app/test/session.test.ts`**: `buildRunParams` table (defaults from settings; overrides; `default` thinking is `null`; empty `sub.model` falls back to root with the sub thinking; `auto` is `native` for `fake/scripted` and `fenced` for `local`; relative paths become absolute; no root model throws `UsageError`). A protocol mismatch is refused. With the real engine and the fake provider: a read run emits `run.started` to `run.finished` on `bus`, `approvals` gets one `network` request when the script calls `fetch('http://127.0.0.1:9/')` (answered `allow: false`, so nothing is fetched), `cancel` mid-run ends with `infra_error == "cancelled"` and the gateway saw `model.cancel`, and `close()` ends the engine process.
+**`app/test/session.test.ts`**: `buildRunParams` table (defaults from settings, with `permission_mode` `accept-edits` (S-27); overrides; `default` thinking is `null`; empty `sub.model` falls back to root with the sub thinking; `auto` is `native` for `fake/scripted` and `fenced` for `local`; relative paths become absolute; no root model throws `UsageError`). A protocol mismatch is refused. With the real engine and the fake provider: a read run emits `run.started` to `run.finished` on `bus`, `approvals` gets one `network` request when the script calls `fetch('http://127.0.0.1:9/')` (answered `allow: false`, so nothing is fetched), `cancel` mid-run ends with `infra_error == "cancelled"` and the gateway saw `model.cancel`, and `close()` ends the engine process.
 
 **`app/test/cli/run.test.ts`** (spawns `process.execPath src/main.ts run …` with `RLMH_HOME` set to a temp folder and `RLMH_FAKE_SCRIPT` set; asserts the exit code)
 - `--json`, native: every stdout line parses; the types begin `run.started` and end `run.finished`; each event's keys equal its §5.3 row plus `type`; `gateway.call` appears for root and sub; stdout holds nothing else. The run log's last line has exactly `RECORD_KEYS`, `format == 1`, `usage.root.input_tokens > 0`, `answer == "42"`, `len(turns) == run.finished.turns`. A second case uses `--call-format fenced` with fenced-only replies, so it does not depend on 6b.
@@ -190,7 +190,8 @@ All offline, with the scripted fake. Engine tests use a temporary `home`. Tests 
 
 ## If a decision goes the other way
 
-- **4b** (`accept-edits` as the default): only the settings default changes (step 2's schema). Change the expected default in `session.test.ts`. Tests that name a mode keep it. The `batch.ts` repo-task warning then fires only for an explicit `default`.
-- **6a** (follow-ups in v0): it is settled as S-11, so nothing changes. They would need `loop.run` to keep the worker and messages between prompts (a `run.say` method), a compaction rule, one record per prompt, and `rlmh run --continue`; that is a redesign of §7.8.
-- **6b** (fenced text everywhere): the `call_format` setting default becomes `fenced` and `buildRunParams` stops calling `resolveCallFormat`. `loop.py` is unchanged (it handles both). Only the `session.test.ts` defaults table changes, because `run.test.ts` names its format.
-- **2b** (OS-standard config folders): `home` still arrives as a parameter, so only the test helpers that build `home/runs/...` and `home/scratch/...` paths change, plus the path in the Done-when command.
+Every decision below was settled at step 1 (2026-10-30; [decisions.md](../decisions.md) S-22 to S-34). Each line names the pick and says what would change if Rishi reversed it. Picks that went the alternative way are already written into this spec.
+
+- **6a, follow-ups in v0** (settled: one-shot, S-11): nothing changes. They would need `loop.run` to keep the worker and messages between prompts (a `run.say` method), a compaction rule, one record per prompt, and `rlmh run --continue`; that is a redesign of §7.8.
+- **6b, fenced text everywhere** (settled: native for API models, S-30): the `call_format` setting default becomes `fenced` and `buildRunParams` stops calling `resolveCallFormat`. `loop.py` is unchanged (it handles both). Only the `session.test.ts` defaults table changes, because `run.test.ts` names its format.
+- **2b, OS-standard config folders** (settled: `~/.rlm-harness/`, S-24): `home` still arrives as a parameter, so only the test helpers that build `home/runs/...` and `home/scratch/...` paths change, plus the path in the Done-when command.

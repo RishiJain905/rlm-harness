@@ -10,7 +10,7 @@ This folder lets a thread pick up one v0 step and build it without asking anyone
 4. Build exactly what the spec lists, and run its tests.
 5. Update your row and the log in progress.md. If you had to change a shared interface, change architecture.md too and say so in the log.
 
-When a spec is silent, follow architecture.md. When architecture.md is silent, follow [../v0-design.md](../v0-design.md). If you must make a new call, add it to decisions.md as the next D-number.
+When a spec is silent, follow architecture.md. When architecture.md is silent, follow [../legacy/v0-design.md](../legacy/v0-design.md). If you must make a new call, add it to decisions.md as the next D-number.
 
 ## The steps
 
@@ -46,9 +46,9 @@ flowchart LR
 
 ## Parent docs
 
-- [../architecture.md](../architecture.md): the three parts, why the model delegates, caching, safety and the roadmap.
-- [../v0-design.md](../v0-design.md): the v0 spec.
-- [../v0-build-plan.md](../v0-build-plan.md): the ten steps and their decisions.
+- [../legacy/architecture.md](../legacy/architecture.md): the three parts, why the model delegates, caching, safety and the roadmap.
+- [../legacy/v0-design.md](../legacy/v0-design.md): the v0 spec.
+- [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md): the ten steps and their decisions.
 - [The blueprint page](https://claude.ai/artifact/ANEF1LJnj42r5Mo9JywxqU).
 
 ## Repo rules

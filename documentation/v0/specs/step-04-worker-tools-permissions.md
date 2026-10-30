@@ -7,7 +7,7 @@
 | **Depends on** | 3 (and through it 2) |
 | **Unblocks** | 6 |
 | **Parallel with** | 5 |
-| **Decisions it uses** | 3a: keep `/work/repo`, the tools map it. 4a: Git Bash, else PowerShell. 4b: default mode is `default`. S-04, S-09, S-13, S-18. D-01, D-06, D-12 to D-17, D-29, D-35, D-37, D-42, D-47, D-48 |
+| **Decisions it uses** | 3a: keep `/work/repo`, the tools map it. 4a: Git Bash, else PowerShell. 4b: default mode is `accept-edits` (S-27). S-04, S-09, S-13, S-18. D-01, D-06, D-12 to D-17, D-29, D-35, D-37, D-42, D-47, D-48 |
 
 ## Goal
 
@@ -16,8 +16,8 @@ The engine can run cells in a native Python worker on macOS, Windows and Linux. 
 ## Read first
 
 - [../architecture.md](../architecture.md) §5.2, §5.3 (`run.subcall`, `run.permission`, `run.budget`), §5.4, §6.1 (the worker protocol), §7.7, §12.
-- [../decisions.md](../decisions.md): D-01, D-06, D-12 to D-17, D-29, D-35, D-37, and open decisions 3a, 4a, 4b.
-- [../../v0-design.md](../../v0-design.md) § REPL worker and tools, § Permissions, § Tests. [../../v0-build-plan.md](../../v0-build-plan.md) § Step 4.
+- [../decisions.md](../decisions.md): D-01, D-06, D-12 to D-17, D-29, D-35, D-37, and S-25 to S-27 (3a, 4a, 4b).
+- [../../legacy/v0-design.md](../../legacy/v0-design.md) § REPL worker and tools, § Permissions, § Tests. [../../legacy/v0-build-plan.md](../../legacy/v0-build-plan.md) § Step 4.
 - Training, all at `git -C F:\Personal\RLM\RLM show 0b9af69:rlm_rl/<file>`:
   - `repl_worker.py`: `_Capped`, `_FdCapture`, `_format_error`, `run_cell`, `llm`, `llm_batch`, `submit`, `normalize_answer`, `_bridge_seconds`, `cell_seconds_left`, `repl_main`.
   - `repl_tools.py`: all of it. `TOOLS_VERSION = "t1"`.
@@ -225,6 +225,7 @@ progress.md: set row 4 to `review`. Log which Windows items in task 7 needed a f
 
 ## If a decision goes the other way
 
-- **3a (show the real path).** Send `repo_alias: null`; `tools.configure(alias=None)`; drop the alias mapping tests; the `shell()` gap goes away. The prompt text and its hash are step 3's and step 8's to fix.
-- **4a (always PowerShell).** `find_shell` returns the PowerShell spec on Windows and the Git Bash lookup and its tests go. **(Require Git Bash.)** `find_shell` raises `RuntimeError("Git Bash is required on Windows; install Git for Windows")`, `Worker.start` turns it into `InfraError("worker", …)`, and step 10 checks for it.
-- **4b (`accept-edits` default).** Nothing here changes: all three modes are built and tested either way. Only the `permissions.mode` default in `settings.ts` flips, and the hand-check passes `--mode` explicitly.
+Every decision below was settled at step 1 (2026-10-30; [decisions.md](../decisions.md) S-22 to S-34). Each line names the pick and says what would change if Rishi reversed it. Picks that went the alternative way are already written into this spec.
+
+- **3a, show the real path** (settled: keep `/work/repo`, S-25). Send `repo_alias: null`; `tools.configure(alias=None)`; drop the alias mapping tests; the `shell()` gap goes away. The prompt text and its hash are step 3's and step 8's to fix.
+- **4a, always PowerShell** (settled: Git Bash, else PowerShell, S-26). `find_shell` returns the PowerShell spec on Windows and the Git Bash lookup and its tests go. **(Require Git Bash.)** `find_shell` raises `RuntimeError("Git Bash is required on Windows; install Git for Windows")`, `Worker.start` turns it into `InfraError("worker", …)`, and step 10 checks for it.

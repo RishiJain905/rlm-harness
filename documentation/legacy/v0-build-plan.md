@@ -1,6 +1,6 @@
 # v0 build plan
 
-> **Status:** draft for review, 2026-10-24. Nothing is built and nothing has been spent. This plan covers v0 only. v1 and later get their steps once v0 is done, because what we learn building v0 should shape them.
+> **Status:** draft for review, 2026-10-24. Step 1 is done (2026-10-30): every decision below is answered in [v0/decisions.md](../v0/decisions.md) (S-22 to S-34). Nothing is built and nothing has been spent. This plan covers v0 only. v1 and later get their steps once v0 is done, because what we learn building v0 should shape them.
 >
 > **Source of truth:** [v0-design.md](v0-design.md) is the spec each step is coded against, and [architecture.md](architecture.md) is the overall picture. Anything marked *(mine)* is my recommendation. Anything marked *(inferred)* hasn't been checked yet.
 >
@@ -35,7 +35,7 @@ The goal is one program, `rlmh`, that runs any model as a Recursive Language Mod
 
 | # | Step | Type | Cost | Decisions | Status (2026-10-24) |
 |---|---|---|---|---|---|
-| 1 | Freeze the v0 spec | Design | $0 | 1a | Waiting for your review |
+| 1 | Freeze the v0 spec | Design | $0 | 1a | Done 2026-10-30 |
 | 2 | Skeleton, the stdio link both ways, CI and a binary per OS | PC | $0 | 2a, 2b | After step 1 |
 | 3 | Contract: prompt v4, hash test, both call formats | PC | $0 | 3a | After step 2 |
 | 4 | Native REPL worker, tools and permissions | PC | $0 | 4a, 4b | After step 3 |
@@ -118,7 +118,7 @@ Nothing. The protocol comes from the link section of the spec.
 
 | Setting | Default |
 |---|---|
-| Bun | The current 1.3 release, pinned in `package.json` *(mine)* |
+| Bun | The current 1.3 release, pinned in `package.json` *(mine)*; superseded by S-15 (1.4.4) |
 | Python | 3.12, through uv, the same as training |
 | Engine dependencies | None at run time; pytest for tests |
 | Framing | JSON-RPC 2.0, one object per line, logs on stderr |

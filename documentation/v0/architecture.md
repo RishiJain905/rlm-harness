@@ -1,10 +1,10 @@
 # v0 build architecture
 
-> Written 2026-10-28 for the threads that build v0. The why is in [../architecture.md](../architecture.md), the spec in [../v0-design.md](../v0-design.md) and the steps in [../v0-build-plan.md](../v0-build-plan.md). This file pins the names, paths, messages and signatures those docs leave to the builder, so threads working in parallel stay compatible. Calls made here are listed in [decisions.md](decisions.md) as D-numbers. If this file and a parent doc disagree, the parent doc wins and this file gets fixed.
+> Written 2026-10-28 for the threads that build v0. The why is in [../legacy/architecture.md](../legacy/architecture.md), the spec in [../legacy/v0-design.md](../legacy/v0-design.md) and the steps in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md). This file pins the names, paths, messages and signatures those docs leave to the builder, so threads working in parallel stay compatible. Calls made here are listed in [decisions.md](decisions.md) as D-numbers. If this file and a parent doc disagree, the parent doc wins and this file gets fixed.
 
 ## 1. The three parts and the processes
 
-The parts are described in [../architecture.md § The three parts](../architecture.md#the-three-parts). As processes:
+The parts are described in [../legacy/architecture.md § The three parts](../legacy/architecture.md#the-three-parts). As processes:
 
 ```mermaid
 flowchart LR
@@ -49,7 +49,7 @@ flowchart LR
 
 ## 2. Repo layout
 
-Each file has the step that creates it. A later step that changes a file is shown after a `+`. Files not in [v0-design.md § Layout](../v0-design.md#layout) are marked ◆ (D-03).
+Each file has the step that creates it. A later step that changes a file is shown after a `+`. Files not in [v0-design.md § Layout](../legacy/v0-design.md#layout) are marked ◆ (D-03).
 
 ```
 rlm-harness/
@@ -270,7 +270,7 @@ sequenceDiagram
 
 ### 6.1 Engine ↔ worker protocol
 
-One JSON object per line. The worker keeps private dups of its original stdin and stdout for the protocol and points fd 0 at the null device ([../v0-design.md § REPL worker and tools](../v0-design.md#repl-worker-and-tools)).
+One JSON object per line. The worker keeps private dups of its original stdin and stdout for the protocol and points fd 0 at the null device ([../legacy/v0-design.md § REPL worker and tools](../legacy/v0-design.md#repl-worker-and-tools)).
 
 - **During a cell,** fds 1 and 2 feed the cell's captured output, in both modes, as training's `_FdCapture` did in edit mode. Between cells they point at the null device.
 - **Python's `sys.stdout`** goes to the same capture. **`sys.stderr`** goes to a separate buffer that the model never sees, which ends up in the run log's `stderr` (D-37).
@@ -514,7 +514,7 @@ def list_profiles(home: Path) -> list[Profile]
 def load_profile(name: str, home: Path) -> Profile   # built-ins win over <home>/profiles of the same name
 ```
 
-- **profile.toml keys.** It takes the keys in [../v0-design.md § Profiles](../v0-design.md#profiles), plus optional `subcall_thinking` in either mode table and `pace_nudge` in `[repo]`. Each mode table starts from `READ_LIMITS_V4` or `EDIT_LIMITS_V4` and replaces only the keys it lists, so the hash still covers `cpus`, `memory_mb`, `pids` and `grader_timeout_s` (D-09). An unknown key is an error.
+- **profile.toml keys.** It takes the keys in [../legacy/v0-design.md § Profiles](../legacy/v0-design.md#profiles), plus optional `subcall_thinking` in either mode table and `pace_nudge` in `[repo]`. Each mode table starts from `READ_LIMITS_V4` or `EDIT_LIMITS_V4` and replaces only the keys it lists, so the hash still covers `cpus`, `memory_mb`, `pids` and `grader_timeout_s` (D-09). An unknown key is an error.
 - **training-v4.** `[repo]` has `subcall_thinking = "low"` and `pace_nudge = true`.
 - **`prompt_hash()`** for `training-v4` equals `TRAINING_HASH`.
 
@@ -651,7 +651,7 @@ Both output folders are git-ignored by one new line in the RLM repo's `.gitignor
 | `root.thinking` | `default\|off\|low\|medium\|high` | `default` | `default` sends `thinking: null` |
 | `sub.model`, `sub.thinking` | as above | `""`, `default` | an empty `sub.model` uses `root.model` |
 | `profile` | string | `default` | |
-| `permissions.mode` | `default\|accept-edits\|bypass` | `default` (4b) | |
+| `permissions.mode` | `default\|accept-edits\|bypass` | `accept-edits` (4b, S-27) | |
 | `call_format` | `auto\|fenced\|native` | `auto` (6b) | |
 | `providers.<id>.base_url` | string | the provider's own; `local`: `http://localhost:8000/v1` | for `local` and `custom` |
 | `providers.<id>.max_in_flight` | int | 16 | |
@@ -703,14 +703,14 @@ Saved keys live in the OS credential store, not in `<home>`, so deleting `<home>
 | `engine/tests/test_protocol.py`, `app/test/protocol.test.ts` | 2 | every example in `protocol/examples.json` round-trips and has the fields §4-§5 list |
 | `app/test/engine.test.ts`, `app/test/settings.test.ts` | 2 | discovery order; a real engine answers `engine.info` and a dummy `model.complete`; schema validation |
 | `engine/tests/test_contract.py`, `test_callformat.py`, `test_profiles.py` | 3 | hash equals `TRAINING_HASH`; extraction matches training samples; three formats give the same code; profile hashes |
-| `engine/tests/test_worker.py`, `test_tools.py`, `test_permissions.py`, `test_bridge.py`, `test_workspace.py` | 4 | per [../v0-design.md § Tests](../v0-design.md#tests), on each OS |
+| `engine/tests/test_worker.py`, `test_tools.py`, `test_permissions.py`, `test_bridge.py`, `test_workspace.py` | 4 | per [../legacy/v0-design.md § Tests](../legacy/v0-design.md#tests), on each OS |
 | `app/test/gateway/*.test.ts` | 5 | retries, in-flight cap, cost sums, breakpoints, batch prefix rule, cache keys, 401 message, `Bun.secrets` round trip, **zero requests when a key is saved** |
 | `engine/tests/test_loop.py`, `test_inputs.py`, `test_runlog.py`, `test_service.py`, `app/test/cli/{run,batch,config}.test.ts`, `app/test/session.test.ts` | 6 | exact messages against FakeApp; the full event stream from `rlmh run --json` on the fake provider |
 | `app/test/interface/*.test.tsx` | 7 | screens against `app/test/fakes/engine.ts`, a 20-way fan-out, an approval answered from the keyboard |
 | `app/test/setup.test.ts`, more cases in `app/test/engine.test.ts`, the CI `install` job | 10 | extraction, setup questions, installed-mode discovery; the one-line install on clean runners |
 | RLM repo: `tests/test_harness_parity.py`, `tests/test_harness_smoke.py` | 8, 9 | the scripts' offline parts |
 
-Shared test helpers: `engine/tests/fakeapp.py` (2, +6), `engine/tests/conftest.py` (2, +4), `app/test/fakes/http.ts` (5), `app/test/fakes/engine.ts` (7). All tests run offline and make no request to a real provider. CI runs `uv run --project engine pytest engine/tests` and `bun test` (in `app/`) on all three OSes.
+Shared test helpers: `engine/tests/fakeapp.py` (2, +6), `engine/tests/conftest.py` (2, +4), `app/test/fakes/http.ts` (5), `app/test/fakes/engine.ts` (7). Test data and per-suite helpers: `engine/tests/fixtures/extract_cases.json` (3), `app/test/interface/helpers.ts` (7) and `app/test/fakes/demo-script.json` (7, also reused by step 10). All tests run offline and make no request to a real provider. CI runs `uv run --project engine pytest engine/tests` and `bun test` (in `app/`) on all three OSes.
 
 ## 12. Conventions
 

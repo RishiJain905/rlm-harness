@@ -1,6 +1,6 @@
 # v0 design
 
-> Updated 2026-10-24 as the v0 spec, for review before anything is built. The overall picture is in [architecture.md](architecture.md), and the steps to build this are in [v0-build-plan.md](v0-build-plan.md). Choices still open are marked with their decision number from the build plan (for example 2a).
+> Frozen 2026-10-30 as the v0 spec. The overall picture is in [architecture.md](architecture.md), and the steps to build this are in [v0-build-plan.md](v0-build-plan.md). The choices that were open carry their decision number and pick in brackets, for example "(2b: `~/.rlm-harness/`)"; [v0/decisions.md](../v0/decisions.md) has the record (S-22 to S-34).
 
 ## Goal
 
@@ -74,13 +74,13 @@ This is what the trained LoRA learned, copied from `rlm_rl/bridge.py` at RLM com
 - **Prompt text:** the v4 system prompts, the first user message templates, and every observation and error string, including the restart texts ("The cell timed out after … The REPL was restarted and all variables were lost").
 - **Observation:** `REPL output:` cut to 8,000 characters, then `(N turns left, M sub-calls left)`, and the last-turn line.
 - **Hash:** the engine computes its copy's hash the same way the training repo builds `PROMPT_HASHES` (sha256 of the sorted JSON of `PROMPTS["v4"]`). It must equal `a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6`.
-- **Repo path:** the v4 repo-mode texts name `/work/repo`, the container path used in training. Decision 3a covers how a native run handles it. The default is to keep the text and have the tools map `/work/repo` onto the real workspace.
+- **Repo path:** the v4 repo-mode texts name `/work/repo`, the container path used in training. Decision 3a (3a: keep the text) settles how a native run handles it: the text stays, and the tools map `/work/repo` onto the real workspace.
 
 ## Call formats (`callformat.py`)
 
 | Model | How a turn arrives | How the observation goes back |
 |---|---|---|
-| API models (decision 6b) | One native tool call named `python`, whose single argument `code` is the cell | As the tool result, with the same observation text |
+| API models (6b: native `python` tool) | One native tool call named `python`, whose single argument `code` is the cell | As the tool result, with the same observation text |
 | The LoRA and local models | The first fenced `python` block in the reply text | As the next user message, exactly as in training |
 
 The engine also accepts a `<function=python>` block written in plain text, as v4 does, because base Qwen sometimes answers that way. A reply with no code uses up the turn and gets the contract's no-code error, as in training. There are no other native tools.
@@ -169,7 +169,7 @@ The link carries what happened and requests to deliver. Every decision about the
 
 ## Model gateway
 
-**Providers (decision 5a):**
+**Providers (5a: all of these):**
 
 | Provider | Client | Caching |
 |---|---|---|
@@ -181,14 +181,14 @@ The link carries what happened and requests to deliver. Every decision about the
 | Local server: vLLM, Ollama, LM Studio, llama.cpp | `openai`, a localhost URL | The server's prefix cache |
 | Custom | `openai`, any OpenAI-compatible URL | What the endpoint offers |
 
-**Keys (decision 5b):**
+**Keys (5b: `Bun.secrets`, file fallback):**
 - `/providers` lists the providers. You pick one, paste the key and it is saved. Each provider can hold several keys, and any of them can be deleted.
 - Keys go into the OS credential store through `Bun.secrets`. Bun describes this API as new and experimental. If it fails, the key goes into `keys.json` in the config folder, readable only by you.
 - Environment variables override saved keys, for scripts: each provider's usual name, such as `ANTHROPIC_API_KEY`.
 - **Saving a key makes no network request.** The only check is the key's format. A test proves it (see Tests).
 - A provider's error at first use (401 or 403) becomes a clear message: which provider rejected which key, and that `/providers` can re-enter or delete it.
 
-**Catalog (decision 5c):**
+**Catalog (5c: a subset of OMP's catalog):**
 - `app/catalog/models.json` ships with the app. It is a subset of OMP's MIT-licensed catalog (`packages/catalog/src/models.json`), with attribution.
 - For each model it gives the context window, the maximum output, input and output prices, cache write and read prices, and whether the model takes tools and reasoning settings.
 - "Refresh models" in `/providers` calls the provider's `/models` endpoint, only when clicked, and merges the result.
@@ -232,9 +232,9 @@ The link carries what happened and requests to deliver. Every decision about the
 
 **Tools (`tools.py`):**
 - `read_file`, `find_files`, `grep`, `edit_file`, `write_file` and `diff` behave as in training.
-- Paths are relative to the workspace. Under decision 3a, paths starting `/work/repo` map onto it.
+- Paths are relative to the workspace. Under decision 3a (keep `/work/repo`), paths starting `/work/repo` map onto it.
 - `diff()` shows what the run changed since it started. At run start the engine records the working tree as a git tree object through a temporary index, leaving your branch and index alone. v0 repo mode needs a git repository; outside one, `diff()` says it is unavailable.
-- `shell(cmd)` runs `sh -c` on macOS and Linux. On Windows it uses Git Bash if installed, otherwise PowerShell (decision 4a). It has a per-call timeout and capped output, as in training.
+- `shell(cmd)` runs `sh -c` on macOS and Linux. On Windows it uses Git Bash if installed, otherwise PowerShell (4a: Git Bash, else PowerShell). It has a per-call timeout and capped output, as in training.
 - `fetch(url)` makes a GET request through the bridge. The engine performs it and returns the text, capped at 200,000 characters. The worker opens no connection.
 
 **Bridge (`bridge.py`):**
@@ -253,7 +253,7 @@ The link carries what happened and requests to deliver. Every decision about the
 | `subprocess.Popen`, `os.system`, `os.exec*`, `os.spawn*` | `shell` |
 | `socket.connect`, and the first `fetch` to each host | `network` |
 
-**Modes (decision 4b):**
+**Modes (4b: `accept-edits` is the default):**
 
 | Mode | Asks for |
 |---|---|
@@ -272,10 +272,10 @@ The link carries what happened and requests to deliver. Every decision about the
 
 **`rlmh` opens the interactive app** in the current folder: a prompt box, the transcript of the current run above it, and a status line below.
 
-**Starting a run (decision 6c):**
+**Starting a run (6c: `@path` means read mode, else repo mode):**
 - A question with `@path` mentions starts a read-mode run, with those files as `context`.
 - A question with no mention starts a repo-mode run on the folder `rlmh` was opened in.
-- Each run is one-shot (decision 6a): one task, a fresh REPL, and then the answer. Esc cancels a run.
+- Each run is one-shot (6a: one-shot): one task, a fresh REPL, and then the answer. Esc cancels a run.
 
 **Slash commands:**
 
@@ -318,7 +318,7 @@ rlmh config get root.model
 
 ## Configuration
 
-Everything lives in `~/.rlm-harness/` on every OS (decision 2b), or in the folder named by `RLMH_HOME`:
+Everything lives in `~/.rlm-harness/` on every OS (2b: `~/.rlm-harness/`), or in the folder named by `RLMH_HOME`:
 
 ```
 ~/.rlm-harness/
@@ -366,5 +366,5 @@ CI runs everything except parity on macOS, Windows and Linux. The parity script 
 
 ## Open questions
 
-1. Which two models for the smoke run (decision 9a)? I suggest one API model and one local model.
-2. Licence: Apache-2.0, the same as Qwen and Harness². It was chosen by default and is easy to change before the first release.
+1. Which two models for the smoke run (9a: two API models, one of them forced to fenced format; step 9 asks which two)?
+2. Licence (1a: MIT).

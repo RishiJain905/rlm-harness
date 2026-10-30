@@ -7,7 +7,7 @@
 | **Depends on** | 2 |
 | **Unblocks** | 4, and through it 6 and 8 |
 | **Parallel with** | 5 |
-| **Decisions it uses** | 3a: keep `/work/repo` in the text (default). 6b: native for API models, fenced for the LoRA and local models (default). 4a: Git Bash, else PowerShell (only as the `{shell}` word in the guidance). S-13, S-14, D-04, D-08, D-09, D-16, D-31, D-32, D-34 |
+| **Decisions it uses** | 3a: keep `/work/repo` in the text (S-25). 6b: native for API models, fenced for the LoRA and local models (S-30). 4a: Git Bash, else PowerShell (only as the `{shell}` word in the guidance). S-13, S-14, D-04, D-08, D-09, D-16, D-31, D-32, D-34 |
 
 ## Goal
 
@@ -16,8 +16,8 @@ The engine holds an exact copy of training's prompt v4 and a test that proves it
 ## Read first
 
 - [../architecture.md §7.6](../architecture.md#76-step-3--4-6-8-contract-call-format-profiles) (the signatures), [§6.2](../architecture.md#62-the-python-tool-callformatpython_tool) (the tool and where the observation goes), [§5.1](../architecture.md#51-app--engine) (`engine.info`), [§12](../architecture.md#12-conventions) (copy and cache-note rules).
-- [../decisions.md](../decisions.md): D-04, D-08, D-09, D-16, D-31, D-32, D-34, and open decisions 3a and 6b.
-- [../../v0-design.md](../../v0-design.md#the-frozen-contract-contractpy) § The frozen contract, § Call formats, § Profiles, and [../../v0-build-plan.md](../../v0-build-plan.md#step-3-contract-prompt-v4-hash-test-both-call-formats) § Step 3.
+- [../decisions.md](../decisions.md): D-04, D-08, D-09, D-16, D-31, D-32, D-34, and S-25 (3a) and S-30 (6b).
+- [../../legacy/v0-design.md](../../legacy/v0-design.md#the-frozen-contract-contractpy) § The frozen contract, § Call formats, § Profiles, and [../../legacy/v0-build-plan.md](../../legacy/v0-build-plan.md#step-3-contract-prompt-v4-hash-test-both-call-formats) § Step 3.
 - Training: `git -C F:\Personal\RLM\RLM show 0b9af69:rlm_rl/bridge.py` (read all of it; the copy map below names the parts) and `0b9af69:rlm_rl/env.py` (`_CODE_RE`, `_TOOL_CALL_CODE_RE`, `extract_code`). Samples: `0b9af69:tests/test_env.py` (`test_extract_code_shapes`), `tests/test_bridge.py` (`test_observation`, `test_first_user_message`, `test_edit_first_message`, `test_cell_messages_quote_the_limit`, `test_truncate_prompt`, `test_valid_answer`), `tests/test_edit_env.py` (`test_pace_message`). All are synthetic one-liners with no task data.
 
 ## Starting state
@@ -241,6 +241,8 @@ All use `tmp_path` as `home`.
 
 ## If a decision goes the other way
 
-- **3a (show the real path):** the repo-mode texts take the real workspace path, so `EDIT_FIRST_USER_TEMPLATE`, `EDIT_FILES_UNCHANGED` and with them `PROMPTS_V4` change for such runs and `training-v4` no longer hashes to `TRAINING_HASH`. Keep the frozen texts in `contract.py` and `test_hash_matches_training` on them. Add a `repo_path` argument to `edit_first_message` and `cell_messages`. Move the profile-level hash assertion (`test_training_v4_is_training`) to a separate profile that still renders `/work/repo`, which parity and the RLM evaluations use. The default profile then differs from that profile by more than its guidance, so `test_default_differs_only_by_guidance` compares only the system prompt.
-- **6b (fenced everywhere):** nothing changes here. `callformat` keeps the native path and its tests; only step 5's `resolveCallFormat` stops selecting it.
-- **4a (always PowerShell, or require Git Bash):** nothing changes here. `{shell}` is filled from step 4's `ShellSpec.name`, so the guidance reads the same.
+Every decision below was settled at step 1 (2026-10-30; [decisions.md](../decisions.md) S-22 to S-34). Each line names the pick and says what would change if Rishi reversed it. Picks that went the alternative way are already written into this spec.
+
+- **3a, show the real path** (settled: keep `/work/repo`, S-25): the repo-mode texts take the real workspace path, so `EDIT_FIRST_USER_TEMPLATE`, `EDIT_FILES_UNCHANGED` and with them `PROMPTS_V4` change for such runs and `training-v4` no longer hashes to `TRAINING_HASH`. Keep the frozen texts in `contract.py` and `test_hash_matches_training` on them. Add a `repo_path` argument to `edit_first_message` and `cell_messages`. Move the profile-level hash assertion (`test_training_v4_is_training`) to a separate profile that still renders `/work/repo`, which parity and the RLM evaluations use. The default profile then differs from that profile by more than its guidance, so `test_default_differs_only_by_guidance` compares only the system prompt.
+- **6b, fenced everywhere** (settled: native for API models, S-30): nothing changes here. `callformat` keeps the native path and its tests; only step 5's `resolveCallFormat` stops selecting it.
+- **4a, always PowerShell or require Git Bash** (settled: Git Bash, else PowerShell, S-26): nothing changes here. `{shell}` is filled from step 4's `ShellSpec.name`, so the guidance reads the same.
