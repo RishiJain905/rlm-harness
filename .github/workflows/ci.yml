@@ -57,7 +57,10 @@ jobs:
       - name: Compile rlmh
         working-directory: app
         # The two flags stop the binary loading a .env or bunfig.toml from the folder it runs in (D-44).
-        run: bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile "../$BIN"
+        # On Windows, bun build does not create a missing output folder.
+        run: |
+          mkdir -p ../dist
+          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile "../$BIN"
 
       - name: Smoke --version
         run: |

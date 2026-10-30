@@ -14,7 +14,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile ../dist/rlmh"
+    "build": "mkdir -p ../dist && bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile ../dist/rlmh"
   },
   "dependencies": {
     "ink": "8.0.0",
