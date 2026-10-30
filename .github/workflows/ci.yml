@@ -1,0 +1,96 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            suffix: ""
+          - os: macos-latest
+            target: darwin-arm64
+            suffix: ""
+          - os: windows-latest
+            target: windows-x64
+            suffix: .exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      BIN: dist/rlmh-${{ matrix.target }}${{ matrix.suffix }}
+    steps:
+      # Every OS checks out the same LF bytes, so hashes and profiles agree (D-43).
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Engine tests
+        run: uv run --locked --project engine pytest engine/tests
+      - name: Install app dependencies
+        working-directory: app
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        working-directory: app
+        run: bun run typecheck
+      - name: App tests
+        working-directory: app
+        run: bun test
+      - name: Compile rlmh
+        working-directory: app
+        # The two flags stop the binary loading a .env or bunfig.toml from the folder it runs in (D-44).
+        run: bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile "../$BIN"
+
+      - name: Smoke --version
+        run: |
+          out="$("$BIN" --version)"
+          echo "$out"
+          test "$out" = "rlmh 0.1.0"
+      - name: Smoke info
+        env:
+          RLMH_ENGINE: uv run --project engine python -X utf8 -m rlm_engine serve
+        run: |
+          info="$("$BIN" info)"
+          echo "$info"
+          echo "$info" | bun -e 'const j = JSON.parse(await Bun.stdin.text()); if (j.engine.protocol !== 1 || j.app.version !== j.engine.version) { console.error("info mismatch"); process.exit(1); } console.log("info ok");'
+      - name: Smoke info without RLMH_ENGINE
+        # The binary must not mistake this checkout for a source run.
+        run: |
+          set +e
+          msg="$("$BIN" info 2>&1)"
+          code=$?
+          set -e
+          echo "$msg"
+          test "$code" = 1
+          echo "$msg" | grep -q RLMH_ENGINE
+      - name: Smoke rlmh without a terminal
+        run: |
+          set +e
+          "$BIN" < /dev/null
+          code=$?
+          set -e
+          test "$code" = 1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rlmh-${{ matrix.target }}
+          path: ${{ env.BIN }}
+          if-no-files-found: error

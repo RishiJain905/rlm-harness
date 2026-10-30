@@ -1,6 +1,6 @@
 # v0 decisions
 
-> Updated 2026-10-30, when step 1 froze the spec. One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague; Rishi reviewed them at step 1 and kept every one (S-34). Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. The decisions that were open are numbered as in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md).
+> Updated 2026-10-30, when step 1 froze the spec; D-52 to D-58 were added while building step 2. One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague; Rishi reviewed them at step 1 and kept every one (S-34). Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. The decisions that were open are numbered as in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md).
 
 ## Settled decisions
 
@@ -100,6 +100,16 @@ Added on 2026-10-29 while reviewing the specs:
 - **D-49** The engine learns its home only from `RLMH_HOME`, which the app always sets. Parity sets it the same way.
 - **D-50** `rlmh run` exits 0, 1 (`infra_error` or the engine died), 2 (usage) or 130 (Ctrl-C), like D-40. Bare `rlmh` with no TTY exits 1.
 - **D-51** The run log's `started_at` is Unix seconds as a float, as training's `time.time()`. Its `input.files` is the list of input paths, and it gains `host_traceback`.
+
+Added on 2026-10-30 while building step 2:
+
+- **D-52** `link.ts` splits its input on raw `\n` bytes and decodes each line with a fatal UTF-8 decoder, instead of streaming through a lenient `TextDecoder`. A character split across chunks still survives, bad UTF-8 gets -32700 on both sides (link rule 3), and `MAX_LINE_BYTES` counts bytes, as `link.py` does. A lenient decoder would have turned bad bytes into U+FFFD without an error.
+- **D-53** `startEngine` merges `cmd.env` over `process.env`, as §7.1 says, and then strips key-like names again. `findEngine` strips them too, so D-29 holds even for an `EngineCommand` built by hand.
+- **D-54** Only `.tsx` files import Ink, so `interface/App.tsx` exports `runApp()` (render, then wait for exit) beside `App`, and `main.ts` imports it dynamically instead of calling `render(createElement(App))` itself.
+- **D-55** On the wire, `tag` in `run.started` and `run.finished` is `null` when `run.start` had none, and `run.subcall.seconds` is `null` at `status: "sent"`. §5.3 and `protocol.ts` say so.
+- **D-56** `react-devtools-core` (8.0.0) is an exact dev dependency of the app, because Ink 8 imports it and `bun build --compile` can't resolve it otherwise. This is the spec's own fallback; it was picked over `--external react-devtools-core` so the build command stays as specified. Ink loads devtools only when `DEV=true`.
+- **D-57** When the engine process exits, `startEngine` waits up to 1 s for its stdout to reach EOF before it closes the link, so an answer written just before exit is not dropped as "link closed".
+- **D-58** On Windows, `findEngine` puts `cmd /c` in front of an `RLMH_ENGINE` whose first word ends in `.cmd` or `.bat`, because such a script can't be spawned directly.
 
 ## Open decisions
 

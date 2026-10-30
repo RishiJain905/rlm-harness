@@ -127,15 +127,17 @@ Writes loop until every byte is out (a pipe `write` can be partial). Windows: se
 
 ## Tasks
 
-1. [ ] Set row 2 in `progress.md` to `in progress`. In PowerShell run `$env:Path = "F:\Personal\RLM\rlm-harness\.bun\bin;$env:Path"`; `bun --version` must print `1.4.4`, and `uv --version` must work.
-2. [ ] Engine first. Write `pyproject.toml`, run `uv lock`, then `errors.py`, `__init__.py`, `link.py`, `appport.py`, `service.py`, `__main__.py`, with `conftest.py`, `fakeapp.py` and `test_link.py` beside them. Run `uv run --project engine pytest engine/tests`.
-3. [ ] Check by hand in Git Bash: `echo '{"jsonrpc":"2.0","id":1,"method":"engine.info","params":{}}' | uv run --project engine python -X utf8 -m rlm_engine serve` prints one JSON line, exit 0.
-4. [ ] App next. Write `package.json`, run `bun add --exact ink react` and `bun add -d --exact @types/bun @types/react typescript`. Write `tsconfig.json`, `version.ts`, `paths.ts`, `protocol.ts`, `link.ts`, `bus.ts`, `settings.ts`, `engine.ts`, `main.ts`, `interface/App.tsx`, then `link.test.ts`, `settings.test.ts` and `engine.test.ts`.
-5. [ ] Write `protocol/examples.json` from architecture §4 to §5.3 (copy the §6.2 tool text exactly), then `test_protocol.py` and `protocol.test.ts`. Fix the examples or the docs, whichever is wrong, until both pass. If architecture.md is wrong, change it and log that in progress.md.
-6. [ ] In `app/`: `bun run typecheck`, `bun test`. Then from source: `bun run src/main.ts info`, `--version`, `--help`, `--bogus` (exit 2), `info --verbose`.
-7. [ ] Compile on the PC: `bun run build` (the `package.json` script, with the D-44 flags), copied to `../dist/rlmh-windows-x64.exe`. Run its `--version`, then `info` with `$env:RLMH_ENGINE = "uv run --project engine python -X utf8 -m rlm_engine serve"`, then `info` without it (exit 1).
-8. [ ] Open `rlmh` (from source, then the `.exe`) in Windows Terminal and in the PowerShell console. Check the line appears, `q` exits, Ctrl+C exits, and the shell works normally afterwards. No WSL.
-9. [ ] Write `.github/workflows/ci.yml` and the `.gitignore` lines. Run every CI command by hand on the PC first (bash syntax).
+> Built on 2026-10-30 in a Linux cloud container (Bun 1.4.4 and uv on PATH), not on Rishi's PC. The checks below marked "on the PC" or "in Git Bash" ran there in bash, and CI repeats them on `windows-latest`, `macos-latest` and `ubuntu-latest`. Rishi marked the step done without the PC-only checks.
+
+1. [x] Set row 2 in `progress.md` to `in progress`. In PowerShell run `$env:Path = "F:\Personal\RLM\rlm-harness\.bun\bin;$env:Path"`; `bun --version` must print `1.4.4`, and `uv --version` must work.
+2. [x] Engine first. Write `pyproject.toml`, run `uv lock`, then `errors.py`, `__init__.py`, `link.py`, `appport.py`, `service.py`, `__main__.py`, with `conftest.py`, `fakeapp.py` and `test_link.py` beside them. Run `uv run --project engine pytest engine/tests`.
+3. [x] Check by hand in Git Bash: `echo '{"jsonrpc":"2.0","id":1,"method":"engine.info","params":{}}' | uv run --project engine python -X utf8 -m rlm_engine serve` prints one JSON line, exit 0.
+4. [x] App next. Write `package.json`, run `bun add --exact ink react` and `bun add -d --exact @types/bun @types/react typescript`. Write `tsconfig.json`, `version.ts`, `paths.ts`, `protocol.ts`, `link.ts`, `bus.ts`, `settings.ts`, `engine.ts`, `main.ts`, `interface/App.tsx`, then `link.test.ts`, `settings.test.ts` and `engine.test.ts`.
+5. [x] Write `protocol/examples.json` from architecture §4 to §5.3 (copy the §6.2 tool text exactly), then `test_protocol.py` and `protocol.test.ts`. Fix the examples or the docs, whichever is wrong, until both pass. If architecture.md is wrong, change it and log that in progress.md.
+6. [x] In `app/`: `bun run typecheck`, `bun test`. Then from source: `bun run src/main.ts info`, `--version`, `--help`, `--bogus` (exit 2), `info --verbose`.
+7. [ ] *(Not run: PC only. The Linux binary passed the same checks in the cloud container, and CI compiles and smoke-tests `rlmh-windows-x64.exe` on `windows-latest`. Rishi marked step 2 done without it, 2026-10-30.)* Compile on the PC: `bun run build` (the `package.json` script, with the D-44 flags), copied to `../dist/rlmh-windows-x64.exe`. Run its `--version`, then `info` with `$env:RLMH_ENGINE = "uv run --project engine python -X utf8 -m rlm_engine serve"`, then `info` without it (exit 1).
+8. [ ] *(Not run: PC only. In a Linux pseudo-terminal, from source and as the binary, the line shows and `q` and Ctrl+C both exit 0. Rishi marked step 2 done without the Windows check, 2026-10-30.)* Open `rlmh` (from source, then the `.exe`) in Windows Terminal and in the PowerShell console. Check the line appears, `q` exits, Ctrl+C exits, and the shell works normally afterwards. No WSL.
+9. [x] Write `.github/workflows/ci.yml` and the `.gitignore` lines. Run every CI command by hand on the PC first (bash syntax).
 10. [ ] Ask Rishi for leave to commit and push a branch so CI can run. Never commit or push without it. After a yes, watch with `gh run watch`, and fix and re-push until all three jobs pass.
 11. [ ] Run the checks under "Done when". Update `progress.md`.
 
@@ -218,12 +220,14 @@ Tests that start the real engine (via `uv run`) get a 120 s timeout. `RLMH_HOME`
 
 ## Done when
 
-- [ ] `uv run --project engine pytest engine/tests` and, in `app/`, `bun run typecheck` and `bun test` pass on the PC.
-- [ ] `grep -rL "KV cache:" app/src engine/rlm_engine --include=*.ts --include=*.tsx --include=*.py` prints nothing, and `git status --short` shows only the paths in architecture §2 for step 2 (`.gitattributes` among them), plus `.gitignore`, `progress.md` and the already untracked `documentation/v0/`.
-- [ ] The Git Bash check in task 3 prints one JSON line and exits 0.
-- [ ] `bun run src/main.ts info` (no `RLMH_ENGINE`) prints JSON with `"protocol": 1`, a `3.12.x` Python, `"contract": null` and `"profiles": []`.
-- [ ] One CI run is green on `ubuntu-latest`, `macos-latest` and `windows-latest`. Its log on each OS shows `rlmh 0.1.0` and the `info` JSON, and the run lists three artifacts: `rlmh-linux-x64`, `rlmh-darwin-arm64`, `rlmh-windows-x64.exe`. `test_link` passed in each job.
-- [ ] On the PC, `dist\rlmh-windows-x64.exe --version` prints `rlmh 0.1.0`, and with `RLMH_ENGINE` set `info` prints the engine JSON. `rlmh` opens its line in Windows Terminal and in PowerShell, `q` and Ctrl+C both quit, and nothing needs WSL.
+> Built on 2026-10-30 in a Linux cloud container (Bun 1.4.4 and uv on PATH), not on Rishi's PC. The checks below marked "on the PC" or "in Git Bash" ran there in bash, and CI repeats them on `windows-latest`, `macos-latest` and `ubuntu-latest`. Rishi marked the step done without the PC-only checks.
+
+- [x] `uv run --project engine pytest engine/tests` and, in `app/`, `bun run typecheck` and `bun test` pass on the PC.
+- [x] `grep -rL "KV cache:" app/src engine/rlm_engine --include=*.ts --include=*.tsx --include=*.py` prints nothing, and `git status --short` shows only the paths in architecture §2 for step 2 (`.gitattributes` among them), plus `.gitignore`, `progress.md` and the already untracked `documentation/v0/`.
+- [x] The Git Bash check in task 3 prints one JSON line and exits 0.
+- [x] `bun run src/main.ts info` (no `RLMH_ENGINE`) prints JSON with `"protocol": 1`, a `3.12.x` Python, `"contract": null` and `"profiles": []`.
+- [ ] One CI run is green on `ubuntu-latest`, `macos-latest` and `windows-latest`. Its log on each OS shows `rlmh 0.1.0` and the `info` JSON, and the run lists three artifacts: `rlmh-linux-x64`, `rlmh-darwin-arm64`, `rlmh-windows-x64` (artifact names carry no `.exe`, as the CI section and step 10 say; the file inside is `rlmh-windows-x64.exe`). `test_link` passed in each job.
+- [ ] *(PC only, not run; see tasks 7 and 8.)* On the PC, `dist\rlmh-windows-x64.exe --version` prints `rlmh 0.1.0`, and with `RLMH_ENGINE` set `info` prints the engine JSON. `rlmh` opens its line in Windows Terminal and in PowerShell, `q` and Ctrl+C both quit, and nothing needs WSL.
 
 ## Out of scope
 

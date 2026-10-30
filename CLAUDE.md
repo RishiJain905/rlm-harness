@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `rlmh` is a model-agnostic harness for Recursive Language Models: the model never reads a long input directly; it writes Python against it in a REPL, hands pieces to sub-calls (`llm`, `llm_batch`), and calls `submit`. Any provider can be the root or sub-call model, including the RL-trained Qwen LoRA from the training repo ([RishiJain905/RLM](https://github.com/RishiJain905/RLM), local at `F:\Personal\RLM\RLM`).
 
-**Status: design only.** There is no code yet. The v0 spec was frozen at step 1 (2026-10-30). `documentation/` holds the design and a v0 build kit, and code lands in ten steps (step 2 creates `app/`, `engine/` and CI). Native on macOS, Windows and Linux, with no Docker and no WSL. Rishi's machine is Windows 11, the riskiest OS for this design.
+**Status: building v0.** Step 2 is done (2026-10-30): `app/` and `engine/` exist, the link works both ways, `rlmh info` and `--version` work, and CI builds and tests `rlmh` on three OSes. Steps 3 (contract) and 5 (gateway) are next and can run in parallel. The v0 spec was frozen at step 1, and `documentation/` holds the design and a v0 build kit; code lands in ten steps. Native on macOS, Windows and Linux, with no Docker and no WSL. Rishi's machine is Windows 11, the riskiest OS for this design.
 
 ## Working on a v0 step
 
@@ -25,7 +25,7 @@ The build kit in `documentation/v0/` is written so one thread can build one step
 - **Read order:** `documentation/v0/README.md`, then `v0/architecture.md` (pins every shared path, message and signature), then `v0/decisions.md`, then your spec in `v0/specs/` and the parent-doc sections it lists under "Read first".
 - **Which doc wins:** spec, then `v0/architecture.md`, then `documentation/legacy/v0-design.md` for gaps. If `v0/architecture.md` contradicts a parent doc (`documentation/legacy/architecture.md`, `v0-design.md`, `v0-build-plan.md`), the parent wins and `v0/architecture.md` gets fixed.
 - **`v0/progress.md`:** a step starts only when every step it depends on is `done` (or `review` if Rishi says so). Re-read the file just before editing it, change only your own row, and add a log line.
-- **New calls** go into `decisions.md` as the next D-number (D-51 is the latest). Changing a shared interface (a §7 signature, a wire message, a path) means updating `v0/architecture.md` too and saying so in the log.
+- **New calls** go into `decisions.md` as the next D-number (D-58 is the latest). Changing a shared interface (a §7 signature, a wire message, a path) means updating `v0/architecture.md` too and saying so in the log.
 - **Decisions:** step 1 settled every open decision (S-22 to S-34 in `decisions.md`). Three went the alternative way: 1a MIT, 4b `accept-edits` as the default mode, and 9a two API models with slot b forced to fenced. Step 9 still asks which two API models before it estimates.
 - **"OMP" in these docs** means the oh-my-pi repo, the MIT source of the model catalog and some ideas. It is not a reason to run `omp`.
 
@@ -53,7 +53,7 @@ rlmh (Bun 1.4.4: Ink UI, CLI, model gateway)
 
 ## Commands
 
-None of these work until step 2 lands. Bun 1.4.4 is installed in-repo at `.bun/`, which is git-excluded through `.git/info/exclude`, not `.gitignore`. If `bun` isn't on PATH, use `.bun\bin\bun.exe` (from `app/`, `..\.bun\bin\bun.exe`). Python 3.12 comes through uv.
+These work since step 2. On Rishi's PC, Bun 1.4.4 is installed in-repo at `.bun/`, which is git-excluded through `.git/info/exclude`, not `.gitignore`. If `bun` isn't on PATH, use `.bun\bin\bun.exe` (from `app/`, `..\.bun\bin\bun.exe`). Python 3.12 comes through uv. In a Linux cloud container, `bun` 1.4.4 and `uv` are already on PATH; there is no PowerShell, so only `verify.sh` runs there.
 
 | What | Command |
 |---|---|
@@ -67,7 +67,7 @@ None of these work until step 2 lands. Bun 1.4.4 is installed in-repo at `.bun/`
 
 - **Engine by hand (Git Bash):** `echo '{"jsonrpc":"2.0","id":1,"method":"engine.info","params":{}}' | uv run --project engine python -X utf8 -m rlm_engine serve`.
 - **Use a temp home.** Point `RLMH_HOME` at a temp folder for any manual run or test, so nothing lands in the real `~/.rlm-harness/`. `RLMH_DEBUG=1` registers `debug.roundtrip` for the link tests.
-- **Dependencies:** add packages with `bun add --exact`, and commit `app/bun.lock` and `engine/uv.lock`. The engine uses the standard library only at run time, with pytest in the dev group. No linter is specified; for TypeScript, `tsc --noEmit` is the check.
+- **Dependencies:** add packages with `bun add --exact`, and commit `app/bun.lock` and `engine/uv.lock`. The engine uses the standard library only at run time, with pytest in the dev group. No linter is specified; for TypeScript, `tsc --noEmit` is the check (`typescript` 7, the native compiler). `react-devtools-core` is a dev dependency only so `bun build --compile` can resolve Ink's devtools import (D-56).
 
 ## Conventions
 
@@ -107,7 +107,7 @@ This repo is public, and `rlmh` holds other people's API keys and runs model-wri
 
 - **When to run it:** run the full gate before saying a step or task is done, and before asking Rishi to commit. Read the verdict and the FAIL blocks; for detail on one failing test, rerun just that test.
 - **Scoped runs.** While iterating, pass a path: `scripts\verify.ps1 engine/tests/test_link.py`, or `app/test/gateway`. Only a full, unscoped PASS ends a task.
-- **SKIP lines.** The engine and app stages print SKIP until `engine/pyproject.toml` and `app/package.json` exist. After step 2, a PASS needs all four stages to run. Never add a skip or an exclusion to turn a FAIL into a PASS.
+- **SKIP lines.** The engine and app stages print SKIP only when `engine/pyproject.toml` or `app/package.json` is missing. Both exist since step 2, so a PASS needs all four stages to run. Never add a skip or an exclusion to turn a FAIL into a PASS.
 - **What it doesn't replace:** a spec's "Done when" list. Compile checks, hand checks, Windows Terminal checks and green CI on three OSes still apply.
 - **New behaviour needs a test the gate runs.** A new check, such as a linter, goes into both scripts as a new stage.
 - **Repeated failures.** If the same failure survives two fixes, stop patching and re-diagnose from first principles.

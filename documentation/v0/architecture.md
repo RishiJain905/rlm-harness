@@ -207,7 +207,7 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 
 ### 5.3 Events: engine → app notifications
 
-Every event carries `run_id`. Turns are numbered from 1.
+Every event carries `run_id`. Turns are numbered from 1. `tag` is `null` when `run.start` had none, and `run.subcall.seconds` is `null` at `sent` (D-55).
 
 | Method | Params besides `run_id` | Sent |
 |---|---|---|
@@ -334,13 +334,14 @@ export class Link {
 export interface EngineCommand { cmd: string[]; cwd: string; env: Record<string, string> }
 export function findEngine(opts: { home: string; env?: Record<string, string | undefined>; sourceDir?: string }): EngineCommand; // throws EngineNotFound
 export interface EngineProcess { link: Link; exited: Promise<number>; stderrTail(n?: number): string[]; kill(): void }
-export function startEngine(cmd: EngineCommand, opts?: { onStderr?: (line: string) => void }): EngineProcess; // env merged over process.env
+export function startEngine(cmd: EngineCommand, opts?: { onStderr?: (line: string) => void }): EngineProcess; // env merged over process.env, key-like names stripped again (D-53)
 export function splitCommand(line: string): string[];      // quotes honoured, backslashes literal
 export function fetchInfo(link: Link): Promise<EngineInfo>; // engine.info; throws ProtocolMismatch (D-36)
 export class EngineNotFound extends Error {}
 export class ProtocolMismatch extends Error {}
 ```
 
+- **`exited`** resolves with the engine's exit code once its stdout has reached EOF (at most 1 s after the exit), and then the link is closed (D-57).
 - **Engine discovery order (D-18).** `findEngine` tries these in turn:
   1. `RLMH_ENGINE`, a command line split on spaces, with quotes honoured.
   2. A source checkout, when the app runs from source and not compiled: `uv run --project <repo>/engine python -X utf8 -m rlm_engine serve`, with cwd `<repo>`. `pyproject.toml` has a `[build-system]`, so uv installs the package editable.

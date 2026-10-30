@@ -1,1 +1,4 @@
+* text=auto eol=lf
+*.png binary
+*.ico binary
 scripts/*.sh text eol=lf

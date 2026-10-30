@@ -8,3 +8,5 @@ runs/
 dist/
 build/
 node_modules/
+*.bun-build
+*.tsbuildinfo

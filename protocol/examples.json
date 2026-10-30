@@ -1,0 +1,361 @@
+{
+  "protocol": 1,
+  "examples": [
+    {
+      "name": "engine.info:request",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 1, "method": "engine.info", "params": {}}
+    },
+    {
+      "name": "engine.info:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 1, "result": {
+        "version": "0.1.0",
+        "protocol": 1,
+        "python": "3.12.8",
+        "contract": "v4",
+        "contract_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "training_hash": "a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6",
+        "profiles": [
+          {"name": "default", "source": "builtin", "prompt_hash": "2222222222222222222222222222222222222222222222222222222222222222", "profile_hash": "3333333333333333333333333333333333333333333333333333333333333333"},
+          {"name": "training-v4", "source": "builtin", "prompt_hash": "a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6", "profile_hash": "4444444444444444444444444444444444444444444444444444444444444444"},
+          {"name": "example-user-profile", "source": "user", "prompt_hash": "5555555555555555555555555555555555555555555555555555555555555555", "profile_hash": "6666666666666666666666666666666666666666666666666666666666666666"}
+        ]
+      }}
+    },
+    {
+      "name": "run.start:request:read",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 2, "method": "run.start", "params": {
+        "mode": "read",
+        "question": "Example question?",
+        "inputs": ["/example/input.txt"],
+        "profile": "default",
+        "root": {"provider": "anthropic", "model": "example-root-model", "thinking": null},
+        "sub": {"provider": "openai", "model": "example-sub-model", "thinking": "low"},
+        "permission_mode": "accept-edits",
+        "call_format": "native",
+        "interactive": true,
+        "tag": "example-task-1",
+        "batch": "interactive"
+      }}
+    },
+    {
+      "name": "run.start:request:repo",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 3, "method": "run.start", "params": {
+        "mode": "repo",
+        "task": "Example task: make the failing test pass.",
+        "repo_path": "/example/repo",
+        "test_hint": "python -m pytest -q",
+        "language": "python",
+        "n_files": 12,
+        "profile": "training-v4",
+        "root": {"provider": "local", "model": "example-local-model", "thinking": "off"},
+        "sub": {"provider": "local", "model": "example-local-model", "thinking": null},
+        "permission_mode": "default",
+        "call_format": "fenced",
+        "interactive": false,
+        "tag": "example-task-2",
+        "log_dir": "/example/logs"
+      }}
+    },
+    {
+      "name": "run.start:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 2, "result": {"run_id": "r_0123456789ab", "log_path": "/example/home/runs/interactive/runs.jsonl"}}
+    },
+    {
+      "name": "run.start:error:UNKNOWN_PROFILE",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": 3, "error": {"code": -32011, "message": "unknown profile: example-missing-profile"}}
+    },
+    {
+      "name": "run.start:error:BAD_INPUT",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": 2, "error": {"code": -32012, "message": "input file not found: /example/input.txt"}}
+    },
+    {
+      "name": "run.cancel:request",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 4, "method": "run.cancel", "params": {"run_id": "r_0123456789ab"}}
+    },
+    {
+      "name": "run.cancel:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 4, "result": {}}
+    },
+    {
+      "name": "run.cancel:error:UNKNOWN_RUN",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": 4, "error": {"code": -32010, "message": "unknown run: r_0123456789ab"}}
+    },
+    {
+      "name": "run.vars:request",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 5, "method": "run.vars", "params": {"run_id": "r_0123456789ab"}}
+    },
+    {
+      "name": "run.vars:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 5, "result": {"vars": [
+        {"name": "chunks", "type": "list", "len": 12, "chars": 48210},
+        {"name": "summary", "type": "str", "len": 412, "chars": 418},
+        {"name": "count_words", "type": "function", "len": null, "chars": 37}
+      ]}}
+    },
+    {
+      "name": "debug.roundtrip:request",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 6, "method": "debug.roundtrip", "params": {"count": 2}}
+    },
+    {
+      "name": "debug.roundtrip:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 6, "result": {"texts": ["pong 0", "pong 1"]}}
+    },
+    {
+      "name": "model.complete:request:root",
+      "direction": "engine->app",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": "e1", "method": "model.complete", "params": {
+        "run_id": "r_0123456789ab",
+        "role": "root",
+        "model": {"provider": "anthropic", "model": "example-root-model", "thinking": null},
+        "messages": [
+          {"role": "system", "content": "Example system prompt."},
+          {"role": "user", "content": "Example question?\n\nThe input is in `context`."},
+          {"role": "assistant", "content": "Let me look at the input first.", "tool_call": {"id": "call_1", "name": "python", "arguments": {"code": "print(len(context))"}}},
+          {"role": "tool", "tool_call_id": "call_1", "content": "48210\n\nExample turns and sub-calls left."}
+        ],
+        "tools": [
+          {"name": "python",
+           "description": "Run one cell of Python in the persistent REPL. Variables persist between calls. The result is what the cell printed, followed by your remaining turns and sub-calls.",
+           "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "The Python code to run."}},
+                          "required": ["code"], "additionalProperties": false}}
+        ],
+        "max_tokens": 4096,
+        "temperature": 0.0,
+        "thinking": "off",
+        "turn": 2
+      }}
+    },
+    {
+      "name": "model.complete:request:sub",
+      "direction": "engine->app",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": "e2", "method": "model.complete", "params": {
+        "run_id": "r_0123456789ab",
+        "role": "sub",
+        "model": {"provider": "openai", "model": "example-sub-model", "thinking": "low"},
+        "messages": [{"role": "user", "content": "Summarize this example chunk."}],
+        "tools": [],
+        "max_tokens": 2048,
+        "temperature": 0.0,
+        "thinking": "low",
+        "turn": 2,
+        "subcall_id": 1,
+        "origin": {"turn": 2, "line": 3},
+        "batch": {"id": "b1", "index": 0, "size": 2}
+      }}
+    },
+    {
+      "name": "model.complete:result",
+      "direction": "app->engine",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": "e1", "result": {
+        "text": "",
+        "tool_call": {"id": "call_2", "name": "python", "arguments": {"code": "submit('42')"}},
+        "reasoning": null,
+        "usage": {"input_tokens": 1200, "output_tokens": 24, "cache_read_tokens": 1024, "cache_write_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.00042},
+        "finish_reason": "tool_call",
+        "served_model": "example-root-model-2026",
+        "seconds": 1.8
+      }}
+    },
+    {
+      "name": "model.complete:error:MODEL_ERROR",
+      "direction": "app->engine",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": "e2", "error": {"code": -32001, "message": "rate limited (429)", "data": {
+        "kind": "rate_limit", "provider": "openai", "model": "example-sub-model", "status": 429, "message": "rate limited (429)"
+      }}}
+    },
+    {
+      "name": "approval.request:request",
+      "direction": "engine->app",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": "e3", "method": "approval.request", "params": {
+        "run_id": "r_0123456789ab", "kind": "shell", "detail": "python -m pytest -q", "turn": 3, "inside_workspace": true
+      }}
+    },
+    {
+      "name": "approval.request:result",
+      "direction": "app->engine",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": "e3", "result": {"allow": true, "remember_for_run": false}}
+    },
+    {
+      "name": "rpc:error:PARSE_ERROR",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "parse error: Expecting value: line 1 column 1 (char 0)"}}
+    },
+    {
+      "name": "rpc:error:INVALID_REQUEST",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "line too long (over 33554432 bytes)"}}
+    },
+    {
+      "name": "rpc:error:METHOD_NOT_FOUND",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": 7, "error": {"code": -32601, "message": "method not found: example.method"}}
+    },
+    {
+      "name": "rpc:error:INVALID_PARAMS",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": 8, "error": {"code": -32602, "message": "params must be an object"}}
+    },
+    {
+      "name": "rpc:error:INTERNAL_ERROR",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": 9, "error": {"code": -32603, "message": "internal error: ValueError: example"}}
+    },
+    {
+      "name": "rpc:error:CANCELLED",
+      "direction": "app->engine",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": "e4", "error": {"code": -32800, "message": "cancelled"}}
+    },
+    {
+      "name": "run.started:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.started", "params": {
+        "run_id": "r_0123456789ab",
+        "tag": "example-task-1",
+        "mode": "read",
+        "profile": "default",
+        "prompt_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "profile_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "contract_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "call_format": "native",
+        "root": {"provider": "anthropic", "model": "example-root-model", "thinking": null},
+        "sub": {"provider": "openai", "model": "example-sub-model", "thinking": "low"},
+        "permission_mode": "accept-edits",
+        "workspace": "/example/home/scratch/r_0123456789ab",
+        "input": {"chars": 48210, "lines": 1022, "sha256": "7777777777777777777777777777777777777777777777777777777777777777", "files": ["/example/input.txt"]},
+        "limits": {"max_turns": 10, "max_subcalls": 50, "root_max_tokens": 4096, "output_max_chars": 4000, "cell_timeout_s": 120, "subcall_max_chars": 200000, "subcall_max_tokens": 2048},
+        "log_path": "/example/home/runs/interactive/runs.jsonl"
+      }}
+    },
+    {
+      "name": "run.reply:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.reply", "params": {
+        "run_id": "r_0123456789ab",
+        "turn": 1,
+        "text": "Let me look at the input first.",
+        "tool_call": {"id": "call_1", "name": "python", "arguments": {"code": "print(len(context))"}},
+        "reasoning": null,
+        "finish_reason": "tool_call",
+        "usage": {"input_tokens": 980, "output_tokens": 31, "cache_read_tokens": 0, "cache_write_tokens": 960, "reasoning_tokens": 0, "cost_usd": 0.0041},
+        "seconds": 2.1
+      }}
+    },
+    {
+      "name": "run.cell:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.cell", "params": {
+        "run_id": "r_0123456789ab",
+        "turn": 1,
+        "code": "print(len(context))",
+        "output": "48210",
+        "error": null,
+        "observation": "48210\n\nExample turns and sub-calls left.",
+        "seconds": 0.02,
+        "restarted": false,
+        "crash": null,
+        "repo_changed": null
+      }}
+    },
+    {
+      "name": "run.subcall:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.subcall", "params": {
+        "run_id": "r_0123456789ab",
+        "subcall_id": 1,
+        "origin": {"turn": 2, "line": 3},
+        "batch": {"id": "b1", "index": 0, "size": 2},
+        "prompt_chars": 5120,
+        "status": "done",
+        "error": null,
+        "seconds": 3.4
+      }}
+    },
+    {
+      "name": "run.permission:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.permission", "params": {
+        "run_id": "r_0123456789ab", "turn": 3, "kind": "shell", "detail": "python -m pytest -q", "allowed": true, "asked": true, "remembered": false
+      }}
+    },
+    {
+      "name": "run.budget:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.budget", "params": {"run_id": "r_0123456789ab", "turns_left": 7, "subcalls_left": 48}}
+    },
+    {
+      "name": "run.finished:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.finished", "params": {
+        "run_id": "r_0123456789ab",
+        "tag": "example-task-1",
+        "answer": "42",
+        "submitted": true,
+        "answer_valid": true,
+        "turns": 3,
+        "subcalls": 2,
+        "usage": {
+          "root": {"input_tokens": 3600, "output_tokens": 90, "cache_read_tokens": 2048, "cache_write_tokens": 960, "reasoning_tokens": 0, "cost_usd": 0.0072},
+          "sub": {"input_tokens": 2600, "output_tokens": 400, "cache_read_tokens": 0, "cache_write_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0019}
+        },
+        "cost_usd": 0.0091,
+        "infra_error": null,
+        "infra_kind": null,
+        "wall_s": 14.2,
+        "log_path": "/example/home/runs/interactive/runs.jsonl"
+      }}
+    },
+    {
+      "name": "model.cancel:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "model.cancel", "params": {"run_id": "r_0123456789ab"}}
+    }
+  ]
+}
