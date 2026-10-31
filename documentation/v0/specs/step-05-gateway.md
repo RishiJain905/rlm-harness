@@ -171,18 +171,18 @@ Reasoning text is read from `delta.reasoning_content`, `delta.reasoning` or Open
 
 ## Tasks
 
-1. [ ] From `app/`, pin exact versions: `..\.bun\bin\bun.exe add --exact openai@7.45.1 @anthropic-ai/sdk@1.3.0` (latest on npm on 2026-10-28; if newer exist, pin those, with no `^`). Record both in progress.md.
-2. [ ] Re-check every item marked "verify at build" against the provider pages. Where one differs, follow the page and list it in the progress.md log.
-3. [ ] `providers.ts`, the `settings.ts` additions, and `gateway/settings.test.ts`.
-4. [ ] `usage.ts` and `catalog.ts` (with the built-in fake entry), then `build-catalog.ts` and its fixture test.
-5. [ ] Run `..\.bun\bin\bun.exe run scripts/build-catalog.ts --commit <current OMP main sha>` once, by hand. Run it twice and compare sha256 of `catalog/models.json`. Write `ATTRIBUTION.md`.
-6. [ ] `keys.ts` with an in-memory `SecretsLike` first, then the file store, then the Windows lock. Run `keys.test.ts` before `secrets.test.ts`.
-7. [ ] `fake.ts`, then `test/fakes/http.ts`.
-8. [ ] `cache.ts`, `openai.ts` and `anthropic.ts`: the pure `build*Request` functions first with golden tests, then the streaming readers against the fake server.
-9. [ ] `gateway.ts`: the `complete` order above, caps, retries, parameter fallback, replay, totals, `cancelRun`, `lastRootRequest`, `resolveCallFormat` (§7.4), `refreshModels`.
-10. [ ] Write the remaining tests. Set `RETRY.sleep` to a recorder in every test that retries, so none waits.
-11. [ ] Run `..\.bun\bin\bun.exe run typecheck` and `..\.bun\bin\bun.exe test test/gateway` from `app/`. Then `Select-String -Path src\gateway\*.ts -Pattern "globalThis.fetch"` must show only the default-fetch wrapper in `gateway.ts`.
-12. [ ] Push nothing and commit nothing; set the progress.md row to `review` with the log line (versions, catalog commit, which `secrets.test.ts` path ran on each OS once CI has run).
+1. [x] From `app/`, pin exact versions: `..\.bun\bin\bun.exe add --exact openai@7.45.1 @anthropic-ai/sdk@1.3.0` (latest on npm on 2026-10-28; if newer exist, pin those, with no `^`). Record both in progress.md. Done 2026-10-31: `openai` 7.46.0 (newer than 7.45.1, S-35) and `@anthropic-ai/sdk` 1.3.0, with `bun add --exact` in a Linux container.
+2. [x] Re-check every item marked "verify at build" against the provider pages. Where one differs, follow the page and list it in the progress.md log. Done: differences in progress.md (D-76, D-77, D-82); hosts the container couldn't reach keep these values (S-37).
+3. [x] `providers.ts`, the `settings.ts` additions, and `gateway/settings.test.ts`. Done.
+4. [x] `usage.ts` and `catalog.ts` (with the built-in fake entry), then `build-catalog.ts` and its fixture test. Done; OMP's file is now compact and is decoded first (D-77).
+5. [x] Run `..\.bun\bin\bun.exe run scripts/build-catalog.ts --commit <current OMP main sha>` once, by hand. Run it twice and compare sha256 of `catalog/models.json`. Write `ATTRIBUTION.md`. Done with `bun` in the container at OMP `c29f7c5`: three runs, sha256 `5457b6e3…`.
+6. [x] `keys.ts` with an in-memory `SecretsLike` first, then the file store, then the Windows lock. Run `keys.test.ts` before `secrets.test.ts`. Done; the Windows lock needed `icacls /reset` first (D-83).
+7. [x] `fake.ts`, then `test/fakes/http.ts`. Done.
+8. [x] `cache.ts`, `openai.ts` and `anthropic.ts`: the pure `build*Request` functions first with golden tests, then the streaming readers against the fake server. Done.
+9. [x] `gateway.ts`: the `complete` order above, caps, retries, parameter fallback, replay, totals, `cancelRun`, `lastRootRequest`, `resolveCallFormat` (§7.4), `refreshModels`. Done.
+10. [x] Write the remaining tests. Set `RETRY.sleep` to a recorder in every test that retries, so none waits. Done.
+11. [x] Run `..\.bun\bin\bun.exe run typecheck` and `..\.bun\bin\bun.exe test test/gateway` from `app/`. Then `Select-String -Path src\gateway\*.ts -Pattern "globalThis.fetch"` must show only the default-fetch wrapper in `gateway.ts`. Done with `bun` in the container; the grep (with `grep`, not `Select-String`) shows only the wrapper.
+12. [x] Push nothing and commit nothing; set the progress.md row to `review` with the log line (versions, catalog commit, which `secrets.test.ts` path ran on each OS once CI has run). Rishi asked this session to commit, push, mark the step done and merge, so the row is `done`; the log has the CI results.
 
 ## Tests
 

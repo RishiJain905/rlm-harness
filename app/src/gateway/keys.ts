@@ -513,10 +513,9 @@ async function restrictToOwner(file: string): Promise<void> {
     return;
   }
   const sid = await currentSid();
-  // /reset first: a file created where the folder has no inheritable entries gets the token's default
-  // DACL (SYSTEM, Administrators, the user) as explicit ACEs, which /inheritance:r leaves in place
-  // (the first Windows CI runs showed it, D-83). /reset turns them into whatever the folder passes down,
-  // and the second call removes that and grants the user alone.
+  // /reset first: on windows-latest the new file carried its folder's entries as explicit ACEs, which
+  // /inheritance:r leaves in place (D-83). /reset makes every entry the folder's, marked inherited, and
+  // the second call removes those and grants the user alone.
   await runQuiet([join(system32(), "icacls.exe"), file, "/reset"]);
   await runQuiet([join(system32(), "icacls.exe"), file, "/inheritance:r", "/grant:r", `*${sid}:F`]);
 }
