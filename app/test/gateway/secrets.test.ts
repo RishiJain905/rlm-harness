@@ -152,6 +152,8 @@ describe("keys.json", () => {
       const user = Bun.spawnSync([join(system32, "whoami.exe")]).stdout.toString().trim().toLowerCase();
       // Relative path, so the first line starts with exactly "keys.json ".
       const out = Bun.spawnSync([join(system32, "icacls.exe"), "keys.json"], { cwd: home }).stdout.toString();
+      // For a failure: what the folder passes down, next to what keys.json ended up with.
+      console.log(`icacls home:\n${Bun.spawnSync([join(system32, "icacls.exe"), "."], { cwd: home }).stdout.toString()}icacls keys.json:\n${out}`);
       const lines = out.split(/\r?\n/);
       const block = lines.slice(0, lines.findIndex((l) => l.trim() === ""));
       expect(block[0]!.startsWith("keys.json ")).toBe(true);

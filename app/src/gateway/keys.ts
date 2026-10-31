@@ -331,8 +331,7 @@ export class KeyStore {
     mkdirSync(this.home, { recursive: true });
     const path = keysPath(this.home);
     const tmp = tempName(path);
-    // One handle from create to close: reopening with a truncating flag can give the file a fresh,
-    // inherited ACL on Windows, which undoes the lock (the first Windows CI run showed three ACEs).
+    // One handle from create to close, so nothing reopens the file after it is locked.
     const fd = openSync(tmp, "wx", 0o600);
     let open = true;
     try {
@@ -514,6 +513,11 @@ async function restrictToOwner(file: string): Promise<void> {
     return;
   }
   const sid = await currentSid();
+  // /reset first: a file created where the folder has no inheritable entries gets the token's default
+  // DACL (SYSTEM, Administrators, the user) as explicit ACEs, which /inheritance:r leaves in place
+  // (the first Windows CI runs showed it, D-83). /reset turns them into whatever the folder passes down,
+  // and the second call removes that and grants the user alone.
+  await runQuiet([join(system32(), "icacls.exe"), file, "/reset"]);
   await runQuiet([join(system32(), "icacls.exe"), file, "/inheritance:r", "/grant:r", `*${sid}:F`]);
 }
 
