@@ -1,6 +1,6 @@
 # v0 decisions
 
-> Updated 2026-10-30, when step 1 froze the spec; D-52 to D-58 were added while building step 2, and D-59 to D-61 while building step 3 (2026-10-31). One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague; Rishi reviewed them at step 1 and kept every one (S-34). Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. The decisions that were open are numbered as in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md).
+> Updated 2026-10-30, when step 1 froze the spec; D-52 to D-58 were added while building step 2, D-59 to D-61 while building step 3 (2026-10-31), and D-62 to D-72 while building step 4 (2026-10-31). One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague; Rishi reviewed them at step 1 and kept every one (S-34). Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. The decisions that were open are numbered as in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md).
 
 ## Settled decisions
 
@@ -116,6 +116,60 @@ Added on 2026-10-31 while building step 3:
 - **D-59** `contract.py` keeps every string literal and number of training's exactly, but its comments that named code left out (`WIRE_OPS`, `limits(family)`, `MAX_REQUEST_BYTES`) are trimmed to the part that still applies, so they don't point at functions that don't exist here. `test_against_training_source` also checks the texts the hash doesn't cover: the pacing lines, `cell_messages`, `oversize_message` and the copied constants.
 - **D-60** `code_from_reply` and `assistant_message` raise `ValueError("unknown call format …")` for a format other than `fenced` or `native`, as `tools_for` does, so a typo fails loudly instead of quietly running as fenced.
 - **D-61** Profile loading, where the spec is silent. A folder in `<home>/profiles/` that has no `profile.toml`, has an unsafe name, fails to parse, or can't be read is skipped by `list_profiles` with a warning; `load_profile` raises `UnknownProfile` for the first two and `ProfileError` for the others. Read errors (`OSError`) become `ProfileError`, so a broken user profile never breaks `engine.info`. `guidance` may name a file in a subfolder, but never an absolute path, a drive or `..`. Temperatures may be integers; `cpus` must be above 0. A warning goes to stderr as `rlm_engine WARNING rlm_engine.profiles: …`, once per distinct message per process.
+
+Added on 2026-10-31 while building step 4:
+
+- **D-62** Git's environment config (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`) is dropped as a whole at both hops: `stripKeys` in `app/src/engine.ts` and `worker_env` in `worker/manager.py`. D-29's regex matched only the `KEY_<n>` names, git refuses to run with a partial set (`missing config key GIT_CONFIG_KEY_0`), and the values, which can hold credentials such as an `http.extraHeader`, were passing through.
+- **D-63** The quiet git calls (`tools._git`, `workspace._git`) also set `GIT_NO_LAZY_FETCH=1`, so a partial clone can't fetch missing blobs from its remote inside `diff()` without an approval.
+- **D-64** `snapshot`, `workspace.diff` and `tools.diff` copy the repository's index with `shutil.copy2`, which keeps its mtime. Git's racy-entry check compares entry mtimes with the index file's mtime. With a fresh mtime on the copy, a same-size edit made in the same second as the staged stat looked clean on Windows, where git compares whole seconds; the first Windows CI run caught it.
+- **D-65** Hooks, where the spec is silent:
+  - `os.mkdir` of a path that already exists never asks. Training's `write_file` calls `os.makedirs(..., exist_ok=True)`, which raised a prompt for the existing folder.
+  - A path given relative to a `dir_fd` (as in `shutil.rmtree`) is resolved through `/proc/self/fd` (Linux) or `F_GETPATH` (macOS).
+  - A rename asks unless both paths are under scratch, and its scratch side doesn't count for `inside_workspace`.
+  - `inside_workspace` compares `normcase(realpath(...))`. On macOS a differently cased spelling therefore counts as outside: it asks more, never less.
+  - `os.startfile/2` is not watched, because CPython raises it right after `os.startfile`.
+- **D-66** Prompt dedup and denials:
+  - The `_winapi.CreateProcess` that follows an approved `Popen` on a thread is skipped whatever its arguments, because CPython 3.12.10 on Windows sends them garbled (`'\x03'`).
+  - `os.posix_spawn` is skipped only when its argv matches, because `Popen` usually uses `fork_exec`, which would leave the flag set.
+  - A denial's `PermissionError` is re-raised from the hook with its traceback reset, so the cell's six lines show its own `<repl>` line rather than the hook's insides.
+  - Audit events inside the worker's own request plumbing (`hooks.ignored()`) are ignored, so a finalizer the garbage collector runs there can't deadlock on the request locks.
+- **D-67** Worker, where the spec is silent:
+  - After a cell, fds 0, 1 and 2 are pointed back at the null device even when the cell closed them. `os.open` hands the closed number back, which had broken the next cell's capture.
+  - A malformed `cell` message gets `{"type": "protocol_error"}`, which the manager logs and ignores.
+  - `vars` leaves out the API names, `fetch`, the seven tool names and `_` names, by name.
+  - `cell_seconds_left` uses `init`'s `cell_timeout_s` in both modes.
+- **D-68** Manager, where the spec is silent:
+  - The reply after a handler's `InfraError` is `the request failed for an infrastructure reason; this run will stop`. The run ends there, so the model never acts on it.
+  - A killed worker's request tasks run on after a restart, and their replies are dropped. Cancelling them would make the bridge count a sub-call as cancelled infra. `close()` cancels them.
+  - Messages that arrive after `close()` are dropped.
+  - In repo mode, a `ready.tools` other than `t1` is an immediate `InfraError`.
+  - An EOF with no exit within 10 s gives the crash reason `it closed its output`.
+  - Public extras: `cells`, `start_retries`, `python_version`, `stderr_lines`, `blocked_seconds()`, `infra_error`.
+- **D-69** Bridge, where the spec is silent:
+  - A non-dict request or an unknown op gets `unknown request`, as in training. A known op with bad fields (a non-str `url`, a bad `approve`) gets `malformed request`.
+  - A refused `llm` request's `run.subcall` consumes the next batch id, because `batch` is a Batch on the wire, and has `seconds: 0.0`.
+  - `run.budget` follows every non-empty batch, including one that fails.
+  - Once `infra_error` is set, later sub-calls get training's `sub-call failed for an infrastructure reason; this episode will be discarded`.
+  - `infra_error` is `sub-call failed: <message>`, or `sub-call returned <T>, not str` for a non-str text.
+- **D-70** `fetch`, where the spec is silent:
+  - The 30 s timeout covers the whole call: connect, redirects and body.
+  - The same-host rule compares hostnames, so a port change, or http to https on the same host, is allowed.
+  - A 6th redirect gives `fetch failed: too many redirects (more than 5)`. A redirect to another scheme gives `fetch failed: redirected to a URL that is not http:// or https:// (<url>)`.
+  - A `fetches` record's `chars` is the reply's length, truncation note included, and its `error` is the full reply text.
+  - urllib's proxy variables are honoured.
+  - `tools.fetch` goes through `_logged("url")` and raises `TypeError` for a non-str url. It sends an IPv6 host to `approve` in brackets (`[::1]`), so `permissions` can parse it.
+- **D-71** Permissions, where the spec is silent:
+  - An exception from `approve` is logged `asked: true, allowed: false`.
+  - A denial with `remember_for_run` remembers nothing.
+  - Only `allow is True` counts as an allow.
+  - An unknown kind asks (bypass allows) and is never remembered.
+  - A relative path is never scratch.
+- **D-72** Tools and workspace, where the spec is silent:
+  - `configure`'s `base:` docstring line now says it is a tree sha and that None makes `diff()` raise. `configure` is not model-visible; the seven tools' text is unchanged.
+  - Both diffs copy the repository's index, then stage new blobs into `<scratch>/git-objects` (`SNAPSHOT_OBJECTS`). Every tools git call gets `core.safecrlf=false`.
+  - `snapshot` returns None only in the spec's three cases. It raises `RuntimeError` for a git failure after the repository is found, as `workspace.diff` does outside a work tree; step 6 must catch both.
+  - `find_shell` looks for PowerShell with `which("powershell")`, then `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`, then plain `powershell.exe`.
+  - `remove_tree` also clears read-only file bits, and never follows a symlink or junction.
 
 ## Open decisions
 

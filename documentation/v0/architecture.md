@@ -43,9 +43,9 @@ flowchart LR
 - **One engine process per app.** It is a child of the app, and it holds every run the app starts: one interactive run at a time, or N with `rlmh batch --jobs N`. Its stdout carries only protocol, and its logs go to stderr. When its stdin closes, it cancels every run, kills the workers and exits.
 - **One worker process per run.** It is a child of the engine, started fresh for each run and again after each timeout or crash. It is launched as `python -I -B -X utf8 <engine dir>/rlm_engine/worker/worker.py` (D-01, D-42). It speaks JSON lines on its own stdin and stdout, and puts its diagnostics on stderr, which the engine copies to its own stderr.
 - **Environment.**
-  - The app starts the engine with its own environment, minus key-like variables (names matching `KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH`, any case), plus `RLMH_HOME=<home>`, `PYTHONUTF8=1` and `PYTHONUNBUFFERED=1`. Variables such as `SYSTEMROOT` stay, because Python on Windows needs them.
+  - The app starts the engine with its own environment, minus key-like variables (names matching `KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH`, any case) and git's whole `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (D-62), plus `RLMH_HOME=<home>`, `PYTHONUTF8=1` and `PYTHONUNBUFFERED=1`. Variables such as `SYSTEMROOT` stay, because Python on Windows needs them.
   - The engine learns its home only from `RLMH_HOME` (D-49).
-  - It strips key-like variables again for the worker, and sets `TMPDIR`, `TEMP` and `TMP` to the run's scratch folder (D-29).
+  - It strips key-like variables and git's env config again for the worker, and sets `TMPDIR`, `TEMP` and `TMP` to the run's scratch folder (D-29, D-62).
 
 ## 2. Repo layout
 
@@ -286,6 +286,7 @@ One JSON object per line. The worker keeps private dups of its original stdin an
 | worker → engine | `vars` | `id, vars` (answered from the reader thread, even mid-cell) |
 | worker → engine | `request` | `id, op: "llm"\|"llm_batch"\|"fetch"\|"approve", line`, plus `prompts` (llm ops), `url` (fetch), or `kind, detail, inside_workspace` (approve) |
 | engine → worker | `reply` | `id`, plus `outputs` (llm ops), `text` (fetch) or `allow` (approve); or `error` (raised in the cell as `RuntimeError`, or `PermissionError` for a denied approve) |
+| worker → engine | `protocol_error` | `error`: a `cell` without a string `code`; the manager logs it and ignores it (D-67) |
 
 - **Ids.** Cell ids and request ids are separate counters, and each side keys them by `type`.
 - **`line`** is the line of the innermost `<repl>` frame on the calling thread.
@@ -334,7 +335,7 @@ export class Link {
 export interface EngineCommand { cmd: string[]; cwd: string; env: Record<string, string> }
 export function findEngine(opts: { home: string; env?: Record<string, string | undefined>; sourceDir?: string }): EngineCommand; // throws EngineNotFound
 export interface EngineProcess { link: Link; exited: Promise<number>; stderrTail(n?: number): string[]; kill(): void }
-export function startEngine(cmd: EngineCommand, opts?: { onStderr?: (line: string) => void }): EngineProcess; // env merged over process.env, key-like names stripped again (D-53)
+export function startEngine(cmd: EngineCommand, opts?: { onStderr?: (line: string) => void }): EngineProcess; // env merged over process.env, key-like names and git's env config stripped again (D-53, D-62)
 export function splitCommand(line: string): string[];      // quotes honoured, backslashes literal
 export function fetchInfo(link: Link): Promise<EngineInfo>; // engine.info; throws ProtocolMismatch (D-36)
 export class EngineNotFound extends Error {}
@@ -568,6 +569,14 @@ def diff(repo: Path, base_tree: str, scratch: Path) -> str  # the same unified d
 def fingerprint(repo: Path) -> str       # training editbox.fingerprint
 def remove_tree(path: Path) -> None      # training editbox.remove_tree: clears read-only bits (git objects on Windows)
 ```
+
+Built at step 4 (2026-10-31). What step 6 can rely on, beyond the signatures:
+
+- **`Worker`** also has `cells`, `start_retries`, `python_version`, `stderr_lines` (the last 50 worker stderr lines), `blocked_seconds()` and `infra_error` (D-68). `run_cell` raises only `InfraError` and `CancelledError`. A handler failure is raised as the handler's own `InfraError` (kind and message unchanged), the wall cap and start failures as `InfraError("worker", …)`, any other handler exception as `InfraError("internal", …)`.
+- **`Bridge.handle`** sets `infra_error` and `infra_kind` before it raises, so the loop can read them after `run_cell` raises. `fetches` holds one `{url, status, chars, error, seconds}` per fetch.
+- **`workspace.snapshot`** returns None only outside a git work tree or without git, and raises `RuntimeError` for a later git failure; `workspace.diff` raises `RuntimeError` too (D-72). The loop turns either into its own error. Both need the same `scratch`, because the base tree lives in `<scratch>/git-objects` (`SNAPSHOT_OBJECTS`).
+- **Worker-side modules** (`worker.py`, `hooks.py`, `tools.py`) import only each other and the standard library, never `rlm_engine`: the worker runs with `-I` from its own folder. `hooks.install(*, approve, workspace, scratch, tools)`, `hooks.exempt_thread()`, `hooks.ignored()`; `tools.quiet()` is what the hook reads (D-13, D-66).
+- **The hand check** (step 4's "Done when" 3) is `engine/tests/test_permissions.py`'s `__main__`: `--mode`, `--repo`, repeated `--cell`.
 
 ### 7.8 Step 6 → 7, 8, 9: runs, run log, commands
 

@@ -138,20 +138,20 @@ Copy `repl_tools.py`: seven tools, names, signatures, docstrings, `TOOLS_VERSION
 
 ## Tasks
 
-1. [ ] Set row 4 to `in progress` in progress.md. Run `uv run --project engine pytest engine/tests -q`; it must pass. Create `engine/rlm_engine/worker/__init__.py` (empty) and `engine/tests/conftest.py` fixtures (git fixture repo, `StubApp`) without touching step 2's.
-2. [ ] `workspace.py` and `test_workspace.py`. Copy the training files in Git Bash, not PowerShell 5.1 (its `>` writes UTF-16): `git -C F:\Personal\RLM\RLM show 0b9af69:rlm_rl/repl_tools.py > engine/rlm_engine/worker/tools.py`.
-3. [ ] `tools.py` with the eight changes above; port `tests/test_repl_tools.py` into `test_tools.py`, replacing `python3 -c` with `sys.executable` and `sh` commands with the per-shell table in the test.
-4. [ ] `hooks.py`, then `worker.py` (copy `repl_worker.py`, delete the dropped parts, add the reader thread, `_request`, `init`). Run it by hand: `python -I -B -X utf8 engine/rlm_engine/worker/worker.py`, paste `{"type":"init",…}` then `{"type":"cell","id":1,"code":"print(1)"}`.
-5. [ ] `manager.py` and `test_worker.py`. Get the POSIX cases green first, then the Windows list below.
-6. [ ] `permissions.py`, `bridge.py`, their tests, and the hand-check driver (`__main__` of `test_permissions.py`, see Done when).
-7. [ ] **Windows pass.** Confirm each on Rishi's PC, as a test in `test_worker` or `test_permissions` so CI repeats it:
+1. [x] Set row 4 to `in progress` in progress.md. Run `uv run --project engine pytest engine/tests -q`; it must pass. Create `engine/rlm_engine/worker/__init__.py` (empty) and `engine/tests/conftest.py` fixtures (git fixture repo, `StubApp`) without touching step 2's.
+2. [x] *(In the cloud container the training files came from a blobless clone of the public RLM repo, outside this repo.)* `workspace.py` and `test_workspace.py`. Copy the training files in Git Bash, not PowerShell 5.1 (its `>` writes UTF-16): `git -C F:\Personal\RLM\RLM show 0b9af69:rlm_rl/repl_tools.py > engine/rlm_engine/worker/tools.py`.
+3. [x] `tools.py` with the eight changes above; port `tests/test_repl_tools.py` into `test_tools.py`, replacing `python3 -c` with `sys.executable` and `sh` commands with the per-shell table in the test.
+4. [x] `hooks.py`, then `worker.py` (copy `repl_worker.py`, delete the dropped parts, add the reader thread, `_request`, `init`). Run it by hand: `python -I -B -X utf8 engine/rlm_engine/worker/worker.py`, paste `{"type":"init",…}` then `{"type":"cell","id":1,"code":"print(1)"}`.
+5. [x] `manager.py` and `test_worker.py`. Get the POSIX cases green first, then the Windows list below.
+6. [x] `permissions.py`, `bridge.py`, their tests, and the hand-check driver (`__main__` of `test_permissions.py`, see Done when).
+7. [x] *(Confirmed by the tests in CI on windows-latest, not on the PC. Neither listed fallback was needed: no `SetStdHandle`, and `bash.exe -c` found the MSYS tools. Windows needed D-64 (the index copy keeps its mtime) and D-66 (CreateProcess sends garbled audit arguments). Background children of a Git Bash command survive `taskkill /T`, so a timed-out `shell()` returns about 5 s late there.)* **Windows pass.** Confirm each on Rishi's PC, as a test in `test_worker` or `test_permissions` so CI repeats it:
    - a child process's output reaches the cell (`subprocess.run([sys.executable, "-c", "print('c')"])` shows `c`). If the CRT `dup2` does not reach the Win32 std handles, call `ctypes.windll.kernel32.SetStdHandle` for stdout and stderr in `_FdCapture` after each `dup2`.
    - `asyncio.run(asyncio.sleep(0))` raises no approval, and one `subprocess.run` is one prompt.
    - the timeout kills a grandchild process.
    - a path under an 8.3 or differently cased folder still counts as inside the workspace.
    - Git Bash `shell("ls")` and `shell("echo a | tr a b")` work from `bash.exe -c`. If PATH lacks the MSYS tools, switch the argv to `[bash, "-l", "-c"]` with `CHERE_INVOKING=1` in the shell's env.
    - `open(p, "w").write("é")` in a cell writes UTF-8.
-8. [ ] Run all five test files plus the older ones. Write the progress.md row and log line (Hand-off). Do not commit or push without Rishi's say-so.
+8. [x] *(Committed and pushed with Rishi's OK.)* Run all five test files plus the older ones. Write the progress.md row and log line (Hand-off). Do not commit or push without Rishi's say-so.
 
 ## Tests
 
@@ -187,9 +187,9 @@ All offline. Real workers are spawned with `sys.executable`; timeouts use `cell_
 
 ## Done when
 
-1. `uv run --project engine pytest engine/tests -q` passes on Rishi's Windows PC, and after Rishi allows a push, in the macOS, Windows and Ubuntu CI jobs. `test_worker`, `test_tools` and `test_permissions` are the ones that must be green on all three.
-2. In Git Bash, `grep -rnE "^(from|import) (rlm_rl|anthropic|openai|requests)" engine/rlm_engine` and `grep -n "from __future__" engine/rlm_engine/worker/worker.py engine/rlm_engine/worker/tools.py` both print nothing.
-3. **By hand on the PC**, before the app exists. `engine/tests/test_permissions.py` has a `__main__` driver that builds a real `Worker`, `Bridge` and `Permissions` with a `PrintApp` (an `AppPort` that prints each `approval.request` and reads `y`, `a` (for the run) or `n` from the keyboard), then runs each `--cell`, printing `error`, `stdout` and the permission log. In one terminal run `python -m http.server 8123`. In another, from `rlm-harness`:
+1. *(CI part done: green on all three OSes. The Windows 11 PC run was not done.)* `uv run --project engine pytest engine/tests -q` passes on Rishi's Windows PC, and after Rishi allows a push, in the macOS, Windows and Ubuntu CI jobs. `test_worker`, `test_tools` and `test_permissions` are the ones that must be green on all three.
+2. *(Done: both print nothing.)* In Git Bash, `grep -rnE "^(from|import) (rlm_rl|anthropic|openai|requests)" engine/rlm_engine` and `grep -n "from __future__" engine/rlm_engine/worker/worker.py engine/rlm_engine/worker/tools.py` both print nothing.
+3. *(Run in the Linux cloud container instead, with answers piped in (`n` to all, then `y` to all), against a scratch git repo and `http.server` on 127.0.0.1:8123, using `ls` for `dir` and a temp path for the outside write. All six runs matched the table below. Not run on the PC.)* **By hand on the PC**, before the app exists. `engine/tests/test_permissions.py` has a `__main__` driver that builds a real `Worker`, `Bridge` and `Permissions` with a `PrintApp` (an `AppPort` that prints each `approval.request` and reads `y`, `a` (for the run) or `n` from the keyboard), then runs each `--cell`, printing `error`, `stdout` and the permission log. In one terminal run `python -m http.server 8123`. In another, from `rlm-harness`:
 
 ```
 uv run --project engine python engine/tests/test_permissions.py --mode default --repo . --cell "open(r'C:\Users\Public\rlmh-x.txt','w').write('x')" --cell "print(shell('dir'))" --cell "print(fetch('http://127.0.0.1:8123/')[:60])" --cell "print(write_file('rlmh-handcheck.txt','x'))"
