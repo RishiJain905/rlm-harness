@@ -3,7 +3,7 @@
 // no key-like variables, and `rlmh(...)`, which runs `process.execPath src/main.ts …` and collects
 // its exit code and output. The engine is the source checkout's (`uv run --project engine …`).
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -23,7 +23,8 @@ export interface Temp {
 }
 
 export function temp(prefix = "rlmh-cli-"): Temp {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  // the real path: on macOS tmpdir() is under /var, a symlink to /private/var, and a child's cwd comes back resolved
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   const home = join(dir, "home");
   return {
     dir,
