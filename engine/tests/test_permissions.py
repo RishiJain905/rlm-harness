@@ -631,8 +631,7 @@ def test_end_to_end_per_mode(tmp_path: Path, git_repo: Path, mode: str, allow: b
                 asked = [(a["kind"], a["detail"], a["inside_workspace"]) for a in r.app.approvals[before:]]
                 assert asked == expected[mode], name
                 if expected[mode] and not allow:
-                    assert result.error and result.error.splitlines()[-1].endswith(
-                        f"{DENIED}: {expected[mode][0][1]!r}") or DENIED in result.error, (name, result.error)
+                    assert DENIED in (result.error or ""), (name, result.error)
                 else:
                     assert result.error is None, (name, result.error)
             # what the denials stopped did not happen, and what was allowed did
@@ -710,7 +709,11 @@ class _Pages(http.server.BaseHTTPRequestHandler):
 
 
 @pytest.mark.parametrize("allow", [False, True], ids=["deny", "allow"])
-def test_fetch_asks_once_per_host(tmp_path: Path, allow: bool) -> None:
+def test_fetch_asks_once_per_host(tmp_path: Path, allow: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in list(os.environ):
+        if name.lower().endswith("_proxy"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("NO_PROXY", "*")
     _Pages.hits = []
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Pages)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -748,7 +751,7 @@ def _alternate_spellings(folder: Path) -> list[Path]:
         if ctypes.windll.kernel32.GetShortPathNameW(str(folder), buf, 1024) and buf.value.lower() != str(folder).lower():
             found.append(Path(buf.value))
     swapped = Path(str(folder)[:-len(folder.name)] + folder.name.swapcase())
-    if swapped != folder and swapped.exists():  # a case-insensitive file system (Windows, macOS by default)
+    if WINDOWS and swapped.exists():  # normcase folds case only on Windows; on macOS a case variant asks as outside
         found.append(swapped)
     return found
 

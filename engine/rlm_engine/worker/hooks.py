@@ -18,12 +18,13 @@ asyncio makes one); and anything a handler itself triggers, or that happens on a
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
 import subprocess
 import sys
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 _SOCKETPAIR_DEPTH = 3  # caller frames searched for socket.py's socketpair (or 3.12's _fallback_socketpair)
@@ -34,6 +35,18 @@ _local = threading.local()  # busy: a handler runs (or an exempt thread); after_
 def exempt_thread() -> None:
     """Never ask on the calling thread (the worker's reader and fd pump), for good."""
     _local.busy = True
+
+
+@contextlib.contextmanager
+def ignored() -> Iterator[None]:
+    """Ignore audit events on this thread inside the block: the worker's own request plumbing, so a finalizer that
+    the garbage collector runs there can't re-enter a request while its locks are held."""
+    previous = getattr(_local, "busy", False)
+    _local.busy = True
+    try:
+        yield
+    finally:
+        _local.busy = previous
 
 
 def install(*, approve: Callable[[str, str, bool], None], workspace: str, scratch: str, tools: Any) -> None:
@@ -49,7 +62,7 @@ def install(*, approve: Callable[[str, str, bool], None], workspace: str, scratc
         "os.exec": guard.shell_at(1),
         "os.spawn": guard.shell_at(2),
         "os.posix_spawn": guard.after_popen_at(1),
-        "_winapi.CreateProcess": guard.after_popen_at(1),
+        "_winapi.CreateProcess": guard.after_popen_at(1, any_detail=True),
         "os.startfile": guard.on_startfile,
         "socket.connect": guard.on_connect,
     }
@@ -199,14 +212,17 @@ class _Guard:
         self._shell(detail)
         _local.after_popen = detail  # only once approved: the spawn that follows is the same program
 
-    def after_popen_at(self, index: int) -> Callable[[tuple], None]:
-        """os.posix_spawn and _winapi.CreateProcess: skip the one that follows an approved Popen of the same argv."""
+    def after_popen_at(self, index: int, any_detail: bool = False) -> Callable[[tuple], None]:
+        """os.posix_spawn and _winapi.CreateProcess: skip the one that follows an approved Popen on this thread.
+        posix_spawn must show the same argv (Popen may have used fork_exec instead, leaving the flag unused);
+        CreateProcess always follows Popen on Windows, and CPython 3.12 sends it garbled arguments, so any one counts."""
 
         def handler(args: tuple) -> None:
             args = tuple(args)
             value = args[index] if len(args) > index and args[index] is not None else (args[0] if args else "")
             detail = _argv_text(value)
-            if getattr(_local, "after_popen", None) == detail:
+            after = getattr(_local, "after_popen", None)
+            if after is not None and (any_detail or after == detail):
                 _local.after_popen = None
                 return
             self._shell(detail)

@@ -534,7 +534,7 @@ class Worker:
             pass
 
     def _on_message(self, gen: int, message: dict | None) -> None:
-        if gen != self._gen:
+        if gen != self._gen or self._closed:  # an earlier process, or a run that is over
             return
         if message is None:
             for future in self._vars_waiters.values():

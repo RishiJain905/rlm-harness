@@ -447,7 +447,7 @@ def diff() -> str:
                                     cwd=root).splitlines()[:2]
             real, index = os.path.join(git_dir, "index"), os.path.join(tmp, "index")
             if os.path.exists(real):
-                shutil.copyfile(real, index)
+                shutil.copy2(real, index)  # keeps the index's mtime for git's racy-entry check (D-64)
             store = os.path.join(scratch or tmp, SNAPSHOT_OBJECTS)
             os.makedirs(store, exist_ok=True)
             env = {k: v for k, v in os.environ.items() if k not in _GIT_STORE_VARS}

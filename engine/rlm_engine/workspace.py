@@ -108,7 +108,9 @@ def _stage(repo: Path, scratch: Path, git_dir: str, objects: str, index: Path) -
     Returns the git environment that reads that index and store."""
     real = Path(git_dir, "index")
     if real.exists():
-        shutil.copyfile(real, index)
+        # copy2 keeps the index's mtime, which git's racy-entry check needs: with a fresh mtime, a same-size edit
+        # made in the same second as the entry's stat looks clean where git compares seconds (Windows) (D-64)
+        shutil.copy2(real, index)
     store = scratch / SNAPSHOT_OBJECTS
     store.mkdir(parents=True, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if k not in _GIT_STORE_VARS}

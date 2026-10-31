@@ -72,7 +72,7 @@ def _bridge_seconds() -> float:
 
 def _send(message: dict) -> None:
     data = (json.dumps(message) + "\n").encode()
-    with _send_lock:
+    with hooks.ignored(), _send_lock:
         while data:
             data = data[os.write(_link["out"], data):]
 
@@ -97,27 +97,28 @@ def _repl_line():
 def _request(op: str, **fields) -> dict:
     """One request to the engine, from any thread; blocks until its reply. Raises RuntimeError on an error reply."""
     slot = [threading.Event(), None]
-    with _pending_lock:
-        _link["next_id"] += 1
-        request_id = _link["next_id"]
-        _pending[request_id] = slot
-    message = {"type": "request", "id": request_id, "op": op, "line": _repl_line(), **fields}
-    with _waiting_lock:
-        if not _waiting["calls"]:
-            _waiting["since"] = time.monotonic()
-        _waiting["calls"] += 1
-    try:
-        _send(message)
-        slot[0].wait()
-    except OSError:  # the engine is gone; the reader thread is about to end the process
-        slot[1] = {"error": "the engine closed the connection"}
-    finally:
-        with _waiting_lock:
-            _waiting["calls"] -= 1
-            if not _waiting["calls"]:
-                _waiting["total"] += time.monotonic() - _waiting["since"]
+    with hooks.ignored():
         with _pending_lock:
-            _pending.pop(request_id, None)
+            _link["next_id"] += 1
+            request_id = _link["next_id"]
+            _pending[request_id] = slot
+        message = {"type": "request", "id": request_id, "op": op, "line": _repl_line(), **fields}
+        with _waiting_lock:
+            if not _waiting["calls"]:
+                _waiting["since"] = time.monotonic()
+            _waiting["calls"] += 1
+        try:
+            _send(message)
+            slot[0].wait()
+        except OSError:  # the engine is gone; the reader thread is about to end the process
+            slot[1] = {"error": "the engine closed the connection"}
+        finally:
+            with _waiting_lock:
+                _waiting["calls"] -= 1
+                if not _waiting["calls"]:
+                    _waiting["total"] += time.monotonic() - _waiting["since"]
+            with _pending_lock:
+                _pending.pop(request_id, None)
     reply = slot[1]
     if "error" in reply:
         raise RuntimeError(reply["error"])
