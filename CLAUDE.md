@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `rlmh` is a model-agnostic harness for Recursive Language Models: the model never reads a long input directly; it writes Python against it in a REPL, hands pieces to sub-calls (`llm`, `llm_batch`), and calls `submit`. Any provider can be the root or sub-call model, including the RL-trained Qwen LoRA from the training repo ([RishiJain905/RLM](https://github.com/RishiJain905/RLM), local at `F:\Personal\RLM\RLM`).
 
-**Status: building v0.** Step 2 is done (2026-10-30): `app/` and `engine/` exist, the link works both ways, `rlmh info` and `--version` work, and CI builds and tests `rlmh` on three OSes. Steps 3 (contract) and 5 (gateway) are next and can run in parallel. The v0 spec was frozen at step 1, and `documentation/` holds the design and a v0 build kit; code lands in ten steps. Native on macOS, Windows and Linux, with no Docker and no WSL. Rishi's machine is Windows 11, the riskiest OS for this design.
+**Status: building v0.** Steps 1 to 3 are done. Step 2 (2026-10-30): `app/` and `engine/` exist, the link works both ways, `rlmh info` and `--version` work, and CI builds and tests `rlmh` on three OSes. Step 3 (2026-10-31): `contract.py` (prompt v4, hashing to `TRAINING_HASH`), `callformat.py` and `profiles.py` with the `training-v4` and `default` built-ins; `engine.info` reports them. Steps 4 (worker) and 5 (gateway) are next and can run in parallel. The v0 spec was frozen at step 1, and `documentation/` holds the design and a v0 build kit; code lands in ten steps. Native on macOS, Windows and Linux, with no Docker and no WSL. Rishi's machine is Windows 11, the riskiest OS for this design.
 
 ## Working on a v0 step
 
@@ -25,8 +25,9 @@ The build kit in `documentation/v0/` is written so one thread can build one step
 - **Read order:** `documentation/v0/README.md`, then `v0/architecture.md` (pins every shared path, message and signature), then `v0/decisions.md`, then your spec in `v0/specs/` and the parent-doc sections it lists under "Read first".
 - **Which doc wins:** spec, then `v0/architecture.md`, then `documentation/legacy/v0-design.md` for gaps. If `v0/architecture.md` contradicts a parent doc (`documentation/legacy/architecture.md`, `v0-design.md`, `v0-build-plan.md`), the parent wins and `v0/architecture.md` gets fixed.
 - **`v0/progress.md`:** a step starts only when every step it depends on is `done` (or `review` if Rishi says so). Re-read the file just before editing it, change only your own row, and add a log line.
-- **New calls** go into `decisions.md` as the next D-number (D-58 is the latest). Changing a shared interface (a §7 signature, a wire message, a path) means updating `v0/architecture.md` too and saying so in the log.
+- **New calls** go into `decisions.md` as the next D-number (D-61 is the latest). Changing a shared interface (a §7 signature, a wire message, a path) means updating `v0/architecture.md` too and saying so in the log.
 - **Decisions:** step 1 settled every open decision (S-22 to S-34 in `decisions.md`). Three went the alternative way: 1a MIT, 4b `accept-edits` as the default mode, and 9a two API models with slot b forced to fenced. Step 9 still asks which two API models before it estimates.
+- **Training sources.** Copied code comes from the RLM repo at `0b9af69`. On Rishi's PC: `git -C F:\Personal\RLM\RLM show 0b9af69:<path>`. In a cloud container the repo is public: clone it outside this repo with `git clone --filter=blob:none --no-checkout https://github.com/RishiJain905/rlm <dir>`, then `git -C <dir> show 0b9af69:<path>`. Never write into it. Produce expected test strings by running training's own function from a scratch copy, never by typing them.
 - **"OMP" in these docs** means the oh-my-pi repo, the MIT source of the model catalog and some ideas. It is not a reason to run `omp`.
 
 ## Architecture
@@ -60,6 +61,7 @@ These work since step 2. On Rishi's PC, Bun 1.4.4 is installed in-repo at `.bun/
 | Verify gate | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify.ps1`, or `bash scripts/verify.sh` |
 | Engine tests | `uv run --project engine pytest engine/tests -q` |
 | One engine test | `uv run --project engine pytest engine/tests/test_contract.py::test_hash_matches_training -q` |
+| Contract against training | set `RLM_TRAINING_REPO` to an RLM checkout, then `uv run --project engine pytest engine/tests/test_contract.py -q` (`test_against_training_source` is skipped without it) |
 | App typecheck and tests (in `app/`) | `bun run typecheck`, `bun test` |
 | One app test file or test (in `app/`) | `bun test test/gateway`, `bun test -t "<name>"` |
 | App from source (in `app/`) | `bun run src/main.ts info`, plus `--version`, `run …`, `batch …` |

@@ -13,6 +13,8 @@ import { APP_VERSION } from "../src/version.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 const REAL = 120_000;
+/** S-14: the engine's copy of prompt v4 and its `training-v4` profile both hash to this. */
+const TRAINING_HASH = "a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6";
 
 let home: string;
 beforeAll(() => {
@@ -140,8 +142,14 @@ test(
     expect(info.version).toBe(APP_VERSION);
     expect(info.protocol).toBe(1);
     expect(info.python).toMatch(/^3\.12\./);
-    expect(info.contract).toBeNull();
-    expect(info.profiles).toEqual([]);
+    expect(info.contract).toBe("v4");
+    expect(info.contract_hash).toBe(TRAINING_HASH);
+    expect(info.training_hash).toBe(TRAINING_HASH);
+    expect(info.profiles.map((p) => [p.name, p.source])).toEqual([
+      ["default", "builtin"],
+      ["training-v4", "builtin"],
+    ]);
+    expect(info.profiles[1]?.prompt_hash).toBe(TRAINING_HASH);
     engine.kill();
     expect(await within(engine.exited, 10_000)).toBe(0);
   },

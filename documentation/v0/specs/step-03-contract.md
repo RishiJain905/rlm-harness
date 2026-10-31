@@ -133,15 +133,15 @@ Described under Tests.
 
 ## Tasks
 
-1. [ ] Set row 3 in progress.md to `in progress`. Check step 2 is `done` and `uv run --project engine pytest engine/tests` passes. Grep step 2's tests (`app/test/engine.test.ts`, `engine/tests/test_protocol.py`) for assertions that `contract` is null or `profiles` is `[]`, and change them to the new values.
-2. [ ] Save the training sources outside the repo, in a scratch folder: `git -C F:\Personal\RLM\RLM cat-file blob 0b9af69:rlm_rl/bridge.py > <scratch>\bridge_ref.py`, the same for `env.py`. Run this in Git Bash: Windows PowerShell 5.1's `>` writes UTF-16 and breaks the file. Never write into `F:\Personal\RLM\RLM`.
-3. [ ] Write `contract.py` from the copy map. Check at once: `uv run --project engine python -c "from rlm_engine import contract as c; print(c.prompt_hash(c.PROMPTS_V4) == c.TRAINING_HASH)"` prints `True`. A CRLF source file is harmless (Python reads string literals with `\n`); a changed character is not, and the hash catches it.
-4. [ ] Write `fixtures/extract_cases.json` and `test_contract.py`. Produce each expected string by running the training function from the scratch copy (import it with `importlib.util.spec_from_file_location`, registering it in `sys.modules` first or `@dataclass` fails), then paste the literal into the test. Do not type expected strings by hand.
-5. [ ] Write `callformat.py` and `test_callformat.py`.
-6. [ ] Write `profiles.py`, the two `profile.toml` files, `guidance.md`, `test_profiles.py`.
-7. [ ] Edit `service.py` for `engine.info`. Run `uv run --project engine python -c "import json, pathlib; from rlm_engine import service; print(json.dumps(service.contract_info(pathlib.Path('tmp-home')), indent=1))"`; it shows two profiles and equal hashes.
-8. [ ] Run `uv run --project engine pytest engine/tests -q`, then again with `RLM_TRAINING_REPO` set (PowerShell: `$env:RLM_TRAINING_REPO = 'F:\Personal\RLM\RLM'`), and `uv run --project engine python -I -c "import rlm_engine.contract, rlm_engine.callformat, rlm_engine.profiles"` (no third-party import).
-9. [ ] Update progress.md (see Hand-off). Do not commit.
+1. [x] Set row 3 in progress.md to `in progress`. Check step 2 is `done` and `uv run --project engine pytest engine/tests` passes. Grep step 2's tests (`app/test/engine.test.ts`, `engine/tests/test_protocol.py`) for assertions that `contract` is null or `profiles` is `[]`, and change them to the new values.
+2. [x] Save the training sources outside the repo, in a scratch folder: `git -C F:\Personal\RLM\RLM cat-file blob 0b9af69:rlm_rl/bridge.py > <scratch>\bridge_ref.py`, the same for `env.py`. Run this in Git Bash: Windows PowerShell 5.1's `>` writes UTF-16 and breaks the file. Never write into `F:\Personal\RLM\RLM`.
+3. [x] Write `contract.py` from the copy map. Check at once: `uv run --project engine python -c "from rlm_engine import contract as c; print(c.prompt_hash(c.PROMPTS_V4) == c.TRAINING_HASH)"` prints `True`. A CRLF source file is harmless (Python reads string literals with `\n`); a changed character is not, and the hash catches it.
+4. [x] Write `fixtures/extract_cases.json` and `test_contract.py`. Produce each expected string by running the training function from the scratch copy (import it with `importlib.util.spec_from_file_location`, registering it in `sys.modules` first or `@dataclass` fails), then paste the literal into the test. Do not type expected strings by hand.
+5. [x] Write `callformat.py` and `test_callformat.py`.
+6. [x] Write `profiles.py`, the two `profile.toml` files, `guidance.md`, `test_profiles.py`.
+7. [x] Edit `service.py` for `engine.info`. Run `uv run --project engine python -c "import json, pathlib; from rlm_engine import service; print(json.dumps(service.contract_info(pathlib.Path('tmp-home')), indent=1))"`; it shows two profiles and equal hashes.
+8. [x] Run `uv run --project engine pytest engine/tests -q`, then again with `RLM_TRAINING_REPO` set (PowerShell: `$env:RLM_TRAINING_REPO = 'F:\Personal\RLM\RLM'`), and `uv run --project engine python -I -c "import rlm_engine.contract, rlm_engine.callformat, rlm_engine.profiles"` (no third-party import).
+9. [x] Update progress.md (see Hand-off). Do not commit.
 
 ## Tests
 
@@ -217,13 +217,13 @@ All use `tmp_path` as `home`.
 
 ## Done when
 
-- [ ] `uv run --project engine pytest engine/tests/test_contract.py -q` passes, including `test_hash_matches_training` and `test_extract_code_matches_training`.
-- [ ] With `RLM_TRAINING_REPO=F:\Personal\RLM\RLM`, `test_against_training_source` runs and passes on Rishi's PC (it is skipped elsewhere).
-- [ ] `uv run --project engine pytest engine/tests/test_callformat.py -q` passes: fenced, `<function=python>` and native give the same code, and the observation goes back as a tool message after a tool call and as a user message otherwise.
-- [ ] `uv run --project engine pytest engine/tests/test_profiles.py -q` passes: `training-v4` hashes to `TRAINING_HASH`, and `test_default_differs_only_by_guidance` shows the default prompt is training's plus its guidance block and nothing else.
-- [ ] `service.contract_info(...)` (task 7) prints `contract` `v4`, equal `contract_hash` and `training_hash`, and both built-in profiles. `rlmh info` shows the same fields (step 2's command).
+- [x] `uv run --project engine pytest engine/tests/test_contract.py -q` passes, including `test_hash_matches_training` and `test_extract_code_matches_training`.
+- [ ] *(Run in the cloud container instead: it passed there against a blobless clone of the public RLM repo; not run on the PC.)* With `RLM_TRAINING_REPO=F:\Personal\RLM\RLM`, `test_against_training_source` runs and passes on Rishi's PC (it is skipped elsewhere).
+- [x] `uv run --project engine pytest engine/tests/test_callformat.py -q` passes: fenced, `<function=python>` and native give the same code, and the observation goes back as a tool message after a tool call and as a user message otherwise.
+- [x] `uv run --project engine pytest engine/tests/test_profiles.py -q` passes: `training-v4` hashes to `TRAINING_HASH`, and `test_default_differs_only_by_guidance` shows the default prompt is training's plus its guidance block and nothing else.
+- [x] `service.contract_info(...)` (task 7) prints `contract` `v4`, equal `contract_hash` and `training_hash`, and both built-in profiles. `rlmh info` shows the same fields (step 2's command).
 - [ ] `uv run --project engine pytest engine/tests -q` passes on Windows 11 on Rishi's PC, and in CI on macOS, Windows and Linux once Rishi pushes.
-- [ ] `git status --short` in `rlm-harness` lists only the Deliverables paths, the step 2 tests edited in task 1 and progress.md; nothing outside `rlm-harness/` changed.
+- [x] *(Plus the docs the hand-off and CLAUDE.md ask for: decisions.md, architecture.md, this spec, CLAUDE.md and the sol-qa skill.)* `git status --short` in `rlm-harness` lists only the Deliverables paths, the step 2 tests edited in task 1 and progress.md; nothing outside `rlm-harness/` changed.
 
 ## Out of scope
 

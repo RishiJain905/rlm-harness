@@ -9,7 +9,7 @@ It is one program, `rlmh`, in three parts:
 
 It runs natively on macOS, Windows and Linux, with no Docker and no WSL. It never makes a call with your key that you didn't ask for.
 
-**Status:** v0 is being built in the open. The skeleton works: `rlmh info` starts the Python engine and talks to it over stdio, and CI builds `rlmh` for macOS, Windows and Linux. Runs, the model gateway and the real interface come in the next steps ([progress](documentation/v0/progress.md)).
+**Status:** v0 is being built in the open. The skeleton works: `rlmh info` starts the Python engine and talks to it over stdio, and CI builds `rlmh` for macOS, Windows and Linux. The engine holds an exact copy of the trained prompt (its hash matches training's), both call formats and the built-in profiles. Runs, the model gateway and the real interface come in the next steps ([progress](documentation/v0/progress.md)).
 
 - [Architecture](documentation/legacy/architecture.md): the three parts, how a run works, why the model delegates, caching, safety and the roadmap.
 - [v0 design](documentation/legacy/v0-design.md): the v0 spec: the link between app and engine, contract, call formats, gateway, worker, permissions, interface and tests.

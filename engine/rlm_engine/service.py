@@ -1,7 +1,7 @@
 """KV cache: none
 
-The engine's methods on the link: `engine.info` now, `run.*` from step 6, and
-`debug.roundtrip` for the link tests when `RLMH_DEBUG=1`.
+The engine's methods on the link: `engine.info` (with the contract and profiles since step 3),
+`run.*` from step 6, and `debug.roundtrip` for the link tests when `RLMH_DEBUG=1`.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import os
 import platform
 from pathlib import Path
 
-from . import PROTOCOL_VERSION, __version__
+from . import PROTOCOL_VERSION, __version__, contract, profiles
 from .appport import AppPort
 from .errors import ModelError
 from .link import INVALID_PARAMS, MODEL_ERROR, Link, RpcError
@@ -31,15 +31,11 @@ class Engine:
         self.home = home if home is not None else _default_home()
 
     def info(self) -> dict:
-        # contract, contract_hash, training_hash and profiles are step 3's.
         return {
             "version": __version__,
             "protocol": PROTOCOL_VERSION,
             "python": platform.python_version(),
-            "contract": None,
-            "contract_hash": None,
-            "training_hash": None,
-            "profiles": [],
+            **contract_info(self.home),
         }
 
     def register(self, link: Link) -> None:
@@ -62,6 +58,19 @@ class Engine:
                 call.cancel()
             raise RpcError(MODEL_ERROR, err.message, err.data()) from None
         return {"texts": [r["text"] for r in results]}
+
+
+def contract_info(home: Path) -> dict:
+    """engine.info's contract fields: the copy's hash beside training's, and every profile with its two hashes."""
+    return {
+        "contract": contract.CONTRACT_VERSION,
+        "contract_hash": contract.prompt_hash(contract.PROMPTS_V4),
+        "training_hash": contract.TRAINING_HASH,
+        "profiles": [
+            {"name": p.name, "source": p.source, "prompt_hash": p.prompt_hash(), "profile_hash": p.profile_hash()}
+            for p in profiles.list_profiles(home)
+        ],
+    }
 
 
 def _ping(i: int) -> dict:

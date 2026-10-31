@@ -169,7 +169,7 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 
 | Method | Params | Result | Errors |
 |---|---|---|---|
-| `engine.info` | `{}` | `{version, protocol, python, contract, contract_hash, training_hash, profiles: [{name, source: "builtin"\|"user", prompt_hash, profile_hash}]}`. `contract*` and `profiles` are `null` and `[]` until step 3 | |
+| `engine.info` | `{}` | `{version, protocol, python, contract, contract_hash, training_hash, profiles: [{name, source: "builtin"\|"user", prompt_hash, profile_hash}]}`. `contract*` and `profiles` were `null` and `[]` in step 2; since step 3 `contract` is `"v4"` and `profiles` lists the built-ins, then user profiles, each sorted by name | |
 | `run.start` | the run.start table below | `{run_id, log_path}`, returned once the worker is ready and before the first root call. `run_id` is `"r_"` plus 12 lowercase hex characters (D-38) | -32011, -32012 |
 | `run.cancel` | `{run_id}` | `{}`. The run finishes with `infra_error = "cancelled"` and `infra_kind = "cancelled"` | -32010 |
 | `run.vars` | `{run_id}` | `{vars: [{name, type, len: int\|null, chars: int}]}`: user-made globals only, with `chars = len(repr(v))` capped at 10⁶ | -32010 |
@@ -517,7 +517,8 @@ def load_profile(name: str, home: Path) -> Profile   # built-ins win over <home>
 
 - **profile.toml keys.** It takes the keys in [../legacy/v0-design.md § Profiles](../legacy/v0-design.md#profiles), plus optional `subcall_thinking` in either mode table and `pace_nudge` in `[repo]`. Each mode table starts from `READ_LIMITS_V4` or `EDIT_LIMITS_V4` and replaces only the keys it lists, so the hash still covers `cpus`, `memory_mb`, `pids` and `grader_timeout_s` (D-09). An unknown key is an error.
 - **training-v4.** `[repo]` has `subcall_thinking = "low"` and `pace_nudge = true`.
-- **`prompt_hash()`** for `training-v4` equals `TRAINING_HASH`.
+- **`prompt_hash()`** for `training-v4` equals `TRAINING_HASH`. It leaves `{shell}` unfilled, so it is the same on every machine. `profile_hash()` covers the LF-normalised `profile.toml`, a NUL byte and the guidance file.
+- **`engine.info`.** `service.contract_info(home)` gives its four contract fields and `Engine.info()` merges them in. A user profile that fails to load is left out with a warning on stderr (D-61).
 
 ### 7.7 Step 4 → 6: worker, bridge, permissions, workspace
 

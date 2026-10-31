@@ -1,6 +1,6 @@
 # v0 decisions
 
-> Updated 2026-10-30, when step 1 froze the spec; D-52 to D-58 were added while building step 2. One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague; Rishi reviewed them at step 1 and kept every one (S-34). Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. The decisions that were open are numbered as in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md).
+> Updated 2026-10-30, when step 1 froze the spec; D-52 to D-58 were added while building step 2, and D-59 to D-61 while building step 3 (2026-10-31). One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague; Rishi reviewed them at step 1 and kept every one (S-34). Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. The decisions that were open are numbered as in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md).
 
 ## Settled decisions
 
@@ -110,6 +110,12 @@ Added on 2026-10-30 while building step 2:
 - **D-56** `react-devtools-core` (8.0.0) is an exact dev dependency of the app, because Ink 8 imports it and `bun build --compile` can't resolve it otherwise. This is the spec's own fallback; it was picked over `--external react-devtools-core` so the build command stays as specified. Ink loads devtools only when `DEV=true`.
 - **D-57** When the engine process exits, `startEngine` waits up to 1 s for its stdout to reach EOF before it closes the link, so an answer written just before exit is not dropped as "link closed".
 - **D-58** On Windows, `findEngine` puts `cmd /c` in front of an `RLMH_ENGINE` whose first word ends in `.cmd` or `.bat`, because such a script can't be spawned directly.
+
+Added on 2026-10-31 while building step 3:
+
+- **D-59** `contract.py` keeps every string literal and number of training's exactly, but its comments that named code left out (`WIRE_OPS`, `limits(family)`, `MAX_REQUEST_BYTES`) are trimmed to the part that still applies, so they don't point at functions that don't exist here. `test_against_training_source` also checks the texts the hash doesn't cover: the pacing lines, `cell_messages`, `oversize_message` and the copied constants.
+- **D-60** `code_from_reply` and `assistant_message` raise `ValueError("unknown call format …")` for a format other than `fenced` or `native`, as `tools_for` does, so a typo fails loudly instead of quietly running as fenced.
+- **D-61** Profile loading, where the spec is silent. A folder in `<home>/profiles/` that has no `profile.toml`, has an unsafe name, fails to parse, or can't be read is skipped by `list_profiles` with a warning; `load_profile` raises `UnknownProfile` for the first two and `ProfileError` for the others. Read errors (`OSError`) become `ProfileError`, so a broken user profile never breaks `engine.info`. `guidance` may name a file in a subfolder, but never an absolute path, a drive or `..`. Temperatures may be integers; `cpus` must be above 0. A warning goes to stderr as `rlm_engine WARNING rlm_engine.profiles: …`, once per distinct message per process.
 
 ## Open decisions
 

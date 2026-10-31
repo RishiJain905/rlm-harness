@@ -1,0 +1,29 @@
+contract = "v4"
+guidance = "guidance.md"
+
+[root]
+temperature = 1.0
+[sub]
+temperature = 0.3
+
+[read]                        # = contract.READ_LIMITS_V4
+max_turns = 20
+max_subcalls = 80
+root_max_tokens = 4096
+output_max_chars = 8000
+cell_timeout_s = 120
+subcall_max_chars = 60000
+subcall_max_tokens = 4096
+subcall_oversize = "error"
+
+[repo]                        # = contract.EDIT_LIMITS_V4
+max_turns = 30
+max_subcalls = 80
+root_max_tokens = 4096
+output_max_chars = 8000
+cell_timeout_s = 300
+subcall_max_chars = 60000
+subcall_max_tokens = 4096
+subcall_thinking = "low"
+subcall_oversize = "error"
+pace_nudge = true             # training's prod-v2 runs and evaluations used the pacing line

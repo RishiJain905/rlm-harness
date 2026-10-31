@@ -19,6 +19,7 @@ from conftest import EngineProc, finish, pipes, run
 from fakeapp import FakeApp, zero_usage
 
 from rlm_engine.appport import LinkAppPort
+from rlm_engine.contract import TRAINING_HASH
 from rlm_engine.errors import ModelError
 from rlm_engine.link import CANCELLED, Link, RpcError, classify
 from rlm_engine.service import Engine
@@ -428,8 +429,10 @@ def test_process_info(tmp_path) -> None:
         engine.send({"jsonrpc": "2.0", "id": 1, "method": "engine.info", "params": {}})
         info = engine.recv()["result"]
         assert set(info) == INFO_KEYS
-        assert (info["version"], info["protocol"], info["contract"], info["profiles"]) == ("0.1.0", 1, None, [])
-        assert info["contract_hash"] is None and info["training_hash"] is None
+        assert (info["version"], info["protocol"], info["contract"]) == ("0.1.0", 1, "v4")
+        assert info["contract_hash"] == info["training_hash"] == TRAINING_HASH
+        assert [(x["name"], x["source"]) for x in info["profiles"]] == [("default", "builtin"), ("training-v4", "builtin")]
+        assert info["profiles"][1]["prompt_hash"] == TRAINING_HASH
         assert info["python"].startswith("3.12.")
         engine.send({"jsonrpc": "2.0", "id": 2, "method": "debug.roundtrip", "params": {"count": 1}})
         assert engine.recv()["error"]["code"] == -32601

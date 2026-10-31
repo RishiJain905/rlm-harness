@@ -1,0 +1,110 @@
+[
+ {
+  "name": "fenced",
+  "text": "Look first.\n```python\nprint(len(context))\n```",
+  "tool_calls": true,
+  "expected": "print(len(context))\n"
+ },
+ {
+  "name": "fenced_py",
+  "text": "```py\nz = 1\n```",
+  "tool_calls": true,
+  "expected": "z = 1\n"
+ },
+ {
+  "name": "fenced_bare",
+  "text": "```\nplain = 1\n```",
+  "tool_calls": true,
+  "expected": "plain = 1\n"
+ },
+ {
+  "name": "fenced_empty",
+  "text": "```python\n```",
+  "tool_calls": true,
+  "expected": ""
+ },
+ {
+  "name": "fenced_first",
+  "text": "```python\nx = 1\n```\n```python\ny = 2\n```",
+  "tool_calls": true,
+  "expected": "x = 1\n"
+ },
+ {
+  "name": "fenced_unclosed",
+  "text": "```python\nprint('a')",
+  "tool_calls": true,
+  "expected": null
+ },
+ {
+  "name": "fenced_python3",
+  "text": "```python3\nx\n```",
+  "tool_calls": true,
+  "expected": null
+ },
+ {
+  "name": "fenced_crlf",
+  "text": "Plan.\n```python\r\nprint(1)\r\n```",
+  "tool_calls": true,
+  "expected": "print(1)\r\n"
+ },
+ {
+  "name": "tool_call",
+  "text": "<tool_call>\n<function=python>\nprint(1)\n</function>\n</tool_call>",
+  "tool_calls": true,
+  "expected": "print(1)\n"
+ },
+ {
+  "name": "tool_call_off",
+  "text": "<tool_call>\n<function=python>\nprint(1)\n</function>\n</tool_call>",
+  "tool_calls": false,
+  "expected": null
+ },
+ {
+  "name": "tool_parameter",
+  "text": "<function=python>\n<parameter=code>\nx = 2\n</parameter>\n</function>",
+  "tool_calls": true,
+  "expected": "x = 2\n"
+ },
+ {
+  "name": "tool_unclosed",
+  "text": "<tool_call>\n<function=python>\nprint(3)\n",
+  "tool_calls": true,
+  "expected": "print(3)\n"
+ },
+ {
+  "name": "tool_other",
+  "text": "<tool_call>\nfunction\n</function>\n</tool_call>",
+  "tool_calls": true,
+  "expected": null
+ },
+ {
+  "name": "tool_blank",
+  "text": "<tool_call>\n<function=python>\n   \n</function>",
+  "tool_calls": true,
+  "expected": null
+ },
+ {
+  "name": "fence_beats_tool",
+  "text": "```python\na = 1\n```\n<function=python>\nb = 2\n",
+  "tool_calls": true,
+  "expected": "a = 1\n"
+ },
+ {
+  "name": "no_code",
+  "text": "I will look at it next.",
+  "tool_calls": true,
+  "expected": null
+ },
+ {
+  "name": "no_code_empty",
+  "text": "",
+  "tool_calls": true,
+  "expected": null
+ },
+ {
+  "name": "no_code_null",
+  "text": null,
+  "tool_calls": true,
+  "expected": null
+ }
+]
