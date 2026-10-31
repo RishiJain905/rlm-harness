@@ -169,11 +169,11 @@ All under `app/test/interface/`, offline, using `createFakeApp`. Assert on `scre
 
 ## Done when
 
-- [ ] From `app/`: `..\.bun\bin\bun.exe test test/interface` passes on Rishi's PC, and `bun test` passes on macOS, Windows and Linux in CI. The `subcalls.test.tsx` fan-out and `approval.test.tsx` keyboard cases are in the run.
+- [x] *(The PC run not done; CI run 41179434734 covers windows-latest.)* From `app/`: `..\.bun\bin\bun.exe test test/interface` passes on Rishi's PC, and `bun test` passes on macOS, Windows and Linux in CI. The `subcalls.test.tsx` fan-out and `approval.test.tsx` keyboard cases are in the run.
 - [x] `providers-nonetwork.test.tsx` passes: saving a key through the screen makes 0 requests.
-- [ ] CI's compiled-binary job (step 2) still builds on all three OSes, and `rlmh --version` still prints.
-- [ ] On Rishi's PC, in Windows Terminal, the demo run (task 11) shows: 20 rows streaming, then collapsing to one line; an approval answered with `y`; Esc cancelling a repeat of the same question while it streams; at 80x24 and 120x30 no flicker, no clipped line and no broken border; `/providers` paste with Ctrl+Shift+V never shows the key; `/context` and `/runs` open. In a Windows PowerShell console window it shows the ASCII fallback with no missing-glyph boxes. Rishi says he is happy with it.
-- [ ] progress.md row 7 is `review` (`done` after Rishi's yes).
+- [x] CI's compiled-binary job (step 2) still builds on all three OSes, and `rlmh --version` still prints.
+- [ ] *(Not done: PC only; see task 11 for the pseudo-terminal run that stood in.)* On Rishi's PC, in Windows Terminal, the demo run (task 11) shows: 20 rows streaming, then collapsing to one line; an approval answered with `y`; Esc cancelling a repeat of the same question while it streams; at 80x24 and 120x30 no flicker, no clipped line and no broken border; `/providers` paste with Ctrl+Shift+V never shows the key; `/context` and `/runs` open. In a Windows PowerShell console window it shows the ASCII fallback with no missing-glyph boxes. Rishi says he is happy with it.
+- [x] progress.md row 7 is `review` (`done` after Rishi's yes). *(Set to `done`: Rishi asked for the step to be marked complete and merged.)*
 
 ## Out of scope
 
