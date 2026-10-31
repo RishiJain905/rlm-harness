@@ -1,6 +1,6 @@
 # v0 decisions
 
-> Updated 2026-10-30, when step 1 froze the spec; D-52 to D-58 were added while building step 2, D-59 to D-61 while building step 3 (2026-10-31), and D-62 to D-72 while building step 4 (2026-10-31). One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague; Rishi reviewed them at step 1 and kept every one (S-34). Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. The decisions that were open are numbered as in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md).
+> Updated 2026-10-30, when step 1 froze the spec; D-52 to D-58 were added while building step 2, D-59 to D-61 while building step 3 (2026-10-31), D-62 to D-72 while building step 4 (2026-10-31), and S-35 to S-39 and D-73 to D-82 while building step 5 (2026-10-31). One line per decision, with its date and reason. S entries were settled with Rishi. D entries are calls made while writing these build docs, where the parent docs were silent or vague; Rishi reviewed them at step 1 and kept every one (S-34). Rishi can overturn any of them; if he does, change the line, add a log line to [progress.md](progress.md), and fix the specs it names. The decisions that were open are numbered as in [../legacy/v0-build-plan.md](../legacy/v0-build-plan.md).
 
 ## Settled decisions
 
@@ -43,6 +43,14 @@ Settled at step 1 (2026-10-30), when the spec was frozen. Three went the alterna
 - **S-32** (2026-10-30) 9a Smoke-run models: two API models, the alternative, with slot b forced to `--call-format fenced` so the LoRA's fenced format still meets a real model. Step 9 asks which two models before it estimates anything (D-41) and adds their ids here. Why: Rishi's pick (no reason given); he also took the recommended fenced slot.
 - **S-33** (2026-10-30) 10a How Python reaches the user: uv fetches Python 3.12 on first run, after asking, the default. Why: accepted default.
 - **S-34** (2026-10-30) D-01 to D-51 all stay as written. Rishi reviewed the calls that change what the model or a user notices (D-01, D-08, D-09, D-11, D-13 to D-16, D-33, D-42, D-44, D-46) and the gap fills, and changed none. Why: accepted as written.
+
+Settled at step 5 (2026-10-31), while building the gateway:
+
+- **S-35** (2026-10-31) `openai` is pinned at 7.46.0, published that day, rather than the spec's 7.45.1, as the spec's "pin the newest" rule says. `@anthropic-ai/sdk` stays 1.3.0, still the newest. Why: Rishi's pick, offered against a same-day release.
+- **S-36** (2026-10-31) OMP now marks every OpenAI chat model `api: "openai-responses"`, so the spec's Chat Completions test would give all of OpenAI `tool_call: false`. Instead, OpenAI chat models get `tool_call = supportsTools !== false`, and ids that work only on the Responses API are left out of the catalog: any id ending `-pro`, or containing `codex`, `deep-research`, `realtime` or `computer-use`, and OMP's virtual aliases (`requestModelId` set and different). Why: Rishi's pick, the recommended one; our Chat Completions client can't call those ids at all.
+- **S-37** (2026-10-31) "Verify at build" facts on hosts this container could not reach (api-docs.deepseek.com, openrouter.ai, ai.google.dev, platform.openai.com, bun.com) keep the spec's 2026-10-28 values and are listed in progress.md as not re-checked. The reachable ones were checked against platform.claude.com, raw GitHub and the installed SDKs' types. Why: Rishi's pick, the recommended one.
+- **S-38** (2026-10-31) The catalog drops OpenRouter's `:batch` ids before the cap of 300, which leaves 289, so x-ai, z-ai and all of qwen fit. Why: Rishi's pick, the recommended one; the literal cap cut x-ai and z-ai out alphabetically.
+- **S-39** (2026-10-31) The catalog drops Gemini ids that don't work through the OpenAI-compatible chat endpoint (`deep-research`, `computer-use`, `live`, `robotics`; 7 ids). Why: Rishi's pick, the recommended one.
 
 ### Calls made in these docs (2026-10-28)
 
@@ -170,6 +178,29 @@ Added on 2026-10-31 while building step 4:
   - `snapshot` returns None only in the spec's three cases. It raises `RuntimeError` for a git failure after the repository is found, as `workspace.diff` does outside a work tree; step 6 must catch both.
   - `find_shell` looks for PowerShell with `which("powershell")`, then `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`, then plain `powershell.exe`.
   - `remove_tree` also clears read-only file bits, and never follows a symlink or junction.
+
+Added on 2026-10-31 while building step 5:
+
+- **D-73** `SECRETS_TIMEOUT_MS` lives in `keys.ts` as `KEY_LIMITS`, not in gateway.ts's `LIMITS` as the spec lists it, because gateway.ts imports keys.ts and the reverse would be a cycle. `LIMITS` holds the other timeouts and sizes.
+- **D-74** Streamed tool-call arguments that are not a JSON object become `{}`. The engine then sees a tool call with no `code` and falls back as D-31 says, and the next request replays `{}` rather than the broken text.
+- **D-75** Replay (D-33) is attached to every later request of the run whose assistant message has the same `content` and tool-call id, not only the next one, and only for replies that carried a tool call. Read literally, "on the next request only" would drop it from the request after that: DeepSeek and Gemini reject a turn that lacks the reasoning of an earlier tool-call turn in the same user turn (in native format the whole run is one user turn), and the prefix would change bytes between requests. `run.finished` still drops the map.
+- **D-76** Both SDKs read environment variables of their own. The gateway passes an explicit `apiKey` and `baseURL` (so the Anthropic SDK never reads `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` or its default credential chain), `organization: null, project: null` to OpenAI (so `OPENAI_ORG_ID` never reaches DeepSeek, OpenRouter or a local server), and `logLevel: "off"` to both (they print stream parse failures otherwise). `ANTHROPIC_CUSTOM_HEADERS` and `OPENAI_CUSTOM_HEADERS` are still merged in by the SDKs and can't be switched off by an option. `@anthropic-ai/sdk` 1.3.0 defaults to `anthropic-version: 2026-10-21`, where `temperature` is a 400 on every model; the spec's pin to `2023-06-01` keeps the temperature table valid, and a test checks the header. The SDK sends the key as `Authorization: Bearer`, which the API accepts.
+- **D-77** Catalog build, verified at build: OMP's `models.json` is now a compact, interned format of about 1.15 MB, not the plain `{provider: {id: entry}}` map. `build-catalog.ts` decodes it with its own port of OMP's `model-catalog-format.ts` (MIT). Entries with a `kind` (image, stt, embedding, judge, rerank, video) are dropped. Prices are rounded to 9 decimals, because OpenRouter's carried float noise (0.7999999999999999). Anthropic's table moved `sonnet-5` to 1024 (prompt-caching page, 2026-10-31).
+- **D-78** Error wording where the spec is silent:
+  - an error event inside a stream, after 7 tries, is kind `server`: `{P} failed with an error inside the stream after 7 tries: {detail}`
+  - a stream that can't be parsed is `other`: `{P} returned a stream that could not be read: {detail}`
+  - an unknown provider is `other`: `Unknown provider "<id>" in <id>/<model>.`
+  - an empty base URL is `other` for `local` too: `No base URL for the local provider. Set providers.local.base_url in /settings.`
+  - `refreshModels` uses the same table, without " after N tries"
+  - a scripted fake error says `fake script error: <kind> at <role> call <n>`; a bad `match` regex is `other`
+  - "after N tries" names the tries actually made
+- **D-79** The batch gate, where the spec is silent:
+  - A provider whose `caching` is `none` (`custom`, `fake`) skips the gate, so its batches never wait the 100 ms.
+  - A group plans once, with its first member's provider and model, and the leader wait's timer is cleared on release.
+  - A member that aborts while waiting counts as ended, so a cancelled batch never holds the group.
+- **D-80** Parameter fallback matches a field name with word boundaries, longest name first, so `reasoning` never matches inside `reasoning_effort`. It applies only to fields the body has, and a fallback is not counted as a try. The streamed text of a failed attempt is reset before any resend.
+- **D-81** Gateway extras, additive to §7.3: `Gateway` takes `env` (for `RLMH_FAKE_SCRIPT`) and has a replaceable `settings` field; `ModelError` takes its `ModelErrorData` and has `kind`; `ProviderDef` has `envFallback`; providers.ts exports `PROVIDER_IDS` and `provider()`; `resolve` returns `ResolvedKey` (`info` for a saved key, `envVar` for an env key, for the auth message); keys.ts exports `KeyReadError`, `KEY_LIMITS` and `KEY_HOOKS`. A private `gateway/stream.ts` holds what the two clients share.
+- **D-82** The llama.cpp preset is `http://localhost:9931/v1`: llama-server's README and source give port 9931 as its default (checked 2026-10-31). The spec's 8080 is what the Docker examples pass explicitly.
 
 ## Open decisions
 

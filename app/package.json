@@ -17,7 +17,9 @@
     "build": "mkdir -p ../dist && bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile ../dist/rlmh"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.3.0",
     "ink": "8.0.0",
+    "openai": "7.46.0",
     "react": "19.3.1"
   },
   "devDependencies": {

@@ -91,6 +91,7 @@ rlm-harness/
       gateway/fake.ts                5 ◆     the scripted fake provider (§7.5)
       gateway/cache.ts               5
       gateway/usage.ts               5
+      gateway/stream.ts              5 ◆     what openai.ts and anthropic.ts share with gateway.ts: hooks, results, AttemptError
     catalog/models.json              5
     catalog/ATTRIBUTION.md           5 ◆
     scripts/build-catalog.ts         5 ◆     builds models.json from OMP's catalog
@@ -401,7 +402,9 @@ Engine-side tests use a scripted `AppPort`, `tests/fakeapp.py:FakeApp`, instead 
 ```ts
 // app/src/gateway/gateway.ts
 export class Gateway {
-  constructor(opts: { keys: KeyStore; catalog: Catalog; settings: Settings; bus: Bus<AppEvents>; fetch?: typeof fetch });
+  constructor(opts: { keys: KeyStore; catalog: Catalog; settings: Settings; bus: Bus<AppEvents>; fetch?: typeof fetch;
+                      env?: Record<string, string | undefined> });   // env: where the fake reads RLMH_FAKE_SCRIPT; default process.env
+  settings: Settings;                                                 // read at call time; replace it after a settings change
   complete(p: ModelCompleteParams, signal?: AbortSignal): Promise<ModelCompleteResult>; // throws ModelError (data: ModelErrorData)
   cancelRun(runId: string): void;
   totals(runId: string): { root: Usage; sub: Usage; cost_usd: number; cache_hit_rate: number | null };
@@ -409,7 +412,11 @@ export class Gateway {
   resolveCallFormat(ref: ModelRef, setting: "auto" | "fenced" | "native"): "fenced" | "native";
   refreshModels(provider: string): Promise<ModelInfo[]>;            // the only non-model network call, on click only
 }
-export class ModelError extends RpcError {}   // super(-32001, message, data: ModelErrorData), so Link answers it as -32001
+export class ModelError extends RpcError { constructor(data: ModelErrorData); readonly data: ModelErrorData; get kind(): ModelErrorKind }
+                                              // super(-32001, data.message, data), so Link answers it as -32001
+export const LIMITS: { BATCH_COLLECT_MS; BATCH_LEADER_WAIT_MS; IDLE_TIMEOUT_MS; IDLE_TIMEOUT_LOCAL_MS; TOTAL_TIMEOUT_MS;
+                       REFRESH_TIMEOUT_MS; REFRESH_MAX_PAGES; RUNS_KEPT; DETAIL_CHARS };   // tests shorten them
+export const RETRY: { DELAYS_S; RETRY_AFTER_MAX_S; MAX_FALLBACKS; sleep(ms, signal): Promise<void>; random(): number };
 export type AppEvents = {
   "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number };
   "call.delta": { call_id: string; text?: string; reasoning?: string; reset?: true };  // reset: a broken stream is retried whole; drop this call's text so far
@@ -427,17 +434,26 @@ export class KeyStore {
   add(provider: string, key: string, label?: string): Promise<KeyInfo>;
   remove(provider: string, id: string): Promise<void>;
   setActive(provider: string, id: string): Promise<void>;
-  resolve(provider: string): Promise<{ key: string; source: "env" | "secrets" | "file" } | null>;
+  resolve(provider: string): Promise<ResolvedKey | null>;            // throws KeyReadError when a saved key can't be read
 }
+export interface ResolvedKey { key: string; source: "env" | "secrets" | "file"; info?: KeyInfo; envVar?: string }  // info: saved keys; envVar: env keys
+export class KeyReadError extends Error {}
+export const KEY_LIMITS: { SECRETS_TIMEOUT_MS: number };   // 15000; here, not in gateway LIMITS, because gateway.ts imports keys.ts (D-73)
+export const KEY_HOOKS: { restrict(file: string): Promise<void> };   // makes the empty keys.json temp file owner-only; tests swap it
 // app/src/gateway/catalog.ts
 export interface ModelInfo { provider: string; id: string; name: string; context_window: number; max_output: number;
   price: { input: number; output: number; cache_read: number; cache_write: number };  // USD per 1M tokens
   tool_call: boolean; reasoning: boolean; cache_min_tokens: number | null }
 export class Catalog { constructor(home: string); models(provider?: string): ModelInfo[]; get(provider: string, id: string): ModelInfo | undefined; merge(provider: string, fetched: ModelInfo[]): void }
 // app/src/gateway/providers.ts
-export interface ProviderDef { id: string; name: string; client: "openai" | "anthropic" | "fake"; baseUrl: string | null; envVar: string | null; needsKey: boolean; api: boolean; caching: "anthropic" | "openai" | "openrouter" | "auto" | "none" }
+export interface ProviderDef { id: string; name: string; client: "openai" | "anthropic" | "fake"; baseUrl: string | null; envVar: string | null;
+  envFallback?: string;   // gemini: GOOGLE_API_KEY
+  needsKey: boolean; api: boolean; caching: "anthropic" | "openai" | "openrouter" | "auto" | "none" }
 export const PROVIDERS: readonly ProviderDef[];   // anthropic, openai, deepseek, openrouter, gemini, local, custom, fake (hidden)
-export const LOCAL_PRESETS: readonly { name: string; baseUrl: string }[];  // vLLM :8000, Ollama :11434, LM Studio :1234, llama.cpp :8080 (all /v1)
+export const PROVIDER_IDS: readonly string[];     // what settings.ts imports
+export function provider(id: string): ProviderDef | undefined;
+export function providerName(id: string): string;
+export const LOCAL_PRESETS: readonly { name: string; baseUrl: string }[];  // vLLM :8000, Ollama :11434, LM Studio :1234, llama.cpp :9931 (all /v1; llama-server's default, checked 2026-10-31)
 export function parseModelRef(s: string, thinking?: ModelRef["thinking"]): ModelRef;  // "openrouter/anthropic/x" splits at the first "/"
 ```
 
@@ -446,6 +462,13 @@ export function parseModelRef(s: string, thinking?: ModelRef["thinking"]): Model
 - **A model the catalog doesn't know** is still called, at cost 0 and with no window check, and `auto` resolves it to fenced (D-45). This covers `local/<name>` and new ids.
 - **`resolve` order:** the provider's environment variable, then the active saved key.
 - **Wiring in `session.ts`:** `link.handle("model.complete", (p, {signal}) => gateway.complete(p, signal))` and `link.onNotification("model.cancel", p => gateway.cancelRun(p.run_id))`.
+
+Built at step 5 (2026-10-31). What steps 6 and 7 can rely on, beyond the signatures:
+
+- **Replay (D-33, D-75)** is attached to every later request of the run whose assistant message has the same `content` and tool-call id, and dropped on `run.finished`. Step 6 must keep `assistant_message`'s `content` equal to the reply's `text`.
+- **`call.delta` with `reset: true`** follows a broken stream that had already streamed text or reasoning; step 7 clears that call's text and reasoning. Each call emits exactly one `call.end`.
+- **The fake provider** needs no key and no network, skips the batch gate (its caching is `none`), and fails a scripted error at once with no retries.
+- **Both SDKs** get an explicit key and base URL, `maxRetries: 0`, the gateway's fetch, `logLevel: "off"`, and OpenAI also `organization: null, project: null` (D-76). Anthropic is pinned to `anthropic-version: 2023-06-01`.
 
 ### 7.4 Call-format resolution (D-07)
 
@@ -721,7 +744,7 @@ Saved keys live in the OS credential store, not in `<home>`, so deleting `<home>
 | `app/test/setup.test.ts`, more cases in `app/test/engine.test.ts`, the CI `install` job | 10 | extraction, setup questions, installed-mode discovery; the one-line install on clean runners |
 | RLM repo: `tests/test_harness_parity.py`, `tests/test_harness_smoke.py` | 8, 9 | the scripts' offline parts |
 
-Shared test helpers: `engine/tests/fakeapp.py` (2, +6), `engine/tests/conftest.py` (2, +4), `app/test/fakes/http.ts` (5), `app/test/fakes/engine.ts` (7). Test data and per-suite helpers: `engine/tests/fixtures/extract_cases.json` (3), `app/test/interface/helpers.ts` (7) and `app/test/fakes/demo-script.json` (7, also reused by step 10). All tests run offline and make no request to a real provider. CI runs `uv run --project engine pytest engine/tests` and `bun test` (in `app/`) on all three OSes.
+Shared test helpers: `engine/tests/fakeapp.py` (2, +6), `engine/tests/conftest.py` (2, +4), `app/test/fakes/http.ts` (5), `app/test/gateway/helpers.ts` (5: a Gateway on a temp home, `params`, `sub`, `recordSleeps`), `app/test/fakes/engine.ts` (7). Test data and per-suite helpers: `engine/tests/fixtures/extract_cases.json` (3), `app/test/interface/helpers.ts` (7) and `app/test/fakes/demo-script.json` (7, also reused by step 10). All tests run offline and make no request to a real provider. CI runs `uv run --project engine pytest engine/tests` and `bun test` (in `app/`) on all three OSes.
 
 ## 12. Conventions
 

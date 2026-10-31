@@ -3,6 +3,7 @@
 // `/settings` and `rlmh config` read SCHEMA; a dotted key is a TOML table path.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { PROVIDER_IDS } from "./gateway/providers.ts";
 import { settingsPath } from "./paths.ts";
 
 export type SettingType = "string" | "enum" | "int" | "bool";
@@ -21,8 +22,13 @@ const PERMISSION_MODES = ["default", "accept-edits", "bypass"] as const;
 const CALL_FORMATS = ["auto", "fenced", "native"] as const;
 const LOCAL_BASE_URL = "http://localhost:8000/v1";
 
-/** Step 5 adds the check against the provider list. */
+/** The shape of a provider id; lookup also checks it against PROVIDER_IDS. */
 export const PROVIDER_ID = /^[a-z][a-z0-9_-]*$/;
+/** Only these take a base_url; the others use their own (providers.ts). */
+const BASE_URL_PROVIDERS = ["local", "custom"];
+const MAX_IN_FLIGHT = 256;
+/** Named in error messages; `fake` is accepted but hidden. */
+const SHOWN_PROVIDERS = PROVIDER_IDS.filter((id) => id !== "fake").join(", ");
 
 /** In §8 order. `<id>` stands for a provider id. */
 export const SCHEMA: readonly SettingDef[] = [
@@ -107,7 +113,7 @@ export function loadSettings(home: string): Settings {
   try {
     for (const [key, value] of leaves(data as Table, [])) {
       const { def, path } = lookup(key);
-      setPath(s, path, check(def, key, value, false));
+      setPath(s, path, validate(path, key, check(def, key, value, false)));
     }
   } catch (err) {
     throw new SettingsError(`${file}: ${(err as Error).message}`);
@@ -133,7 +139,7 @@ export function getSetting(s: Settings, key: string): SettingValue {
 export function setSetting(s: Settings, key: string, value: unknown): Settings {
   const { def, path } = lookup(key);
   const next = structuredClone(s) as unknown as Table;
-  setPath(next, path, check(def, key, value, true));
+  setPath(next, path, validate(path, key, check(def, key, value, true)));
   return next as unknown as Settings;
 }
 
@@ -165,6 +171,7 @@ function lookup(key: string): { def: SettingDef; path: string[] } {
       if (!PROVIDER_ID.test(path[1]!)) {
         throw new SettingsError(`bad provider id "${path[1]}" in ${key}: use a lowercase letter, then lowercase letters, digits, _ or -`);
       }
+      if (!PROVIDER_IDS.includes(path[1]!)) throw new SettingsError(`unknown provider "${path[1]}" in ${key}: use one of ${SHOWN_PROVIDERS}`);
       return { def, path };
     }
   } else if (path[0] !== "providers") {
@@ -197,6 +204,34 @@ function check(def: SettingDef, key: string, value: unknown, coerce: boolean): S
       if (typeof n === "number" && Number.isSafeInteger(n) && n >= 1) return n;
       throw new SettingsError(`${key} must be a whole number, 1 or more (got ${got})`);
     }
+  }
+}
+
+/** The rules beyond the type (step 5): base_url and max_in_flight bounds, and known providers in model refs. */
+function validate(path: string[], key: string, value: SettingValue): SettingValue {
+  const name = path.length === 3 && path[0] === "providers" ? path[2] : key;
+  if (name === "base_url") {
+    if (!BASE_URL_PROVIDERS.includes(path[1]!)) throw new SettingsError(`${key} can't be set: only local and custom take a base_url`);
+    if (value !== "" && !isHttpUrl(value as string)) throw new SettingsError(`${key} must be an http:// or https:// URL, or empty (got ${JSON.stringify(value)})`);
+  } else if (name === "max_in_flight") {
+    if ((value as number) > MAX_IN_FLIGHT) throw new SettingsError(`${key} must be ${MAX_IN_FLIGHT} or less (got ${value})`);
+  } else if ((key === "root.model" || key === "sub.model") && value !== "") {
+    const slash = (value as string).indexOf("/");
+    if (slash <= 0 || slash === (value as string).length - 1) {
+      throw new SettingsError(`${key} must be provider/model, such as anthropic/claude-sonnet-5 (got ${JSON.stringify(value)})`);
+    }
+    const id = (value as string).slice(0, slash);
+    if (!PROVIDER_IDS.includes(id)) throw new SettingsError(`${key} names an unknown provider "${id}": use one of ${SHOWN_PROVIDERS}`);
+  }
+  return value;
+}
+
+function isHttpUrl(s: string): boolean {
+  try {
+    const u = new URL(s);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "";
+  } catch {
+    return false;
   }
 }
 
