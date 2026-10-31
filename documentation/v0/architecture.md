@@ -644,7 +644,8 @@ export interface StartRun { mode: "read" | "repo"; question?: string; inputs?: s
   interactive: boolean; tag?: string; batch?: string; logDir?: string }
 export class Session {
   static open(opts: { home: string; verbose?: boolean; approvals: (p: ApprovalParams) => Promise<ApprovalResult> }): Promise<Session>;
-  readonly bus: Bus<AppEvents>; readonly gateway: Gateway; readonly settings: Settings;
+  readonly bus: Bus<AppEvents>; readonly gateway: Gateway;
+  settings: Settings;                                                 // step 7: /model and /settings swap it and gateway.settings (D-99)
   readonly keys: KeyStore; readonly catalog: Catalog;                 // the instances the gateway uses, for /providers and /model
   info(): Promise<EngineInfo>;
   start(r: StartRun): Promise<{ run_id: string; log_path: string }>;   // fills defaults from settings, resolves call_format
@@ -674,6 +675,13 @@ Built at step 6 (2026-10-31). What steps 7, 8 and 9 can rely on, beyond the sign
   - `{"type": "batch.finished", runs, failed, cost_usd}` last, for `batch`
   - Nothing else goes to stdout; errors go to stderr.
 - **Approvals outside the interactive app.** `rlmh run` on a TTY asks on the terminal (`y` allows, `a` allows for the run, `n` or Enter denies). `rlmh batch`, or no TTY, sends `interactive: false` (D-15).
+
+Built at step 7 (2026-10-31). What steps 9 and 10 can rely on:
+
+- **Bare `rlmh`** opens the app in `interface/App.tsx` (`runApp(deps)`, rendered with `exitOnCtrlC: false`). `main.ts` opens the `Session` with `verbose: false` and an `ApprovalQueue` (`interface/approvals.ts`) as its approver, and prints `Last run: <run_id>  <log_path>` after the app exits. With no TTY on stdin or stdout it prints the D-50 hint (plus the `winpty` line on Windows) and exits 1. `SettingsError`, `EngineNotFound`, `ProtocolMismatch` and `EngineStartError` print their message and exit 1.
+- **Interactive runs** send `interactive: true`, the mode from `/permissions` (held for the session, never saved) or else `permissions.mode`, and no model refs. Their records land in `<home>/runs/interactive/runs.jsonl`, which `/runs` lists.
+- **The interface reads only what steps 5 and 6 hand over**; no engine, gateway or protocol code changed. The one change outside `interface/` and `main.ts` is `Session.settings` losing `readonly` (D-99).
+- **Test fakes:** `app/test/fakes/engine.ts` (`createFakeApp`, the scenarios of the step 7 spec plus `hold`, `scriptedBus`, `runRecord`; D-108) and `app/test/interface/helpers.ts` (`mount`, `KEYS`; D-107). `app/test/fakes/demo-script.json` is the spec's demo for the manual check and step 10's smoke run; its `shell('ls')` asks only in repo mode (D-106).
 
 ### 7.9 Steps 8 and 9: scripts in the RLM repo
 

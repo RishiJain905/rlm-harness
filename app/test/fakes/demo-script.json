@@ -1,0 +1,10 @@
+{
+  "root": [
+    { "text": "Fan out.", "tool_call": { "code": "outs = llm_batch([f'Summarize part {i}' for i in range(20)])\nprint(len(outs))" } },
+    { "text": "Check the folder.", "tool_call": { "code": "print(shell('ls'))" } },
+    { "text": "", "tool_call": { "code": "submit('demo done')" } }
+  ],
+  "sub": [{ "text": "Part summary: nothing unusual." }],
+  "chunk_chars": 6,
+  "delay_ms": 40
+}

@@ -136,7 +136,8 @@ async function within<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
 export class Session {
   readonly bus: Bus<AppEvents>;
   readonly gateway: Gateway;
-  readonly settings: Settings;
+  /** The interface swaps it, and the gateway's, after /model or /settings saves a change; the next run reads it. */
+  settings: Settings;
   readonly keys: KeyStore;
   readonly catalog: Catalog;
   private readonly engine: EngineProcess;

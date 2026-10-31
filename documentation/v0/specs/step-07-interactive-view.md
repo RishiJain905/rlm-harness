@@ -136,24 +136,24 @@ Bare `rlmh` opens the real app: a prompt box, the transcript of the current run 
 
 ## Tasks
 
-1. [ ] Set row 7 to `in progress` in progress.md. Read the step 5 and 6 specs and code. `setSetting` is pure and returns a new `Settings` (§7.1); `applySetting` saves that result and swaps it in.
-2. [ ] In `app/`: `bun add --exact --dev ink-testing-library @types/react`. Use the Ink and React versions step 2 pinned. If no `ink-testing-library` release accepts that Ink, write `mount` in `helpers.ts` over Ink's `render` with fake `stdin` and `stdout` streams instead. Record the versions in progress.md. Add no other UI dependency.
-3. [ ] Write `format.ts` and its cases first; they are pure. Then `store.ts` (`RunStore`, `viewFromRecord`), `mentions.ts`, `approvals.ts`, `runs.ts`.
-4. [ ] Write `app/test/fakes/engine.ts` and `helpers.ts`, then `app.test.tsx` against a stub `App` that renders the status line. Grow the screens against the tests.
-5. [ ] Build `StatusLine`, `Transcript`, `PromptBox`, `Approval`, `SubcallPanel`, `SubcallView`, then `App.tsx` (focus, `Esc` order, submit flow).
-6. [ ] Build the commands in this order: `help`, `permissions`, `model`, `settings`, `providers`, `context`, `runs`.
-7. [ ] Edit `main.ts` as above.
-8. [ ] Run `..\.bun\bin\bun.exe test test/interface` from `app/` until green, then the whole `bun test`.
-9. [ ] Check the compiled binary: run step 2's build script, then `dist\rlmh.exe --version` and launch it. Do not change step 2's Ink bundling setup.
-10. [ ] Write `demo-script.json` (it uses the real engine and the fake provider; `delay_ms` makes the streaming visible):
+1. [x] Set row 7 to `in progress` in progress.md. Read the step 5 and 6 specs and code. `setSetting` is pure and returns a new `Settings` (§7.1); `applySetting` saves that result and swaps it in.
+2. [x] In `app/`: `bun add --exact --dev ink-testing-library @types/react`. Use the Ink and React versions step 2 pinned. If no `ink-testing-library` release accepts that Ink, write `mount` in `helpers.ts` over Ink's `render` with fake `stdin` and `stdout` streams instead. Record the versions in progress.md. Add no other UI dependency.
+3. [x] Write `format.ts` and its cases first; they are pure. Then `store.ts` (`RunStore`, `viewFromRecord`), `mentions.ts`, `approvals.ts`, `runs.ts`.
+4. [x] Write `app/test/fakes/engine.ts` and `helpers.ts`, then `app.test.tsx` against a stub `App` that renders the status line. Grow the screens against the tests.
+5. [x] Build `StatusLine`, `Transcript`, `PromptBox`, `Approval`, `SubcallPanel`, `SubcallView`, then `App.tsx` (focus, `Esc` order, submit flow).
+6. [x] Build the commands in this order: `help`, `permissions`, `model`, `settings`, `providers`, `context`, `runs`.
+7. [x] Edit `main.ts` as above.
+8. [x] Run `..\.bun\bin\bun.exe test test/interface` from `app/` until green, then the whole `bun test`.
+9. [x] Check the compiled binary: run step 2's build script, then `dist\rlmh.exe --version` and launch it. Do not change step 2's Ink bundling setup.
+10. [x] Write `demo-script.json` (it uses the real engine and the fake provider; `delay_ms` makes the streaming visible):
     ```json
     {"root": [{"text": "Fan out.", "tool_call": {"code": "outs = llm_batch([f'Summarize part {i}' for i in range(20)])\nprint(len(outs))"}},
               {"text": "Check the folder.", "tool_call": {"code": "print(shell('ls'))"}},
               {"text": "", "tool_call": {"code": "submit('demo done')"}}],
      "sub": [{"text": "Part summary: nothing unusual."}], "chunk_chars": 6, "delay_ms": 40}
     ```
-11. [ ] Manual check on Rishi's PC, in Windows Terminal and again in a Windows PowerShell console window. Set `RLMH_HOME` to a temp folder, run `rlmh config set root.model fake/scripted`, set `RLMH_FAKE_SCRIPT` to `app\test\fakes\demo-script.json`, start `rlmh` and type `Summarize @<any text file>`. Walk through the checklist under Done when and show Rishi.
-12. [ ] Update row 7 and the log in progress.md: versions and the private files. Do not commit.
+11. [ ] *(Not run: PC only. The cloud container has no Windows. In its place the compiled Linux binary was driven in a real pseudo-terminal against the real engine and this demo at 100x30 and 80x24, Unicode and `RLMH_ASCII=1`: 20 rows streamed and collapsed, a repo-mode `shell('ls')` asked and `y` allowed it, Esc cancelled a run mid-stream, `/context` and `/runs` opened, and Ctrl+C twice exited 0. In read mode the demo's `shell('ls')` is a `NameError`, so the approval needs a question with no `@` mention (D-106).)* Manual check on Rishi's PC, in Windows Terminal and again in a Windows PowerShell console window. Set `RLMH_HOME` to a temp folder, run `rlmh config set root.model fake/scripted`, set `RLMH_FAKE_SCRIPT` to `app\test\fakes\demo-script.json`, start `rlmh` and type `Summarize @<any text file>`. Walk through the checklist under Done when and show Rishi.
+12. [x] Update row 7 and the log in progress.md: versions and the private files. Do not commit.
 
 ## Tests
 
@@ -170,7 +170,7 @@ All under `app/test/interface/`, offline, using `createFakeApp`. Assert on `scre
 ## Done when
 
 - [ ] From `app/`: `..\.bun\bin\bun.exe test test/interface` passes on Rishi's PC, and `bun test` passes on macOS, Windows and Linux in CI. The `subcalls.test.tsx` fan-out and `approval.test.tsx` keyboard cases are in the run.
-- [ ] `providers-nonetwork.test.tsx` passes: saving a key through the screen makes 0 requests.
+- [x] `providers-nonetwork.test.tsx` passes: saving a key through the screen makes 0 requests.
 - [ ] CI's compiled-binary job (step 2) still builds on all three OSes, and `rlmh --version` still prints.
 - [ ] On Rishi's PC, in Windows Terminal, the demo run (task 11) shows: 20 rows streaming, then collapsing to one line; an approval answered with `y`; Esc cancelling a repeat of the same question while it streams; at 80x24 and 120x30 no flicker, no clipped line and no broken border; `/providers` paste with Ctrl+Shift+V never shows the key; `/context` and `/runs` open. In a Windows PowerShell console window it shows the ASCII fallback with no missing-glyph boxes. Rishi says he is happy with it.
 - [ ] progress.md row 7 is `review` (`done` after Rishi's yes).

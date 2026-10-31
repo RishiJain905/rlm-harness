@@ -9,6 +9,7 @@ import { runCommand, type CliIO } from "./cli/run.ts";
 import { fetchInfo, findEngine, startEngine, type EngineProcess } from "./engine.ts";
 import { RpcError } from "./link.ts";
 import { home } from "./paths.ts";
+import type { Session as SessionType } from "./session.ts";
 import { ErrorCode } from "./protocol.ts";
 import { APP_VERSION, PROTOCOL_VERSION } from "./version.ts";
 
@@ -94,11 +95,32 @@ export async function main(argv: string[]): Promise<number> {
 
 async function interactive(): Promise<number> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    await err(`rlmh: the interactive app needs a terminal. Try "rlmh --help".\n`);
+    // D-50. On Windows, Git Bash's default window (mintty) is not a console, so stdin is a pipe there.
+    const mintty = process.platform === "win32" ? " Use Windows Terminal or PowerShell, or `winpty rlmh`." : "";
+    await err(`rlmh needs an interactive terminal; use \`rlmh run\` for scripts.${mintty}\n`);
     return 1;
   }
+  const { ApprovalQueue } = await import("./interface/approvals.ts");
+  const { Session } = await import("./session.ts");
+  const queue = new ApprovalQueue();
+  let session: SessionType;
+  try {
+    // verbose stays off: engine stderr would be written over the screen; the engine-exit panel shows its tail
+    session = await Session.open({ home: home(), verbose: false, approvals: (p) => queue.ask(p) });
+  } catch (e) {
+    const tail = e instanceof Error && "stderr" in e && Array.isArray(e.stderr) ? (e.stderr as string[]) : [];
+    await err(`rlmh: ${e instanceof Error ? e.message : String(e)}\n${tail.map((line) => `${line}\n`).join("")}`);
+    return 1;
+  }
+  let last: { run_id: string; log_path: string } | undefined;
+  session.bus.on("engine.event", (e) => {
+    if (e.method === "run.started" || e.method === "run.finished") last = { run_id: e.params.run_id, log_path: e.params.log_path };
+  });
   const { runApp } = await import("./interface/App.tsx");
-  await runApp();
+  await runApp({ session, keys: session.keys, catalog: session.catalog, approvals: queue, home: home(), cwd: process.cwd() });
+  queue.denyAll();
+  await session.close();
+  if (last) await out(`Last run: ${last.run_id}  ${last.log_path}\n`);
   return 0;
 }
 
