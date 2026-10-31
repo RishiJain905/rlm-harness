@@ -3,7 +3,7 @@
 // owner-only keys.json as the fallback, and key-index.json for what /providers lists.
 // Makes no network call. A key never goes into an error message, a log line or the index.
 
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { basename, join } from "node:path";
 import { keyIndexPath, keysPath } from "../paths.ts";
 import { provider, providerName } from "./providers.ts";
@@ -331,14 +331,20 @@ export class KeyStore {
     mkdirSync(this.home, { recursive: true });
     const path = keysPath(this.home);
     const tmp = tempName(path);
-    closeSync(openSync(tmp, "wx", 0o600));
+    // One handle from create to close: reopening with a truncating flag can give the file a fresh,
+    // inherited ACL on Windows, which undoes the lock (the first Windows CI run showed three ACEs).
+    const fd = openSync(tmp, "wx", 0o600);
+    let open = true;
     try {
       try {
         await KEY_HOOKS.restrict(tmp);
       } catch (err) {
         throw new RestrictError(causeOf(err));
       }
-      writeFileSync(tmp, json({ version: 1, keys }), { flag: "w" });
+      writeSync(fd, json({ version: 1, keys }));
+      fsyncSync(fd);
+      closeSync(fd);
+      open = false;
       if (!IS_WINDOWS) {
         try {
           chmodSync(tmp, 0o600); // again, whatever the umask did
@@ -348,10 +354,12 @@ export class KeyStore {
       }
       await renameWithRetry(tmp, path);
     } catch (err) {
+      if (open) closeSync(fd);
       removeQuietly(tmp);
       throw err;
     }
   }
+
 
   // --- key-index.json ---
 
