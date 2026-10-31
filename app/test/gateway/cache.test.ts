@@ -75,7 +75,7 @@ describe("anthropic breakpoints", () => {
 });
 
 describe("cache keys", () => {
-  test("prompt_cache_key on OpenAI root and sub-calls, session_id on OpenRouter, neither elsewhere", async () => {
+  test("prompt_cache_key on OpenAI, session_id on OpenRouter, neither elsewhere; sub-calls get their own key (D-118)", async () => {
     r = await rig({ server, keys: ["openai", "openrouter", "deepseek", "gemini"] });
     server.script(() => openaiStream({ text: "ok" }));
     const one = { id: "b1", index: 0, size: 1 };
@@ -86,9 +86,9 @@ describe("cache keys", () => {
     const keys = server.requests.map((q) => [q.headers["x-orig-host"], q.body.prompt_cache_key, q.body.session_id]);
     expect(keys).toEqual([
       ["api.openai.com", "r_0123456789ab", undefined],
-      ["api.openai.com", "r_0123456789ab", undefined],
+      ["api.openai.com", "r_0123456789ab-sub", undefined], // a burst of sub-calls can't move the root's backend
       ["openrouter.ai", undefined, "r_0123456789ab"],
-      ["openrouter.ai", undefined, "r_0123456789ab"],
+      ["openrouter.ai", undefined, "r_0123456789ab-sub"],
       ["api.deepseek.com", undefined, undefined],
       ["api.deepseek.com", undefined, undefined],
       ["generativelanguage.googleapis.com", undefined, undefined],
@@ -98,7 +98,7 @@ describe("cache keys", () => {
     ]);
   });
 
-  test("OpenRouter's Anthropic models: top-level cache_control on root calls only, message bytes unchanged (D-117)", async () => {
+  test("OpenRouter's Anthropic models: top-level cache_control and a system breakpoint on root calls only, text unchanged (D-117)", async () => {
     r = await rig({ server, keys: ["openrouter"] });
     server.script(() => openaiStream({ text: "ok" }));
     const one = { id: "b1", index: 0, size: 1 };
@@ -117,9 +117,12 @@ describe("cache keys", () => {
       ["deepseek/deepseek-v4.1-flash-1017", null],
       ["deepseek/deepseek-v4.1-flash-1017", null],
     ]);
-    // the field is the only marker: messages keep the engine's strings, byte for byte
-    for (const q of server.requests) expect(countMarkers(q.body.messages)).toBe(0);
-    expect(server.requests[0]!.body.messages).toEqual([{ role: "system", content: "SYS" }, { role: "user", content: "first" }]);
+    // Anthropic root calls: one more breakpoint, on the system prompt, so every run reads it; the text is the engine's string
+    const sysMarked = [{ role: "system", content: [{ type: "text", text: "SYS", cache_control: { type: "ephemeral" } }] }, { role: "user", content: "first" }];
+    const plain = [{ role: "system", content: "SYS" }, { role: "user", content: "first" }];
+    const msgs = server.requests.map((q) => q.body.messages);
+    expect([msgs[0], msgs[2], msgs[4], msgs[6]]).toEqual([sysMarked, sysMarked, plain, plain]);
+    expect(server.requests.map((q) => countMarkers(q.body))).toEqual([2, 0, 2, 0, 0, 0, 0, 0]);
   });
 });
 

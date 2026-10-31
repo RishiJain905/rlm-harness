@@ -26,13 +26,19 @@ export interface OpenAIContext {
 /** OpenRouter model ids served by Anthropic, `~anthropic/…` aliases included. */
 const OPENROUTER_ANTHROPIC = /^~?anthropic\//;
 
+/** Whether this call carries Anthropic cache breakpoints: an OpenRouter Anthropic model on a marked call (D-117). */
+function anthropicMarkers(providerId: string, p: ModelCompleteParams, ctx: OpenAIContext): boolean {
+  return providerId === "openrouter" && ctx.markers && OPENROUTER_ANTHROPIC.test(p.model.model);
+}
+
 /** Pure: the Chat Completions body for one model.complete request. */
 export function buildOpenAIRequest(p: ModelCompleteParams, ctx: OpenAIContext): Record<string, unknown> {
   const id = ctx.provider.id;
   const hasTools = p.tools.length > 0;
   const keep = (field: string) => !ctx.dropped.has(field);
   const on = p.thinking !== "off";
-  const body: Record<string, unknown> = { model: p.model.model, messages: p.messages.map((m) => toMessage(m, id, hasTools, ctx)) };
+  const marked = anthropicMarkers(id, p, ctx);
+  const body: Record<string, unknown> = { model: p.model.model, messages: p.messages.map((m, i) => toMessage(m, id, hasTools, ctx, marked && i === 0)) };
   if (hasTools) body.tools = p.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
   body[id === "openai" ? "max_completion_tokens" : "max_tokens"] = p.max_tokens;
   if (keep("temperature") && !(id === "openai" && ctx.info?.reasoning)) body.temperature = p.temperature;
@@ -55,20 +61,27 @@ export function buildOpenAIRequest(p: ModelCompleteParams, ctx: OpenAIContext): 
       if (keep("chat_template_kwargs")) body.chat_template_kwargs = on ? { enable_thinking: true, reasoning_effort: p.thinking } : { enable_thinking: false };
       break;
   }
-  if (id === "openai") body.prompt_cache_key = p.run_id;
+  // The routing key pins a conversation to one backend and its warm cache. Sub-calls get their own, so a burst of
+  // them (and the failover it can cause) never moves the root's backend (D-118).
+  const routeKey = p.role === "root" ? p.run_id : `${p.run_id}-sub`;
+  if (id === "openai") body.prompt_cache_key = routeKey;
   if (id === "openrouter") {
-    body.session_id = p.run_id;
-    // Anthropic caches only with cache_control: the top-level field puts the breakpoint on the last block and moves it as the conversation grows (D-117)
-    if (ctx.markers && OPENROUTER_ANTHROPIC.test(p.model.model)) body.cache_control = { type: "ephemeral" };
+    body.session_id = routeKey;
+    // Anthropic caches only with cache_control: the top-level field puts the breakpoint on the last block and moves it
+    // as the conversation grows; the system prompt's own breakpoint (toMessage) lets every run read it (D-117)
+    if (anthropicMarkers(id, p, ctx)) body.cache_control = { type: "ephemeral" };
   }
   body.stream = true;
   if (keep("stream_options")) body.stream_options = { include_usage: true };
   return body;
 }
 
-function toMessage(m: Message, providerId: string, hasTools: boolean, ctx: OpenAIContext): Record<string, unknown> {
+function toMessage(m: Message, providerId: string, hasTools: boolean, ctx: OpenAIContext, marked: boolean): Record<string, unknown> {
   switch (m.role) {
     case "system":
+      // one text block with the engine's exact string; the breakpoint is a field beside it, not text (D-117)
+      if (marked) return { role: "system", content: [{ type: "text", text: m.content, cache_control: { type: "ephemeral" } }] };
+      return { role: m.role, content: m.content };
     case "user":
       return { role: m.role, content: m.content };
     case "tool":

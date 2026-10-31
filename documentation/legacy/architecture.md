@@ -122,7 +122,7 @@ There is one cache, and it lives at the provider (or in vLLM or llama.cpp for lo
 - **Byte-stable prefix.** The system prompt and tool definition never change during a run, and anything that changes goes last. The `(N turns left, M sub-calls left)` suffix already sits at the end of each observation.
 - **Anthropic:** cache breakpoints at the end of the system prompt and on the latest message.
 - **`llm_batch`:** the gateway finds the longest prefix the batch's prompts share. When it reaches the model's minimum cacheable length (512 to 4,096 tokens, depending on the model), the gateway marks it, sends the first call, waits for that call's first token and then sends the rest, because an Anthropic cache entry is readable only once the first response has started.
-- **OpenAI:** `prompt_cache_key` set to the run id. **OpenRouter:** `session_id` set to the run id, plus a top-level `cache_control` on root calls to Anthropic models, which cache only with it (D-117, found at the v0 smoke run). **DeepSeek** caches automatically.
+- **OpenAI:** `prompt_cache_key` set to the run id. **OpenRouter:** `session_id` set to the run id, plus, for Anthropic models, which cache only with markers, a top-level `cache_control` and a breakpoint on the system prompt on root calls (D-117, found at the v0 smoke run). Sub-calls use `<run id>-sub` for both keys, so their bursts can't move the root to a cold backend (D-118). **DeepSeek** caches automatically.
 - **Visible:** the status line shows the cache hit rate, so a broken prefix is noticed.
 
 RLM already helps here: the long input lives in the REPL, so it is never in the prompt at all.
