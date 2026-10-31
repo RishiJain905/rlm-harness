@@ -125,9 +125,22 @@ test("discovery_order", () => {
 test("child_env", () => {
   const cmd = findEngine({
     home,
-    env: { PATH: "/usr/bin", OPENAI_API_KEY: "sk-FAKE", github_token: "FAKE", MY_SECRET: "FAKE", RLMH_HOME: "/elsewhere" },
+    env: {
+      PATH: "/usr/bin",
+      OPENAI_API_KEY: "sk-FAKE",
+      github_token: "FAKE",
+      MY_SECRET: "FAKE",
+      RLMH_HOME: "/elsewhere",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.extraHeader",
+      GIT_CONFIG_VALUE_0: "FAKE",
+      GIT_CONFIG_GLOBAL: "/etc/gitconfig-test",
+    },
   });
-  for (const name of ["OPENAI_API_KEY", "github_token", "MY_SECRET"]) expect(cmd.env[name]).toBeUndefined();
+  // git's env config goes as a whole (D-62): a partial set makes git refuse to run
+  for (const name of ["OPENAI_API_KEY", "github_token", "MY_SECRET", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"])
+    expect(cmd.env[name]).toBeUndefined();
+  expect(cmd.env.GIT_CONFIG_GLOBAL).toBe("/etc/gitconfig-test");
   expect(cmd.env.PATH).toBe("/usr/bin");
   expect(cmd.env.RLMH_HOME).toBe(home);
   expect(cmd.env.PYTHONUTF8).toBe("1");

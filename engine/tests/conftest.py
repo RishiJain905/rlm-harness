@@ -2,7 +2,8 @@
 
 Shared helpers for the engine tests. Tests are plain functions that call `run(coro)`; there is
 no pytest plugin. `pipes()` wires a Link to a raw test peer, and `EngineProc` runs the real
-`python -m rlm_engine serve`.
+`python -m rlm_engine serve`. Step 4 adds `git_repo` (a committed fixture repository), `git()`,
+`needs_git` and `StubApp` (a minimal AppPort for the worker, bridge and permission tests).
 """
 
 from __future__ import annotations
@@ -11,13 +12,18 @@ import asyncio
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
+
+import pytest
+
+from rlm_engine.appport import AppPort
 
 
 def run(coro: Any, timeout: float = 10) -> Any:
@@ -183,3 +189,81 @@ class EngineProc:
                 f.close()
             except OSError:
                 pass
+
+
+# ----------------------------------------------------------------------------- step 4
+
+HAS_GIT = shutil.which("git") is not None
+needs_git = pytest.mark.skipif(not HAS_GIT, reason="needs git")
+
+
+def git(root: Path, *args: str) -> str:
+    """Run git in `root` with a throwaway identity and no global hooks or autocrlf; returns stdout."""
+    done = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.autocrlf=false", "-c", "init.defaultBranch=main",
+         *args],
+        cwd=root, check=True, capture_output=True,
+    )
+    return done.stdout.decode("utf-8", "replace")
+
+
+FIXTURE_FILES = {
+    "a.py": "x = 1\n",
+    "pkg/core.py": "def parse(x):\n    return x\n",
+    "README.md": "fixture\n",
+    ".gitignore": "build/\n",
+}
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    """A git repository with FIXTURE_FILES committed once; skipped when git is missing."""
+    if not HAS_GIT:
+        pytest.skip("needs git")
+    root = tmp_path / "repo"
+    for rel, text in FIXTURE_FILES.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(text.encode("utf-8"))
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "base")
+    return root
+
+
+class StubApp(AppPort):
+    """An AppPort that records everything. `approve` answers with `answer` (a dict, or a function of the params
+    that may be async and may raise); `complete` calls `complete` the same way. Defaults: deny, and no model."""
+
+    def __init__(self, *, answer: dict | Callable[[dict], Any] | None = None,
+                 complete: Callable[[dict], Any] | None = None) -> None:
+        self.answer = answer if answer is not None else {"allow": False, "remember_for_run": False}
+        self._complete = complete
+        self.approvals: list[dict] = []
+        self.completes: list[dict] = []
+        self.events: list[tuple[str, dict]] = []
+        self.cancelled: list[str] = []
+
+    async def complete(self, params: dict) -> dict:
+        self.completes.append(params)
+        if self._complete is None:
+            raise AssertionError("StubApp: no model configured")
+        result = self._complete(params)
+        return await result if asyncio.iscoroutine(result) else result
+
+    async def approve(self, params: dict) -> dict:
+        self.approvals.append(params)
+        if callable(self.answer):
+            result = self.answer(params)
+            return await result if asyncio.iscoroutine(result) else result
+        return dict(self.answer)
+
+    def event(self, method: str, params: dict) -> None:
+        self.events.append((method, params))
+
+    def cancel_calls(self, run_id: str) -> None:
+        self.cancelled.append(run_id)
+
+    def sent(self, method: str) -> list[dict]:
+        """The params of every event of one method, in order."""
+        return [params for m, params in self.events if m == method]

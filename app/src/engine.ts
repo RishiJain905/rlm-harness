@@ -36,6 +36,8 @@ export class ProtocolMismatch extends Error {
 
 /** Names of variables that could hold a key; neither the engine nor the worker ever sees them (D-29). */
 const KEY_LIKE = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i;
+/** Git's environment config goes as a whole: KEY_LIKE matches its key names, git refuses a partial set, and its values can hold credentials (D-62). */
+const GIT_ENV_CONFIG = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/i;
 const STDERR_RING = 200;
 const KILL_GRACE_MS = 2000;
 const STDOUT_GRACE_MS = 1000;
@@ -67,11 +69,11 @@ export function splitCommand(line: string): string[] {
   return out;
 }
 
-/** The given env minus key-like names. */
+/** The given env minus key-like names and git's env config. */
 function stripKeys(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
-    if (value !== undefined && !KEY_LIKE.test(name)) out[name] = value;
+    if (value !== undefined && !KEY_LIKE.test(name) && !GIT_ENV_CONFIG.test(name)) out[name] = value;
   }
   return out;
 }

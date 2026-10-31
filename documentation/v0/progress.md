@@ -9,7 +9,7 @@ A step can start once every step it depends on is `done`, or `review` if Rishi h
 | 1 | [Freeze the spec](specs/step-01-freeze-spec.md) | done | claude/eager-heisenberg-pslzk0 | none | 2026-10-30 | frozen; every decision settled (S-22 to S-34): 1a MIT, 4b `accept-edits` and 9a two API models went the alternative way |
 | 2 | [Skeleton, link, CI, binary](specs/step-02-skeleton-link.md) | done | claude/eager-heisenberg-pslzk0 | 1 | 2026-10-30 | built in a Linux cloud container; CI green on three OSes; the PC checks (spec tasks 7, 8) not run, Rishi marked it done without them |
 | 3 | [Contract and call formats](specs/step-03-contract.md) | done | claude/eager-heisenberg-pslzk0 | 2 | 2026-10-31 | hash matched training (`a71401e2…`); built in a Linux cloud container, `test_against_training_source` run there against a clone of the public RLM repo; the Windows 11 PC run not done (CI covers windows-latest) |
-| 4 | [Worker, tools, permissions](specs/step-04-worker-tools-permissions.md) | not started | | 3 | | |
+| 4 | [Worker, tools, permissions](specs/step-04-worker-tools-permissions.md) | in progress | claude/eager-heisenberg-pslzk0 | 3 | 2026-10-31 | building in a Linux cloud container |
 | 5 | [Model gateway](specs/step-05-gateway.md) | not started | | 2 | | can run alongside 3 and 4 |
 | 6 | [Loop, events, run log, `rlmh run`](specs/step-06-loop-runlog-cli.md) | not started | | 4, 5 | | |
 | 7 | [Interactive view](specs/step-07-interactive-view.md) | not started | | 6 | | can run alongside 8 |
