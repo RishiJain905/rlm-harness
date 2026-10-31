@@ -1,7 +1,11 @@
 #!/usr/bin/env bun
 // KV cache: none
-// rlmh: argv dispatch (architecture §10). Exit 0 is success, 1 a runtime failure, 2 a usage error (D-40).
+// rlmh: argv dispatch (architecture §10). Exit 0 is success, 1 a runtime failure, 2 a usage error,
+// 130 Ctrl-C (D-40, D-50).
 
+import { batchCommand } from "./cli/batch.ts";
+import { configCommand } from "./cli/config.ts";
+import { runCommand, type CliIO } from "./cli/run.ts";
 import { fetchInfo, findEngine, startEngine, type EngineProcess } from "./engine.ts";
 import { RpcError } from "./link.ts";
 import { home } from "./paths.ts";
@@ -15,9 +19,20 @@ const USAGE = `Usage: rlmh [command] [options]
 
 Commands:
   rlmh             open the interactive app
+  rlmh run         one run: --question Q --input FILE..., or --task T --repo DIR [--test-hint CMD]
+  rlmh batch       every task in a TASKS.jsonl file: rlmh batch TASKS.jsonl [--jobs N] [--out DIR]
+  rlmh config      list, get KEY, or set KEY VALUE in settings.toml
   rlmh info        start the engine and print its info as JSON
   rlmh --version   print the version
   rlmh --help      show this help
+
+Options for run and batch:
+  --root P/M             root model, such as anthropic/claude-sonnet-5 (default: root.model)
+  --sub P/M              sub-call model (default: sub.model, else the root model)
+  --profile NAME         prompt profile (default: profile)
+  --permission-mode M    default, accept-edits or bypass (default: permissions.mode)
+  --call-format F        auto, fenced or native (default: call_format)
+  --json                 one JSON object per line on stdout, everything else on stderr
 
 Options:
   --verbose        show the engine's stderr
@@ -31,8 +46,25 @@ async function err(text: string): Promise<void> {
   await Bun.write(Bun.stderr, text);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Waits for `p` at most `ms`; the timer never outlives it, so it can't hold the process open. */
+async function within(p: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([p, new Promise((resolve) => (timer = setTimeout(resolve, ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The real process streams, for run, batch and config. */
+function processIO(): CliIO {
+  return {
+    stdout: { write: (chunk) => void process.stdout.write(chunk) },
+    stderr: { write: (chunk) => void process.stderr.write(chunk) },
+    stdin: process.stdin,
+    isTTY: Boolean(process.stdin.isTTY && process.stderr.isTTY),
+    home: home(),
+  };
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -40,6 +72,12 @@ export async function main(argv: string[]): Promise<number> {
   const args = argv.filter((a) => a !== "--verbose");
   if (args.length === 0) return interactive();
   const [command, ...rest] = args;
+  // run, batch and config parse their own flags, --verbose included, so a value like `--question --verbose` survives
+  const at = argv.indexOf(command!);
+  const own = [...(argv.slice(0, at).includes("--verbose") ? ["--verbose"] : []), ...argv.slice(at + 1)];
+  if (command === "run") return runCommand(own, processIO());
+  if (command === "batch") return batchCommand(own, processIO());
+  if (command === "config") return configCommand(own, processIO());
   if (command === "--version" && rest.length === 0) {
     await out(`rlmh ${APP_VERSION}\n`);
     return 0;
@@ -90,11 +128,16 @@ async function info(verbose: boolean): Promise<number> {
     clearTimeout(timer);
     if (engine) {
       engine.kill();
-      await Promise.race([engine.exited, sleep(EXIT_WAIT_MS)]);
+      await within(engine.exited, EXIT_WAIT_MS);
     }
   }
 }
 
 if (import.meta.main) {
-  process.exit(await main(process.argv.slice(2)));
+  // Set the code and let the process end, so nothing written to a pipe is cut short (Windows can
+  // truncate it on process.exit). On a terminal nothing can be lost, and exiting at once also ends
+  // a TTY stdin that Ink or a prompt left open.
+  const code = await main(process.argv.slice(2));
+  process.exitCode = code;
+  if (process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY) process.exit(code);
 }

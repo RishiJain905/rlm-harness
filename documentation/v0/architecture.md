@@ -219,7 +219,7 @@ Every event carries `run_id`. Turns are numbered from 1. `tag` is `null` when `r
 | `run.permission` | `turn, kind, detail, allowed, asked, remembered` | sent by `Permissions` for each decision on a guarded action, except writes inside the scratch folder; at most 200 per run |
 | `run.budget` | `turns_left, subcalls_left` | sent by the loop after each turn and by the bridge after each batch |
 | `run.finished` | `tag, answer, submitted, answer_valid, turns, subcalls, usage: {root: Usage, sub: Usage}, cost_usd, infra_error, infra_kind, wall_s, log_path` | once, after the run-log line is written |
-| `model.cancel` | (only `run_id`) | when a run is cancelled or ends with calls still in flight; the gateway aborts them |
+| `model.cancel` | (only `run_id`) | at the end of every run, before `run.finished` (D-84); the gateway aborts any calls still in flight |
 
 ### 5.4 One run, in order
 
@@ -395,7 +395,7 @@ class LinkAppPort(AppPort):
     def __init__(self, link: Link): ...                 # maps RpcError -32001 to ModelError
 ```
 
-Engine-side tests use a scripted `AppPort`, `tests/fakeapp.py:FakeApp`, instead of a pipe. Step 2 creates it, and step 6 adds `script=` for root replies and sub-call answers.
+Engine-side tests use a scripted `AppPort`, `tests/fakeapp.py:FakeApp`, instead of a pipe. Step 2 creates it, and step 6 adds `script=` for root replies and sub-call answers (the §7.5 format, each run from the start of the script, plus an optional `usage` per entry and `delay_ms` per call), `requests` (a deep copy of every `model.complete` params, in order) and `sent(method)` (the params of every event of one method).
 
 ### 7.3 Step 5 → 6, 7: the gateway and the bus
 
@@ -654,6 +654,17 @@ export class Session {
 }
 ```
 
+Built at step 6 (2026-10-31). What steps 7, 8 and 9 can rely on, beyond the signatures:
+
+- **Order on the wire (§5.4).** The `run.start` result comes first, then `run.started`, then the first root `model.complete`. A gate in `service.py` holds the run's notifications and delays its model calls and approvals until the handler has returned, which works because `Link` writes the result in the same step (no post-reply hook was needed). A run whose worker never starts sends its result, then `model.cancel`, then `run.finished` (D-84).
+- **`run.cancel`** returns `{}` only after `run.finished` was sent (it waits up to 10 s). Closing the engine's stdin cancels every run and waits for each record.
+- **`infra_kind`** is a ModelErrorData `kind` (root call or sub-call), `worker`, `internal` (a request handler failed), `workspace` (a git failure in snapshot or diff, D-85), `cancelled` or `host_bug`. `infra_error` is `"<kind>: <message>"`, the kind written once.
+- **The record.** `RECORD_KEYS` has `question` in the `question | task` slot: a repo-mode record has `task` there instead. A turn whose cell raised has its reply and `null` cell fields, and no `run.cell` was sent for it (D-86). `subcalls` are sorted by `subcall_id`; `run.finished.subcalls` is `bridge.subcalls_used`. `run.finished.answer` is the submitted JSON value, not always a string (D-89).
+- **`inputs.prepare`** runs once in `run.start` (in a thread) and again, as a no-op, in `loop.run`; a parity script that sends all four repo overrides makes no git call for them.
+- **`Session`** also exports `EngineStartError` (an engine that exits or doesn't answer `engine.info`, with its stderr tail). `open` throws `SettingsError`, `EngineNotFound`, `ProtocolMismatch` (the engine is killed) or `EngineStartError`. `start` throws `UsageError` before sending anything, or the engine's `RpcError`. `close` ends the engine's stdin and kills its tree after 2 s (D-93).
+- **`cli/run.ts`** also exports what `batch.ts` shares and step 7 may reuse: `RunWatcher` (keeps every `run.finished` by `run_id` from the moment it is made, and resolves `null` when the engine exits first), `onInterrupt`, `modelFlags`, `openFailed`. `createTtyApprover` returns an `Approver`: the approval function plus `interrupt()` (Ctrl-C denies the prompt on screen) and `close()`.
+- **`--json`** always ends with `run.finished` for `run` and `batch.finished` for `batch`. Exit codes are 0, 1, 2 and 130 for both (D-40, D-50); a usage error never starts the engine (D-94).
+
 - **`rlmh run`.** `rlmh run (--question Q --input F… | --task T --repo DIR [--test-hint CMD]) [--root P/M] [--sub P/M] [--profile NAME] [--permission-mode M] [--call-format F] [--json]`. It exits 0 when the run finished without `infra_error`, 1 when it had one or the engine died, 2 on a usage error, and 130 on Ctrl-C (D-40).
 - **`rlmh batch`.** `rlmh batch TASKS.jsonl [--jobs N] [--out DIR] [--json]`, plus the same `--root`, `--sub`, `--profile`, `--permission-mode` and `--call-format` flags. `--jobs` defaults to 1. Exit code 0 means every run finished without `infra_error`, 1 means some run had one, 2 means a usage error (the tasks file is checked before the engine starts), and 130 means Ctrl-C.
 - **`tasks.jsonl` lines (D-28).** Read mode is `{"id", "question", "input": str | [str]}` and repo mode `{"id", "task", "repo", "test_hint"?}`. Paths are relative to the tasks file's folder. There are no gold answers.
@@ -744,7 +755,7 @@ Saved keys live in the OS credential store, not in `<home>`, so deleting `<home>
 | `app/test/setup.test.ts`, more cases in `app/test/engine.test.ts`, the CI `install` job | 10 | extraction, setup questions, installed-mode discovery; the one-line install on clean runners |
 | RLM repo: `tests/test_harness_parity.py`, `tests/test_harness_smoke.py` | 8, 9 | the scripts' offline parts |
 
-Shared test helpers: `engine/tests/fakeapp.py` (2, +6), `engine/tests/conftest.py` (2, +4), `app/test/fakes/http.ts` (5), `app/test/gateway/helpers.ts` (5: a Gateway on a temp home, `params`, `sub`, `recordSleeps`), `app/test/fakes/engine.ts` (7). Test data and per-suite helpers: `engine/tests/fixtures/extract_cases.json` (3), `app/test/interface/helpers.ts` (7) and `app/test/fakes/demo-script.json` (7, also reused by step 10). All tests run offline and make no request to a real provider. CI runs `uv run --project engine pytest engine/tests` and `bun test` (in `app/`) on all three OSes.
+Shared test helpers: `engine/tests/fakeapp.py` (2, +6), `engine/tests/conftest.py` (2, +4), `app/test/fakes/http.ts` (5), `app/test/cli/helpers.ts` (6: a temp home and fake script, a key-free child env, `rlmh(...)` from source, the §5.3 and §7.8 key tables), `app/test/gateway/helpers.ts` (5: a Gateway on a temp home, `params`, `sub`, `recordSleeps`), `app/test/fakes/engine.ts` (7). Test data and per-suite helpers: `engine/tests/fixtures/extract_cases.json` (3), `app/test/interface/helpers.ts` (7) and `app/test/fakes/demo-script.json` (7, also reused by step 10). All tests run offline and make no request to a real provider. CI runs `uv run --project engine pytest engine/tests` and `bun test` (in `app/`) on all three OSes.
 
 ## 12. Conventions
 

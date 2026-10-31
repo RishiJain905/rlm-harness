@@ -300,7 +300,8 @@ export interface RunBudgetParams {
 export interface RunFinishedParams {
   run_id: string;
   tag: string | null;
-  answer: string | null;
+  /** The submitted value (D-89): a string, a number or a list of those, or null when nothing valid was submitted. */
+  answer: string | number | (string | number)[] | null;
   submitted: boolean;
   answer_valid: boolean;
   turns: number;
