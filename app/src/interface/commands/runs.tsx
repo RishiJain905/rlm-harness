@@ -80,7 +80,7 @@ export function RunsScreen(props: ScreenProps) {
   else if (runs) {
     body.push([span(fit(`${"date".padEnd(16)}  mode  ${"root model".padEnd(24)}  ${"cost".padStart(8)}  turns  ${"question or task".padEnd(40)}  status`, w, theme), { dim: true })]);
     const rows: Line[] = runs.map((r) => [span(fit(runRow(r, theme.more), w, theme), { color: r.infraKind && r.format === RUN_LOG_FORMAT ? paint(theme, "red") : undefined })]);
-    body.push(...listLines(rows, sel, Math.max(1, props.height - 5), theme));
+    body.push(...listLines(rows, sel, Math.max(1, props.height - 5)));
   }
   if (message) body.push([span(fit(message, w, theme), { color: paint(theme, "yellow") })]);
   return <Frame title="/runs" hint="Up/Down  Enter replays  Esc closes" body={body} width={w} height={props.height} />;
@@ -143,7 +143,7 @@ function Replay(props: { view: RunView; width: number; height: number; active: b
   return (
     <Box flexDirection="column" width={width} height={props.height}>
       <Lines lines={[title]} height={1} width={width} />
-      <Transcript lines={lines} scroll={scroll} width={width} height={tHeight} theme={theme} />
+      <Transcript lines={lines} scroll={scroll} width={width} height={tHeight} />
       {panelHeight > 0 ? (
         <SubcallPanel
           blocks={view.blocks}

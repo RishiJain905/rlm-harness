@@ -70,8 +70,8 @@ export function transcriptLines(entries: readonly Entry[], width: number, theme:
 }
 
 /** The lines shown: the tail, or `scroll` lines above it, with a marker when lines are hidden. */
-export function Transcript(props: { lines: Line[]; scroll: number; width: number; height: number; theme: Theme }) {
-  const { lines, height, theme } = props;
+export function Transcript(props: { lines: Line[]; scroll: number; width: number; height: number }) {
+  const { lines, height } = props;
   let shown: Line[];
   if (lines.length <= height) {
     shown = lines;

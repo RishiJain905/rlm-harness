@@ -23,7 +23,7 @@ export function Frame(props: { title: string; hint: string; body: Line[]; width:
 }
 
 /** A list window around `selected`: each item one line, the selected one inverse. */
-export function listLines(items: Line[], selected: number, height: number, theme: Theme): Line[] {
+export function listLines(items: Line[], selected: number, height: number): Line[] {
   const w = windowLines(items.length, selected, height);
   const out: Line[] = [];
   if (w.above > 0) out.push([span(`  ^ ${w.above} more`, { dim: true })]);
@@ -32,7 +32,6 @@ export function listLines(items: Line[], selected: number, height: number, theme
     out.push(i === selected ? [span(">", { bold: true }), ...item.map((s) => ({ ...s, inverse: true }))] : [span(" "), ...item]);
   }
   if (w.below > 0) out.push([span(`  v ${w.below} more`, { dim: true })]);
-  void theme;
   return out;
 }
 

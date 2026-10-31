@@ -289,7 +289,7 @@ export function App(props: { deps: AppDeps }) {
   } else {
     main = (
       <>
-        <Transcript lines={lines} scroll={Math.min(scroll, maxScroll)} width={size.columns} height={h.transcript} theme={theme} />
+        <Transcript lines={lines} scroll={Math.min(scroll, maxScroll)} width={size.columns} height={h.transcript} />
         {h.panel > 0 ? (
           <SubcallPanel
             blocks={view.blocks}

@@ -140,7 +140,7 @@ export function SubcallPanel(props: {
   const theme = useTheme();
   const items = panelItems(props.blocks, props.state);
   useInput(
-    (input, key) => {
+    (_input, key) => {
       const sel = Math.min(props.state.selected, Math.max(0, items.length - 1));
       if (key.upArrow) props.onState({ ...props.state, selected: Math.max(0, sel - 1) });
       else if (key.downArrow) props.onState({ ...props.state, selected: Math.min(items.length - 1, sel + 1) });

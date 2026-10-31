@@ -35,7 +35,7 @@ export function PermissionsScreen(props: ScreenProps) {
     span(`${m.mode === props.permissionMode ? theme.on : theme.off} ${m.mode}`.padEnd(16), { bold: true, color: m.mode === "bypass" ? paint(theme, "red") : undefined }),
     span(m.asks),
   ]);
-  const body: Line[] = [[span("Mode for the next run (this session only; /settings permissions.mode sets the default)", { dim: true })], ...listLines(rows, sel, MODES.length, theme)];
+  const body: Line[] = [[span("Mode for the next run (this session only; /settings permissions.mode sets the default)", { dim: true })], ...listLines(rows, sel, MODES.length)];
   if (props.permissionMode === "bypass" || MODES[sel]!.mode === "bypass") {
     for (const l of wrapText("bypass asks nothing: model-written code can write anywhere, run any command and reach any host.", props.width)) {
       body.push([span(l, { bold: true, color: paint(theme, "red") })]);

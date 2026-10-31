@@ -189,14 +189,14 @@ export function ProvidersScreen(props: ScreenProps) {
       if (!p.needsKey) parts.push(p.baseUrl ?? String(getSetting(deps.session.settings, `providers.${p.id}.base_url`) || "no base URL set"));
       return [span(fit(parts.join("  "), w, theme))];
     });
-    body.push(...listLines(rows, sel, room, theme));
+    body.push(...listLines(rows, sel, room));
   } else {
     const envVar = envKeyVar(def, env);
     body.push([span(def.name, { bold: true }), span(`  ${def.needsKey ? "needs a key" : `base URL ${def.baseUrl ?? (String(getSetting(deps.session.settings, `providers.${def.id}.base_url`)) || "not set")}`}`, { dim: true })]);
     if (envVar) body.push([span(fit(`  key from ${envVar} (it wins over saved keys)`, w, theme), { color: paint(theme, "cyan") })]);
     if (mine.length === 0) body.push([span("  No saved keys.", { dim: true })]);
     const rows: Line[] = mine.map((k) => [span(fit(`${k.active ? theme.on : theme.off} ${k.label.padEnd(16)} ${k.last4 ? `...${k.last4}` : "       "}  ${k.store}  added ${k.created_at.slice(0, 10)}`, w, theme))]);
-    body.push(...listLines(rows, Math.min(keySel, Math.max(0, mine.length - 1)), Math.max(1, room - 2), theme));
+    body.push(...listLines(rows, Math.min(keySel, Math.max(0, mine.length - 1)), Math.max(1, room - 2)));
     body.push([span(fit(`r refreshes models: sends one request to ${host()} with the active key`, w, theme), { dim: true })]);
     if (step.step === "key") body.push([], [span("Key: ", { bold: true }), span(`${"*".repeat(Math.min(field.length, Math.max(0, w - 30)))}`), span(` (${field.length} characters)`, { dim: true })]);
     if (step.step === "label") body.push([], [span("Label (optional): ", { bold: true }), span(fit(`${label}_`, w - 20, theme))]);

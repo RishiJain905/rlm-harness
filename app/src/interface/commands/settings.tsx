@@ -103,7 +103,7 @@ export function SettingsScreen(props: ScreenProps) {
     return [span(fit(`${r.key.padEnd(32)} ${shown}`, w, theme))];
   });
   const listHeight = Math.max(1, props.height - 2 - 3);
-  const body: Line[] = listLines(items, sel, listHeight, theme);
+  const body: Line[] = listLines(items, sel, listHeight);
   if (error?.key === row.key) {
     const at = body.findIndex((l) => l[0]?.text === ">");
     body.splice(at + 1, 0, [span(fit(`  ${error.text}`, w, theme), { color: paint(theme, "red") })]);

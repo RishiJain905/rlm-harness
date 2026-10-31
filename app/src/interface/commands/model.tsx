@@ -109,20 +109,20 @@ export function ModelScreen(props: ScreenProps) {
       const model = settings[r].model || (r === "sub" ? SAME : "none picked");
       return [span(fit(`${r.padEnd(5)} ${model}   thinking ${settings[r].thinking}`, w, theme))];
     });
-    body.push(...listLines(rows, sel, 2, theme));
+    body.push(...listLines(rows, sel, 2));
   } else if (step.step === "provider") {
     body.push([span(`Provider for ${step.role}`, { dim: true })]);
-    body.push(...listLines(providers.map((p) => [span(fit(p === SAME ? SAME : `${p.padEnd(12)} ${PROVIDERS.find((d) => d.id === p)!.name}`, w, theme))]), sel, room, theme));
+    body.push(...listLines(providers.map((p) => [span(fit(p === SAME ? SAME : `${p.padEnd(12)} ${PROVIDERS.find((d) => d.id === p)!.name}`, w, theme))]), sel, room));
   } else if (step.step === "model") {
     body.push([span(`Model for ${step.role} from ${step.provider}; type to filter: `, { dim: true }), span(step.filter || " ", { inverse: true })]);
     const rows: Line[] = models.map((m) =>
       m.info ? [span(fit(`${m.id}   window ${formatTokens(m.info.context_window)}   ${price(m.info)}`, w, theme))] : [span(fit(`use "${m.id}" as typed (window and prices unknown)`, w, theme), { dim: true })],
     );
     if (rows.length === 0) body.push([span("  No models. Type an id to use it as written.", { dim: true })]);
-    body.push(...listLines(rows, sel, room, theme));
+    body.push(...listLines(rows, sel, room));
   } else {
     body.push([span(`Thinking for ${step.role} ${step.ref}`, { dim: true })]);
-    body.push(...listLines(THINKING.map((t) => [span(t)]), sel, room, theme));
+    body.push(...listLines(THINKING.map((t) => [span(t)]), sel, room));
   }
   if (message) body.push([], [span(fit(message.text, w, theme), { color: paint(theme, message.error ? "red" : "green") })]);
   return <Frame title="/model" hint="Up/Down  Enter chooses  Esc goes back" body={body} width={w} height={props.height} />;
