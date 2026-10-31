@@ -694,6 +694,13 @@ These scripts live in `F:\Personal\RLM\RLM\scripts\`, never in this repo. They i
 
 Both output folders are git-ignored by one new line in the RLM repo's `.gitignore`, `results/harness-*/`. Step 8 adds it, with Rishi's approval, before anything is written, and step 9 checks that it is there (D-46).
 
+Built at step 8 (2026-10-31). What step 9 can rely on:
+
+- **`scripts/harness_parity.py`** speaks §3-§5 itself: a reader thread feeding an asyncio queue, one write lock, `engine.info` checked for protocol 1 and `TRAINING_HASH`, `RLMH_HOME` set and key-like variables plus git's whole env-config set stripped (D-29, D-62). Step 9's script can take the same shape around the `rlmh` binary.
+- **What the model sees in fenced format** under `training-v4` equals training's bytes for the five rehearsed episodes, up to `timing`, `python-version`, `path-form` and `traceback-path` (the last only line numbers since D-109). The rehearsal ran in a cloud container on episodes training's own code recorded with scripted replies (D-114); the run on the LoRA's own transcripts is the PC's.
+- **The run log's `diff`** keeps `diff()`'s abbreviated index lines; training graded a `--full-index` diff (D-113).
+- **The worker's tracebacks** name `/opt/rlm/repl_worker.py` and `/opt/rlm/repl_tools.py` for its own frames, never the install folder (D-109).
+
 ## 8. Settings schema (`settings.ts`)
 
 `~/.rlm-harness/settings.toml` holds these keys, which `/settings` and `rlmh config` also use. A dotted key is a TOML table path.

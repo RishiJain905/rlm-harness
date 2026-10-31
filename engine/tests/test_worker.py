@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import dataclasses
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -145,6 +146,27 @@ def test_traceback_has_no_worker_frame(tmp_path: Path) -> None:
             assert lines[-1] == "ZeroDivisionError: division by zero"
             r = await w.run_cell("raise ValueError('boom')")
             assert r.error == 'Traceback (most recent call last):\n  File "<repl>", line 1, in <module>\nValueError: boom'
+
+    go(main())
+
+
+def test_traceback_names_training_files(tmp_path: Path, git_repo: Path) -> None:
+    """D-109: the worker's own frames show training's container paths, never the install folder; line numbers stay."""
+    native = str(WORKER_SOURCE.parent)
+
+    async def main() -> None:
+        async with started(tmp_path) as w:  # raised in worker.py's _truncate, as training's oversize error was
+            r = await w.run_cell("llm('x' * 60001)")
+            assert native not in r.error and "/opt/rlm/repl_worker.py" in r.error, r.error
+            assert re.findall(r'File "([^"]+)", line \d+, in (\w+)', r.error) == [
+                ("/opt/rlm/repl_worker.py", "llm"), ("/opt/rlm/repl_worker.py", "_truncate")]
+        async with started(tmp_path, mode="repo", workspace=git_repo, limits=contract.EDIT_LIMITS_V4) as w:
+            r = await w.run_cell("read_file('missing.py')")
+            assert native not in r.error and 'File "/opt/rlm/repl_tools.py", line ' in r.error, r.error
+            assert r.error.splitlines()[-1].startswith("FileNotFoundError")
+            r = await w.run_cell("raise KeyError('/opt/x.py')")  # only frame paths change, never the message
+            assert r.error == ('Traceback (most recent call last):\n  File "<repl>", line 1, in <module>\n'
+                               "KeyError: '/opt/x.py'")
 
     go(main())
 

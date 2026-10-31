@@ -14,7 +14,9 @@ and fd 0 always does. Python's sys.stderr is a hidden buffer that only the run l
 go to a private dup of fd 2, which the engine copies to its stderr.
 
 Dropped from training: the PID 1 supervisor, Landlock, the Docker paths, the Unix socket, the edit-metrics log,
-_ImportWatch, and the ctypes and gc blocks. The audit hook asks the engine instead of blocking (hooks.py).
+_ImportWatch, and the ctypes and gc blocks. The audit hook asks the engine instead of blocking (hooks.py). Added: a
+traceback names this folder's files as training's container did, /opt/rlm/repl_worker.py and /opt/rlm/repl_tools.py
+(_training_names, D-109); line numbers stay this copy's own.
 """
 
 import contextlib
@@ -23,6 +25,7 @@ import json
 import math
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -306,10 +309,27 @@ def _point_at_null(fds: tuple) -> None:
         os.close(devnull)
 
 
+# Training's names for this folder's files in a traceback the model sees (D-109): the install path is not part of the
+# task, and the model trained on these. hooks.py's frame stands for training's audit hook, which lived in the worker.
+_TRAINING_FILES = {os.path.normcase(os.path.join(_HERE, name)): shown for name, shown in (
+    ("worker.py", "/opt/rlm/repl_worker.py"), ("hooks.py", "/opt/rlm/repl_worker.py"),
+    ("tools.py", "/opt/rlm/repl_tools.py"))}
+_FRAME_RE = re.compile(r'^(\s*File )"([^"\n]+)"(, line \d+)', re.M)
+
+
+def _training_names(text: str) -> str:
+    def swap(match: re.Match) -> str:
+        path = match.group(2)
+        shown = None if path.startswith("<") else _TRAINING_FILES.get(os.path.normcase(os.path.abspath(path)))
+        return f'{match.group(1)}"{shown}"{match.group(3)}' if shown else match.group(0)
+
+    return _FRAME_RE.sub(swap, text)
+
+
 def _format_error(exc: BaseException) -> str:
     tb = exc.__traceback__.tb_next if exc.__traceback__ is not None else None  # drop the worker's own frame
     lines = "".join(traceback.format_exception(type(exc), exc, tb)).splitlines()
-    text = "\n".join(lines[-TRACEBACK_LINES:])
+    text = _training_names("\n".join(lines[-TRACEBACK_LINES:]))
     if len(text) > OUTPUT_MAX_CHARS:
         text = text[:OUTPUT_MAX_CHARS] + f"\n[... {len(text) - OUTPUT_MAX_CHARS} more characters truncated]"
     return text
