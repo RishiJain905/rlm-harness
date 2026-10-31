@@ -222,7 +222,7 @@ All use `tmp_path` as `home`.
 - [x] `uv run --project engine pytest engine/tests/test_callformat.py -q` passes: fenced, `<function=python>` and native give the same code, and the observation goes back as a tool message after a tool call and as a user message otherwise.
 - [x] `uv run --project engine pytest engine/tests/test_profiles.py -q` passes: `training-v4` hashes to `TRAINING_HASH`, and `test_default_differs_only_by_guidance` shows the default prompt is training's plus its guidance block and nothing else.
 - [x] `service.contract_info(...)` (task 7) prints `contract` `v4`, equal `contract_hash` and `training_hash`, and both built-in profiles. `rlmh info` shows the same fields (step 2's command).
-- [ ] `uv run --project engine pytest engine/tests -q` passes on Windows 11 on Rishi's PC, and in CI on macOS, Windows and Linux once Rishi pushes.
+- [x] *(CI part: run 41148225933 green on all three OSes. The Windows 11 PC run was not done.)* `uv run --project engine pytest engine/tests -q` passes on Windows 11 on Rishi's PC, and in CI on macOS, Windows and Linux once Rishi pushes.
 - [x] *(Plus the docs the hand-off and CLAUDE.md ask for: decisions.md, architecture.md, this spec, CLAUDE.md and the sol-qa skill.)* `git status --short` in `rlm-harness` lists only the Deliverables paths, the step 2 tests edited in task 1 and progress.md; nothing outside `rlm-harness/` changed.
 
 ## Out of scope
