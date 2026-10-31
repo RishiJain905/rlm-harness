@@ -350,11 +350,9 @@ export class Gateway {
     const modelKey = `${def.id}\0${p.model.model}`;
     const dropped = this.dropped.get(modelKey) ?? new Set<string>();
     const replay = (m: Extract<Message, { role: "assistant" }>) => (m.tool_call ? run.replay.get(replayKey(m.content, m.tool_call.id)) : undefined);
-    if (def.client === "anthropic") {
-      const markers = p.role === "root" || (ticket?.marker ?? false);
-      return buildAnthropicRequest(p, { shape: this.shapes.get(modelKey), dropped, markers, replay });
-    }
-    return buildOpenAIRequest(p, { provider: def, info: c.info, dropped, replay });
+    const markers = p.role === "root" || (ticket?.marker ?? false);
+    if (def.client === "anthropic") return buildAnthropicRequest(p, { shape: this.shapes.get(modelKey), dropped, markers, replay });
+    return buildOpenAIRequest(p, { provider: def, info: c.info, dropped, replay, markers });
   }
 
   /** One streamed attempt with its idle and total timeouts. */

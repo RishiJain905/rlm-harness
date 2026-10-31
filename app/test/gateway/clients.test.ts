@@ -49,7 +49,7 @@ afterEach(() => {
 
 describe("golden bodies", () => {
   test("openai", () => {
-    const body = buildOpenAIRequest(p("openai", "gpt-4.1"), { provider: provider("openai")!, dropped: new Set(), replay: noReplay });
+    const body = buildOpenAIRequest(p("openai", "gpt-4.1"), { provider: provider("openai")!, dropped: new Set(), replay: noReplay, markers: true });
     const expected = {
       model: "gpt-4.1",
       messages: [
@@ -69,9 +69,9 @@ describe("golden bodies", () => {
       stream_options: { include_usage: true },
     };
     expect(JSON.stringify(body)).toBe(JSON.stringify(expected));
-    const again = buildOpenAIRequest(p("openai", "gpt-4.1"), { provider: provider("openai")!, dropped: new Set(), replay: noReplay });
+    const again = buildOpenAIRequest(p("openai", "gpt-4.1"), { provider: provider("openai")!, dropped: new Set(), replay: noReplay, markers: true });
     expect(JSON.stringify(again)).toBe(JSON.stringify(body));
-    const noTools = buildOpenAIRequest(p("deepseek", "x", { tools: [] }), { provider: provider("deepseek")!, dropped: new Set(), replay: noReplay });
+    const noTools = buildOpenAIRequest(p("deepseek", "x", { tools: [] }), { provider: provider("deepseek")!, dropped: new Set(), replay: noReplay, markers: true });
     expect("tools" in noTools).toBe(false);
     expect("tool_choice" in body).toBe(false);
   });
@@ -145,7 +145,7 @@ describe("mapping tables", () => {
     { id: "openai", model: "gpt-4.1", path: "/v1/chat/completions", host: "api.openai.com", maxField: "max_completion_tokens", temperature: true, cache: { prompt_cache_key: "r_0123456789ab" } },
     { id: "openai", model: "gpt-5", path: "/v1/chat/completions", host: "api.openai.com", maxField: "max_completion_tokens", temperature: false, cache: { prompt_cache_key: "r_0123456789ab" } },
     { id: "deepseek", model: "deepseek-v4-pro", path: "/chat/completions", host: "api.deepseek.com", maxField: "max_tokens", temperature: true, cache: {} },
-    { id: "openrouter", model: "anthropic/claude-sonnet-5", path: "/api/v1/chat/completions", host: "openrouter.ai", maxField: "max_tokens", temperature: true, cache: { session_id: "r_0123456789ab" } },
+    { id: "openrouter", model: "anthropic/claude-sonnet-5", path: "/api/v1/chat/completions", host: "openrouter.ai", maxField: "max_tokens", temperature: true, cache: { session_id: "r_0123456789ab", cache_control: { type: "ephemeral" } } },
     { id: "gemini", model: "gemini-3.5-flash", path: "/v1beta/openai/chat/completions", host: "generativelanguage.googleapis.com", maxField: "max_tokens", temperature: true, cache: {} },
     { id: "local", model: "qwen", path: "/v1/chat/completions", host: "localhost:8000", maxField: "max_tokens", temperature: true, cache: {} },
     { id: "custom", model: "m", path: "/v2/chat/completions", host: "custom.example:9000", maxField: "max_tokens", temperature: true, cache: {} },

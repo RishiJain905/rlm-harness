@@ -97,6 +97,30 @@ describe("cache keys", () => {
       ["localhost:8000", undefined, undefined],
     ]);
   });
+
+  test("OpenRouter's Anthropic models: top-level cache_control on root calls only, message bytes unchanged (D-117)", async () => {
+    r = await rig({ server, keys: ["openrouter"] });
+    server.script(() => openaiStream({ text: "ok" }));
+    const one = { id: "b1", index: 0, size: 1 };
+    const conv: ModelCompleteParams["messages"] = [{ role: "system", content: "SYS" }, { role: "user", content: "first" }];
+    for (const model of ["anthropic/claude-haiku-5.5", "~anthropic/claude-sonnet-latest", "openai/gpt-5", "deepseek/deepseek-v4.1-flash-1017"]) {
+      await r.gateway.complete(params(ref("openrouter", model), { messages: conv }));
+      await r.gateway.complete(sub(ref("openrouter", model), "Summarize.", one));
+    }
+    expect(server.requests.map((q) => [q.body.model, q.body.cache_control ?? null])).toEqual([
+      ["anthropic/claude-haiku-5.5", { type: "ephemeral" }],
+      ["anthropic/claude-haiku-5.5", null], // a plain sub-call: a unique prompt would pay the write and never read it
+      ["~anthropic/claude-sonnet-latest", { type: "ephemeral" }],
+      ["~anthropic/claude-sonnet-latest", null],
+      ["openai/gpt-5", null], // caches on its own; session_id keeps it on one provider
+      ["openai/gpt-5", null],
+      ["deepseek/deepseek-v4.1-flash-1017", null],
+      ["deepseek/deepseek-v4.1-flash-1017", null],
+    ]);
+    // the field is the only marker: messages keep the engine's strings, byte for byte
+    for (const q of server.requests) expect(countMarkers(q.body.messages)).toBe(0);
+    expect(server.requests[0]!.body.messages).toEqual([{ role: "system", content: "SYS" }, { role: "user", content: "first" }]);
+  });
 });
 
 describe("sharedPrefix and planBatch", () => {

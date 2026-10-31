@@ -701,6 +701,12 @@ Built at step 8 (2026-10-31). What step 9 can rely on:
 - **The run log's `diff`** keeps `diff()`'s abbreviated index lines; training graded a `--full-index` diff (D-113).
 - **The worker's tracebacks** name `/opt/rlm/repl_worker.py` and `/opt/rlm/repl_tools.py` for its own frames, never the install folder (D-109).
 
+Built at step 9 (2026-10-31). What step 10 can rely on:
+
+- **The compiled `rlmh` finished read-mode batches on two real models** through OpenRouter: 10 runs, no infra error, no rerun, $0.23 in all. Slot a (`deepseek/deepseek-v4.1-flash-1017`) took the native `python` tool through `call_format = auto`, and slot b (`anthropic/claude-haiku-5.5`) was forced to fenced text (S-32). The run was on Linux in a cloud container, with `RLMH_ENGINE` pointing at the source engine; the Windows run and the installed engine are step 10's.
+- **`scripts/harness_smoke.py`** drives the binary only as an argument list (`rlmh batch … --json`), passes its own environment unchanged, and folds each `--json` line as it arrives. Terminating `rlmh` mid-batch, as its cost cap does, left no engine or worker process on Linux: the engine saw its stdin close and exited (§1).
+- **Caching through OpenRouter (D-117):** the smoke run's root cache hit rate was 77% for the DeepSeek model and 0 for the Anthropic one, because the gateway sent OpenRouter only `session_id` (D-38) and OpenRouter caches Anthropic models only with `cache_control`. The gateway now adds a top-level `cache_control: {type: "ephemeral"}` to OpenRouter requests for `anthropic/` and `~anthropic/` models whenever the native Anthropic client would place markers (root calls, and batch calls sharing one whole prompt); message bytes don't change. A live check on one smoke task then read 82% of the root's input from cache. `OpenAIContext` gained `markers`; no wire message changed.
+
 ## 8. Settings schema (`settings.ts`)
 
 `~/.rlm-harness/settings.toml` holds these keys, which `/settings` and `rlmh config` also use. A dotted key is a TOML table path.

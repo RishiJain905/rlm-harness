@@ -1,4 +1,4 @@
-// KV cache: builds request bytes for every OpenAI-compatible provider; same input, same bytes (no clock, no randomness, fixed key order: model, messages, tools, max tokens, temperature, thinking fields, cache field, stream, stream_options), replay only from what the provider sent.
+// KV cache: builds request bytes for every OpenAI-compatible provider; same input, same bytes (no clock, no randomness, fixed key order: model, messages, tools, max tokens, temperature, thinking fields, cache fields, stream, stream_options), replay only from what the provider sent.
 // The Chat Completions mapping (spec step 5) and the stream reader, through the openai SDK.
 
 import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError, type OpenAI } from "openai";
@@ -19,7 +19,12 @@ export interface OpenAIContext {
   dropped: ReadonlySet<string>;
   /** The replay to attach to this assistant message, if any (D-33). */
   replay(m: Extract<Message, { role: "assistant" }>): Replay | undefined;
+  /** Cache markers: root calls, and batch calls that share one whole prompt (cache.ts). Only OpenRouter's Anthropic models use them (D-117). */
+  markers: boolean;
 }
+
+/** OpenRouter model ids served by Anthropic, `~anthropic/…` aliases included. */
+const OPENROUTER_ANTHROPIC = /^~?anthropic\//;
 
 /** Pure: the Chat Completions body for one model.complete request. */
 export function buildOpenAIRequest(p: ModelCompleteParams, ctx: OpenAIContext): Record<string, unknown> {
@@ -51,7 +56,11 @@ export function buildOpenAIRequest(p: ModelCompleteParams, ctx: OpenAIContext): 
       break;
   }
   if (id === "openai") body.prompt_cache_key = p.run_id;
-  if (id === "openrouter") body.session_id = p.run_id;
+  if (id === "openrouter") {
+    body.session_id = p.run_id;
+    // Anthropic caches only with cache_control: the top-level field puts the breakpoint on the last block and moves it as the conversation grows (D-117)
+    if (ctx.markers && OPENROUTER_ANTHROPIC.test(p.model.model)) body.cache_control = { type: "ephemeral" };
+  }
   body.stream = true;
   if (keep("stream_options")) body.stream_options = { include_usage: true };
   return body;
