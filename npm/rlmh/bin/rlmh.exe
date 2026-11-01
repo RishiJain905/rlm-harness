@@ -18,16 +18,16 @@ case $(uname -s) in
   Linux) keys="linux-x64" ;;
   *) keys="" ;;
 esac
-# npm nests the platform package inside rlmh; Bun and pnpm put it beside rlmh
+# npm nests the platform package inside rlm-harness; Bun and pnpm put it beside rlm-harness
 for dir in "$pkg/node_modules/@rlmh" "$pkg/../@rlmh"; do
   for key in $keys; do
     bin=$dir/$key/bin/rlmh
     if [ -f "$bin" ]; then
-      echo 'rlmh: the install step did not run; "bun pm -g trust rlmh" makes this permanent.' >&2
+      echo 'rlmh: the install step did not run; "bun pm -g trust rlm-harness" makes this permanent.' >&2
       [ -x "$bin" ] || chmod +x "$bin" 2>/dev/null
       exec "$bin" "$@"
     fi
   done
 done
-echo "rlmh: no compiled rlmh for $(uname -sm) next to $pkg. Reinstall without --omit=optional: npm i -g rlmh" >&2
+echo "rlmh: no compiled rlmh for $(uname -sm) next to $pkg. Reinstall without --omit=optional: npm i -g rlm-harness" >&2
 exit 1

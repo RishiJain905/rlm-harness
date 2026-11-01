@@ -37,7 +37,7 @@ function temp(): string {
  */
 function layout(where: "nested" | "beside" | "none"): { modules: string; pkg: string; platform: string } {
   const modules = join(temp(), "node_modules");
-  const pkg = join(modules, "rlmh");
+  const pkg = join(modules, "rlm-harness");
   mkdirSync(join(pkg, "bin"), { recursive: true });
   copyFileSync(join(NPM, "rlmh", "install.js"), join(pkg, "install.js"));
   copyFileSync(join(NPM, "rlmh", "bin", "rlmh.exe"), join(pkg, "bin", "rlmh.exe"));
@@ -59,7 +59,7 @@ function postinstall(pkg: string) {
 describe("templates", () => {
   test("rlmh_package_shape", () => {
     const pkg = JSON.parse(readFileSync(join(NPM, "rlmh", "package.json"), "utf8"));
-    expect(pkg.name).toBe("rlmh");
+    expect(pkg.name).toBe("rlm-harness");
     expect(pkg.bin).toEqual({ rlmh: "bin/rlmh.exe" });
     expect(pkg.scripts).toEqual({ postinstall: "node install.js" });
     expect(pkg.dependencies).toBeUndefined();
@@ -119,7 +119,7 @@ describe.skipIf(WIN || !lib.PLATFORMS.includes(HOST))("placeholder fallback with
       const { pkg } = layout(where);
       const r = Bun.spawnSync(["sh", join(pkg, "bin", "rlmh.exe"), "run", "--json"], { stdout: "pipe", stderr: "pipe" });
       expect(r.stdout.toString()).toBe("real rlmh run --json\n");
-      expect(r.stderr.toString()).toContain("bun pm -g trust rlmh");
+      expect(r.stderr.toString()).toContain("bun pm -g trust rlm-harness");
       expect(r.exitCode).toBe(0);
     });
   }

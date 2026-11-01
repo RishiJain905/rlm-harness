@@ -25,7 +25,7 @@ irm https://github.com/RishiJain905/rlm-harness/releases/latest/download/install
 
 On first run, `rlmh` asks before it downloads Python 3.12 through uv.
 
-The npm packages are built but not published yet. From a later release, `npm i -g rlmh` or `bun add -g --trust rlmh` will install the same compiled binary ([design](documentation/v0/npm-install.md)).
+Or through npm (from v0.1.1): `npm i -g rlm-harness`, or `bun add -g --trust rlm-harness`. Either installs the same compiled binary, and the command is still `rlmh` ([design](documentation/v0/npm-install.md)).
 
 **Status:** v0 is being built in the open. The skeleton works: `rlmh info` starts the Python engine and talks to it over stdio, and CI builds `rlmh` for macOS, Windows and Linux. The engine holds an exact copy of the trained prompt (its hash matches training's), both call formats and the built-in profiles, and it can run cells in a native Python REPL with the training tools, a sub-call bridge and permission prompts for writes, shell commands and network use. The app has a model gateway for seven providers, and whole runs work end to end from the command line: `rlmh run` (one question or one repo task), `rlmh batch` (a tasks file) and `rlmh config`, with `--json` for scripts and a run log line per run. Bare `rlmh` opens the interactive app: ask a question (`@file` reads those files, no mention works on the folder), watch each turn and every sub-call stream into the sub-call panel, answer permission prompts from the keyboard, and use `/providers`, `/model`, `/settings`, `/permissions`, `/context` and `/runs`. Parity with training comes next ([progress](documentation/v0/progress.md)).
 

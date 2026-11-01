@@ -7,14 +7,14 @@ This package installs the compiled `rlmh` binary for your platform: macOS arm64 
 ## Install
 
 ```
-npm i -g rlmh
+npm i -g rlm-harness
 ```
 
 ```
-bun add -g --trust rlmh
+bun add -g --trust rlm-harness
 ```
 
-- **Bun needs `--trust`.** Bun skips install scripts unless told otherwise, and on Windows `rlmh` cannot start without its install step. If you already installed without it, run `bun pm -g trust rlmh`.
+- **Bun needs `--trust`.** Bun skips install scripts unless told otherwise, and on Windows `rlmh` cannot start without its install step. If you already installed without it, run `bun pm -g trust rlm-harness`.
 - **Without Node or Bun**, use the one-line installers on the [releases page](https://github.com/RishiJain905/rlm-harness/releases/latest).
 
 ## What the install does
@@ -26,13 +26,13 @@ On first run, `rlmh` asks before it downloads Python 3.12, through the bundled u
 ## Uninstall
 
 ```
-npm rm -g rlmh
+npm rm -g rlm-harness
 ```
 
 or
 
 ```
-bun rm -g rlmh
+bun rm -g rlm-harness
 ```
 
 This leaves `~/.rlm-harness/` in place, holding Python, the engine, settings and run logs. To remove everything:

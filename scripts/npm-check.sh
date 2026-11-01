@@ -87,13 +87,13 @@ check_command() {
   echo "$name: $got"
 }
 
-say "npm i -g rlmh"
-npm install --silent --no-audit --no-fund -g --prefix "$work/npm" rlmh >/dev/null
+say "npm i -g rlm-harness"
+npm install --silent --no-audit --no-fund -g --prefix "$work/npm" rlm-harness >/dev/null
 if [ "$win" = 1 ]; then
   shim="$work/npm/rlmh.cmd"
-  grep -q 'node_modules\\rlmh\\bin\\rlmh.exe' "$shim" || fail "npm's shim does not start bin\\rlmh.exe: $(cat "$shim")"
+  grep -q 'node_modules\\rlm-harness\\bin\\rlmh.exe' "$shim" || fail "npm's shim does not start bin\\rlmh.exe: $(cat "$shim")"
   ! grep -qi 'node' <(grep -v node_modules "$shim") || fail "npm's shim starts node: $(cat "$shim")"
-  target="$work/npm/node_modules/rlmh/bin/rlmh.exe"
+  target="$work/npm/node_modules/rlm-harness/bin/rlmh.exe"
   check_command npm cmd //c "$(native "$shim")"
 else
   target=$(cd "$work/npm/bin" && node -p 'require("fs").realpathSync("rlmh")')
@@ -103,21 +103,21 @@ cmp -s "$target" "$assets/$asset" || fail "npm: the command's target is not $ass
 [ -e "$(dirname "$target")/uv$exe" ] || fail "npm: no uv beside the binary"
 npm_bin=$target
 
-say "bun add -g --trust rlmh"
-BUN_INSTALL="$work/bun" bun add -g --trust rlmh >/dev/null 2>&1 || fail "bun add -g --trust rlmh failed"
+say "bun add -g --trust rlm-harness"
+BUN_INSTALL="$work/bun" bun add -g --trust rlm-harness >/dev/null 2>&1 || fail "bun add -g --trust rlm-harness failed"
 check_command "bun --trust" "$work/bun/bin/rlmh$exe"
-cmp -s "$work/bun/install/global/node_modules/rlmh/bin/rlmh.exe" "$assets/$asset" ||
+cmp -s "$work/bun/install/global/node_modules/rlm-harness/bin/rlmh.exe" "$assets/$asset" ||
   fail "bun --trust: bin/rlmh.exe is not $asset byte for byte"
 
-say "bun add -g rlmh (install step blocked)"
-BUN_INSTALL="$work/bun-plain" bun add -g rlmh >/dev/null 2>&1 || fail "bun add -g rlmh failed"
+say "bun add -g rlm-harness (install step blocked)"
+BUN_INSTALL="$work/bun-plain" bun add -g rlm-harness >/dev/null 2>&1 || fail "bun add -g rlm-harness failed"
 if [ "$win" = 1 ]; then
   # Windows cannot run the placeholder: documented, and --trust is the fix
   ! "$work/bun-plain/bin/rlmh.exe" --version >/dev/null 2>&1 || fail "bun without --trust unexpectedly ran on Windows"
   echo "bun plain: fails as documented"
 else
   check_command "bun plain (sh fallback)" "$work/bun-plain/bin/rlmh"
-  grep -q 'bun pm -g trust rlmh' "$work/stderr" || fail "the fallback did not print its hint"
+  grep -q 'bun pm -g trust rlm-harness' "$work/stderr" || fail "the fallback did not print its hint"
 fi
 
 [ "$quick" = --quick ] && {

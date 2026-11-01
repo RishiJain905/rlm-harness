@@ -4,6 +4,8 @@
 >
 > Each of these still needs Rishi's OK: creating the `@rlmh` org and the names, the `npm` environment and the `NPM_PUBLISH` variable, any push, and any publish.
 >
+> **The package is `rlm-harness`, not `rlmh` (D-151).** npm refused `rlmh` on the first publish ("too similar to existing package rlp"). The command is still `rlmh`, and the platform packages are still `@rlmh/<platform>-<arch>`. Elsewhere in this doc, `rlmh` as a package name (in `npm i -g rlmh`, `bun add -g --trust rlmh`, `bun pm -g trust rlmh`) now means `rlm-harness`.
+>
 > **v0.1.0 cannot be published to npm.** Its binary predates the `findUv` change, so npm starts at the next release. "As built" at the end lists what differs from the design.
 
 ## Goal

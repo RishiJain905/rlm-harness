@@ -1,5 +1,5 @@
 {
-  "name": "rlmh",
+  "name": "rlm-harness",
   "version": "0.0.0",
   "description": "RLM harness: a model-agnostic harness for Recursive Language Models. This package installs the compiled rlmh binary for your platform.",
   "license": "MIT",

@@ -35,7 +35,7 @@ function packageDir(key, resolve) {
   try {
     return path.dirname(resolve(`${name}/package.json`));
   } catch {
-    throw new Error(`${name} is not installed. Reinstall without --omit=optional or --no-optional: npm i -g rlmh`);
+    throw new Error(`${name} is not installed. Reinstall without --omit=optional or --no-optional: npm i -g rlm-harness`);
   }
 }
 
