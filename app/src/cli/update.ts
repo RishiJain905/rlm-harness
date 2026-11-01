@@ -242,7 +242,7 @@ export async function runUpdate(o: UpdateOptions): Promise<number> {
   const binary = join(binDir(o.home), platform === "win32" ? "rlmh.exe" : "rlmh");
   if (!o.check && !samePath(execPath, binary, platform)) {
     if (/[\\/]node_modules[\\/]/.test(execPath)) {
-      o.err("This rlmh was installed with npm or bun; update it with npm i -g rlmh@latest (or bun add -g --trust rlmh@latest).");
+      o.err("This rlmh was installed with npm or bun; update it with npm i -g rlm-harness@latest (or bun add -g --trust rlm-harness@latest).");
       return 2;
     }
     o.err(

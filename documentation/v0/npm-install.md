@@ -189,7 +189,7 @@ The parent session also found that `bun --no-env-file --config=<path> main.ts` b
    1. Download the `npm-tarballs` artifact from that release run's `npm` job, or from a `publish: false` dispatch of `npm.yml`.
    2. Run `npm publish <file> --access public` for the four `rlmh-<platform>-*.tgz` files, then for `rlmh-<version>.tgz`.
 4. **Trusted publishing, within 2 days of the next tag.** A new trusted-publisher configuration expires if it has not published successfully within 2 days, so do this step just before tagging the release after v0.1.1.
-   - On each of the five packages' **Settings** page on npmjs.com, add a GitHub Actions trusted publisher: owner `RishiJain905`, repository `rlm-harness`, workflow `release.yml` (npm checks the calling workflow), environment `npm`.
+   - On each of the five packages' **Settings** page on npmjs.com, add a GitHub Actions trusted publisher: owner `RishiJain905`, repository `rlm-harness`, workflow `release.yml` (npm checks the calling workflow), environment `npm`, and under **Allowed actions** tick direct `npm publish` (only `npm stage publish` is allowed by default, and `npm.yml` runs `npm publish`). The five packages are `rlm-harness` and the four `@rlmh/<platform>-<arch>`. npm checks none of these fields when you save, and they are case-sensitive, so a typo shows only as a failed publish.
    - Add `npm.yml` the same way only when you plan to publish through a dispatch run.
    - Once a CI publish has worked, npm can be set to disallow token publishing.
 5. **Turn it on.** Set the repo variable `NPM_PUBLISH` to `1` (**Settings → Secrets and variables → Actions → Variables**), then push the tag. From then on each tag publishes after the `npm` environment's approval.

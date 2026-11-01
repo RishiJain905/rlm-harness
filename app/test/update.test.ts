@@ -146,7 +146,7 @@ describe("where it can run", () => {
     const r = rig();
     const npmBin = join(temp(), "node_modules", "@rlmh", "win32-x64", "bin", "rlmh.exe");
     expect(await runUpdate({ ...r.opts, execPath: npmBin })).toBe(2);
-    expect(said(r.err)).toContain("npm i -g rlmh@latest");
+    expect(said(r.err)).toContain("npm i -g rlm-harness@latest");
     expect(r.gh.requests).toEqual([]);
     expect(r.runs).toEqual([]);
   });
