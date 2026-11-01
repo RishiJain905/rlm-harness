@@ -49,18 +49,29 @@ jobs:
         working-directory: app
         run: bun install --frozen-lockfile
       - name: Typecheck
+        # before the engine is embedded: a fresh checkout must typecheck without build/engine-files.ts
         working-directory: app
         run: bun run typecheck
+      - name: Embed the engine
+        working-directory: app
+        run: bun run scripts/embed-engine.ts
       - name: App tests
         working-directory: app
         run: bun test
       - name: Compile rlmh
         working-directory: app
-        # The two flags stop the binary loading a .env or bunfig.toml from the folder it runs in (D-44).
+        # The two autoload flags stop the binary loading a .env or bunfig.toml from the folder it runs
+        # in (D-44); --reject-unresolved fails the build if build/engine-files.ts is missing (step 10).
         # On Windows, bun build does not create a missing output folder.
         run: |
           mkdir -p ../dist
-          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile "../$BIN"
+          bun build --compile --reject-unresolved --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts --outfile "../$BIN"
+      - name: The binary carries the engine
+        # --reject-unresolved does not catch a missing literal import() in Bun 1.4.4, so check the bytes
+        run: |
+          bundle=$(sed -n 's/^export const ENGINE_BUNDLE_SHA256 = "\(.*\)";$/\1/p' app/build/engine-files.ts)
+          test -n "$bundle"
+          grep -q "$bundle" "$BIN"
 
       - name: Smoke --version
         run: |
@@ -97,3 +108,63 @@ jobs:
           name: rlmh-${{ matrix.target }}
           path: ${{ env.BIN }}
           if-no-files-found: error
+
+  # Step 10: the one-line install on clean runners, from a local server holding this build's binary.
+  # The only job that touches the network on purpose (uv downloads Python 3.12); it uses no key.
+  install:
+    name: install ${{ matrix.leg }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            leg: linux-x64
+            target: linux-x64
+            uv: "0"
+          - os: ubuntu-latest
+            leg: linux-x64 (uv on PATH)
+            target: linux-x64
+            uv: "1"
+          - os: macos-14
+            leg: darwin-arm64
+            target: darwin-arm64
+            uv: "0"
+          - os: windows-latest
+            leg: windows-x64
+            target: windows-x64
+            uv: "0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: rlmh-${{ matrix.target }}
+          path: served
+      - if: matrix.uv == '1'
+        uses: astral-sh/setup-uv@v7
+      - name: Lint install.sh
+        if: matrix.os == 'ubuntu-latest' && matrix.uv == '0'
+        run: |
+          shellcheck install.sh
+          ! grep -q $'\r' install.sh
+      - name: Parse install.ps1 under Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path install.ps1), [ref]$null, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.ToString() }; exit 1 }
+      - name: Install, set up and run
+        env:
+          UV_PRESENT: ${{ matrix.uv }}
+        run: |
+          cp install.sh install.ps1 served/
+          (cd served && sha256sum rlmh-* install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS)
+          bash scripts/install-check.sh served

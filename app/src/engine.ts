@@ -1,11 +1,12 @@
 // KV cache: none
 // Finds and starts the Python engine (architecture §7.1, D-18) and checks its protocol (D-36).
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Link } from "./link.ts";
+import { engineDir } from "./paths.ts";
 import type { EngineInfo } from "./protocol.ts";
-import { PROTOCOL_VERSION } from "./version.ts";
+import { APP_VERSION, PROTOCOL_VERSION } from "./version.ts";
 
 export interface EngineCommand {
   cmd: string[];
@@ -20,10 +21,22 @@ export interface EngineProcess {
   kill(): void;
 }
 
+/** `<home>/engine/<version>/.installed.json`, written last by `rlmh setup` (architecture §9). */
+export interface Installed {
+  app_version: string;
+  bundle_sha256: string;
+  python: string;
+  python_version: string;
+  installed_at: string;
+}
+
 export class EngineNotFound extends Error {
-  constructor(message: string) {
+  /** True when `rlmh setup` already printed why, so the caller adds nothing. */
+  readonly reported: boolean;
+  constructor(message: string, opts: { reported?: boolean } = {}) {
     super(message);
     this.name = "EngineNotFound";
+    this.reported = opts.reported ?? false;
   }
 }
 
@@ -70,12 +83,17 @@ export function splitCommand(line: string): string[] {
 }
 
 /** The given env minus key-like names and git's env config. */
-function stripKeys(env: Record<string, string | undefined>): Record<string, string> {
+export function stripKeys(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
     if (value !== undefined && !KEY_LIKE.test(name) && !GIT_ENV_CONFIG.test(name)) out[name] = value;
   }
   return out;
+}
+
+/** The env every engine command carries: key-like names stripped, RLMH_HOME set, UTF-8 and unbuffered. */
+export function engineEnv(home: string, given: Record<string, string | undefined>): Record<string, string> {
+  return { ...stripKeys(given), RLMH_HOME: home, PYTHONUTF8: "1", PYTHONUNBUFFERED: "1" };
 }
 
 /**
@@ -84,7 +102,7 @@ function stripKeys(env: Record<string, string | undefined>): Record<string, stri
  */
 export function findEngine(opts: { home: string; env?: Record<string, string | undefined>; sourceDir?: string }): EngineCommand {
   const given = opts.env ?? process.env;
-  const env = { ...stripKeys(given), RLMH_HOME: opts.home, PYTHONUTF8: "1", PYTHONUNBUFFERED: "1" };
+  const env = engineEnv(opts.home, given);
   const override = given.RLMH_ENGINE ?? "";
   if (override.trim() !== "") {
     let cmd = splitCommand(override);
@@ -99,7 +117,7 @@ export function findEngine(opts: { home: string; env?: Record<string, string | u
       env,
     };
   }
-  const installed = findInstalledEngine(opts.home);
+  const installed = installedEngine(opts.home, env);
   if (installed !== null) return installed;
   throw new EngineNotFound(
     "no engine found: set RLMH_ENGINE to an engine command, or run `rlmh setup` to install one",
@@ -113,9 +131,26 @@ function sourceRoot(dir: string): string | null {
   return existsSync(join(root, "engine", "pyproject.toml")) ? root : null;
 }
 
-// step 10: read <home>/engine/<version>/.installed.json and return its command.
-function findInstalledEngine(_home: string): EngineCommand | null {
-  return null;
+/** The marker in an engine folder, or null when it is missing or unreadable. */
+export function readInstalled(dir: string): Installed | null {
+  try {
+    const marker = JSON.parse(readFileSync(join(dir, ".installed.json"), "utf8"));
+    return typeof marker?.python === "string" && marker.python !== "" ? (marker as Installed) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Item 3: this version's installed engine, when its marker parses and both its Python and
+ * rlm_engine/__main__.py exist. -E ignores PYTHON* variables, so -X utf8 decides UTF-8 mode (D-42);
+ * there is no -I, so -m finds the package through the cwd.
+ */
+export function installedEngine(home: string, env: Record<string, string>): EngineCommand | null {
+  const dir = engineDir(APP_VERSION, home);
+  const marker = readInstalled(dir);
+  if (marker === null || !existsSync(marker.python) || !existsSync(join(dir, "rlm_engine", "__main__.py"))) return null;
+  return { cmd: [marker.python, "-E", "-s", "-X", "utf8", "-m", "rlm_engine", "serve"], cwd: dir, env };
 }
 
 /** Start the engine with all three stdio piped. Its env is cmd.env merged over process.env, key-like names stripped again. */

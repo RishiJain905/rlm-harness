@@ -58,6 +58,7 @@ rlm-harness/
   .gitignore                         exists  +2 adds *.bun-build, *.tsbuildinfo; .bun/ stays in .git/info/exclude
   .gitattributes                     exists  +2 ◆ adds * text=auto eol=lf, so hashes and profiles match on every OS (D-43); keeps scripts/*.sh LF
   scripts/verify.ps1, verify.sh      exists  the verify gate (see CLAUDE.md); gains stages as engine/ and app/ land
+  scripts/install-check.sh           10 ◆    the CI install job's checks for one OS, runnable off CI (D-127)
   protocol/examples.json             2 ◆     one example of every method, result, error and event (D-02)
   install.sh, install.ps1            10
   app/
@@ -339,8 +340,14 @@ export interface EngineProcess { link: Link; exited: Promise<number>; stderrTail
 export function startEngine(cmd: EngineCommand, opts?: { onStderr?: (line: string) => void }): EngineProcess; // env merged over process.env, key-like names and git's env config stripped again (D-53, D-62)
 export function splitCommand(line: string): string[];      // quotes honoured, backslashes literal
 export function fetchInfo(link: Link): Promise<EngineInfo>; // engine.info; throws ProtocolMismatch (D-36)
-export class EngineNotFound extends Error {}
+export class EngineNotFound extends Error { constructor(message: string, opts?: { reported?: boolean }); readonly reported: boolean } // reported: setup already said why (D-124)
 export class ProtocolMismatch extends Error {}
+// step 10 (D-122, D-124)
+export interface Installed { app_version: string; bundle_sha256: string; python: string; python_version: string; installed_at: string }
+export function stripKeys(env: Record<string, string | undefined>): Record<string, string>;     // D-29, D-62
+export function engineEnv(home: string, given: Record<string, string | undefined>): Record<string, string>; // what every EngineCommand carries
+export function readInstalled(dir: string): Installed | null;                                    // <dir>/.installed.json
+export function installedEngine(home: string, env: Record<string, string>): EngineCommand | null; // item 3
 ```
 
 - **`exited`** resolves with the engine's exit code once its stdout has reached EOF (at most 1 s after the exit), and then the link is closed (D-57).
@@ -710,6 +717,29 @@ Built at step 9 (2026-10-31). What step 10 can rely on:
 - **OpenRouter endpoint pins (D-120) and billed cost (D-121):** each conversation (routing key) is pinned to the endpoint that first served it, or to the one named in the model ref after `@`; `call.end` and `gateway.call` carry `endpoint`; OpenRouter calls cost what OpenRouter billed.
 - **Routing keys (D-118):** sub-calls send `<run id>-sub` as OpenRouter's `session_id` and OpenAI's `prompt_cache_key`, root calls the run id, so a burst of sub-calls can't move the root to a cold endpoint. A run's root cache hit rate tops out near 80 to 88% at these run lengths (turn 1 misses, and each turn adds a large reply and observation); the report's ceiling is the sum of each turn's previous prompt.
 
+### 7.10 Step 10: install and setup
+
+```ts
+// app/src/cli/setup.ts
+export interface EngineBundle { files: { path: string; sha256: string; file: string }[]; sha256: string }
+export type UvRunner = (argv: string[], env: Record<string, string>, opts?: { quiet?: boolean }) => Promise<{ code: number; stdout: string }>;
+export type EngineCheck = (cmd: EngineCommand) => Promise<{ ok: true } | { ok: false; message: string; stderr: string[] }>;
+export interface SetupOptions { home: string; yes: boolean; force?: boolean; interactive: boolean;
+  env?: Record<string, string | undefined>; out?: (line: string) => void; ask?: (q: string) => Promise<boolean>;
+  runUv?: UvRunner; bundle?: EngineBundle | null; platform?: NodeJS.Platform;
+  runPython?: UvRunner; checkEngine?: EngineCheck; sourceDir?: string }   // the last three are test seams (D-124)
+export async function loadBundle(): Promise<EngineBundle | null>;          // build/engine-files.ts, or null from source
+export function findUv(opts: { home: string; env?: Record<string, string | undefined> }): string | null; // <home>/bin/uv[.exe], then PATH
+export function extractEngine(bundle: EngineBundle, dest: string): void;  // byte-exact, via <dest>.tmp then rename
+export async function runSetup(o: SetupOptions): Promise<number>;         // `rlmh setup [--yes|-y] [--force]`
+export async function ensureEngine(o: Omit<SetupOptions, "yes">): Promise<void>; // throws EngineNotFound
+```
+
+- **The embedded engine.** `app/scripts/embed-engine.ts` writes the git-ignored `app/build/engine-files.ts`: one `import … with { type: "file" }` per file under `engine/rlm_engine/` (no `__pycache__`, no `.pyc`), sorted by `/`-path, `ENGINE_FILES` and `ENGINE_BUNDLE_SHA256` (sha256 of the `path\0sha256\n` lines). Every binary build runs it first, and CI and the release check the binary holds the hash (D-126).
+- **Order of `runSetup`.** Already installed (marker for this version with this bundle's hash, and its Python and `__main__.py` exist) → a Python from any marker, else `uv python find 3.12` inside `<home>/python` → else ask (unless `--yes`) and `uv python install 3.12` → extract → probe the Python → write `.installed.json` last → start the installed engine for `engine.info` (D-123); a failed check deletes the marker. Messages and the question are the step 10 spec's.
+- **The installers.** `install.sh` (POSIX `sh`) and `install.ps1` (Windows PowerShell 5.1 and 7, ASCII) at the repo root; inputs `RLMH_VERSION`, `RLMH_HOME`, `RLMH_DOWNLOAD_BASE`, `RLMH_NO_MODIFY_PATH`; uv pinned to 0.13.6 with its archives' SHA-256 in each script (D-128).
+- **Workflows.** `ci.yml` gains the `install` job (`scripts/install-check.sh`, D-127); `release.yml` builds four binaries on a `v*` tag or `workflow_dispatch` and publishes only on a tag, after CI passed on that commit.
+
 ## 8. Settings schema (`settings.ts`)
 
 `~/.rlm-harness/settings.toml` holds these keys, which `/settings` and `rlmh config` also use. A dotted key is a TOML table path.
@@ -759,7 +789,7 @@ Saved keys live in the OS credential store, not in `<home>`, so deleting `<home>
 | `rlmh info` | 2 | starts the engine and prints `{app: {version, protocol}, engine: <engine.info>}` as JSON (D-19) |
 | `rlmh run …`, `rlmh batch …` | 6 | §7.8 |
 | `rlmh config get KEY`, `set KEY VALUE`, `list` | 6 | §8; never starts the engine |
-| `rlmh setup [--yes] [--force]` | 10 | asks, then installs Python 3.12 through uv and extracts the engine |
+| `rlmh setup [--yes\|-y] [--force]` | 10 | asks, then installs Python 3.12 through uv and extracts the engine (§7.10) |
 | `rlmh --help` | 2 | usage |
 
 `--verbose` on any command shows engine stderr. From step 10, `info`, `run`, `batch` and bare `rlmh` first call `ensureEngine` (`cli/setup.ts`), which asks to run setup when no engine is found.

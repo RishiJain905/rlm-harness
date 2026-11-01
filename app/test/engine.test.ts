@@ -3,7 +3,7 @@
 // because a first `uv run` may fetch Python). RLMH_HOME is a temp folder throughout.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { EngineNotFound, ProtocolMismatch, fetchInfo, findEngine, splitCommand, startEngine, type EngineProcess } from "../src/engine.ts";
@@ -145,6 +145,68 @@ test("child_env", () => {
   expect(cmd.env.RLMH_HOME).toBe(home);
   expect(cmd.env.PYTHONUTF8).toBe("1");
   expect(cmd.env.PYTHONUNBUFFERED).toBe("1");
+});
+
+/** Writes <home>/engine/<APP_VERSION>/ with a marker naming `python`, and __main__.py unless `main` is false. */
+function installAt(h: string, python: string, main = true): string {
+  const dir = join(h, "engine", APP_VERSION);
+  mkdirSync(join(dir, "rlm_engine"), { recursive: true });
+  if (main) writeFileSync(join(dir, "rlm_engine", "__main__.py"), "");
+  const marker = { app_version: APP_VERSION, bundle_sha256: "0", python, python_version: "3.12.0", installed_at: "" };
+  writeFileSync(join(dir, ".installed.json"), JSON.stringify(marker));
+  return dir;
+}
+
+describe("installed engine (step 10)", () => {
+  const compiled = "/$bunfs/root"; // a compiled binary's folder: no source checkout
+
+  test("installed_mode_command", () => {
+    const h = mkdtempSync(join(tmpdir(), "rlmh-installed-"));
+    try {
+      const dir = installAt(h, process.execPath);
+      const cmd = findEngine({ home: h, env: { PATH: "/bin" }, sourceDir: compiled });
+      expect(cmd.cmd).toEqual([process.execPath, "-E", "-s", "-X", "utf8", "-m", "rlm_engine", "serve"]);
+      expect(cmd.cwd).toBe(dir);
+      expect(cmd.env.RLMH_HOME).toBe(h);
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("installed_mode_incomplete", () => {
+    for (const [python, main] of [[join(tmpdir(), "no-such-python"), true], [process.execPath, false]] as const) {
+      const h = mkdtempSync(join(tmpdir(), "rlmh-installed-"));
+      try {
+        installAt(h, python, main);
+        expect(() => findEngine({ home: h, env: { PATH: "/bin" }, sourceDir: compiled })).toThrow(EngineNotFound);
+      } finally {
+        rmSync(h, { recursive: true, force: true });
+      }
+    }
+    const broken = mkdtempSync(join(tmpdir(), "rlmh-installed-"));
+    try {
+      mkdirSync(join(broken, "engine", APP_VERSION), { recursive: true });
+      writeFileSync(join(broken, "engine", APP_VERSION, ".installed.json"), "{not json");
+      expect(() => findEngine({ home: broken, env: { PATH: "/bin" }, sourceDir: compiled })).toThrow(EngineNotFound);
+    } finally {
+      rmSync(broken, { recursive: true, force: true });
+    }
+  });
+
+  test("installed_mode_order", () => {
+    const h = mkdtempSync(join(tmpdir(), "rlmh-installed-"));
+    try {
+      installAt(h, process.execPath);
+      expect(findEngine({ home: h, env: { PATH: "/bin", RLMH_ENGINE: "my-engine serve" }, sourceDir: compiled }).cmd).toEqual([
+        "my-engine",
+        "serve",
+      ]);
+      // from source the checkout wins
+      expect(findEngine({ home: h, env: { PATH: "/bin" } }).cmd[0]).toBe("uv");
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
+  });
 });
 
 test(

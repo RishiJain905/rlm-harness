@@ -6,7 +6,8 @@
 import { batchCommand } from "./cli/batch.ts";
 import { configCommand } from "./cli/config.ts";
 import { runCommand, type CliIO } from "./cli/run.ts";
-import { fetchInfo, findEngine, startEngine, type EngineProcess } from "./engine.ts";
+import { ensureEngine, runSetup } from "./cli/setup.ts";
+import { EngineNotFound, fetchInfo, findEngine, startEngine, type EngineProcess } from "./engine.ts";
 import { RpcError } from "./link.ts";
 import { home } from "./paths.ts";
 import type { Session as SessionType } from "./session.ts";
@@ -24,6 +25,7 @@ Commands:
   rlmh batch       every task in a TASKS.jsonl file: rlmh batch TASKS.jsonl [--jobs N] [--out DIR]
   rlmh config      list, get KEY, or set KEY VALUE in settings.toml
   rlmh info        start the engine and print its info as JSON
+  rlmh setup       install Python 3.12 (through uv, after asking) and the engine: [--yes|-y] [--force]
   rlmh --version   print the version
   rlmh --help      show this help
 
@@ -57,6 +59,39 @@ async function within(p: Promise<unknown>, ms: number): Promise<void> {
   }
 }
 
+/**
+ * The engine check before info, run, batch and the interactive app (step 10): plain text on stderr,
+ * before Ink starts. Returns an exit code when the command must not run.
+ */
+async function engineReady(): Promise<number | null> {
+  try {
+    await ensureEngine({
+      home: home(),
+      interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+      out: (line) => void process.stderr.write(`${line}\n`),
+    });
+    return null;
+  } catch (e) {
+    if (!(e instanceof EngineNotFound)) throw e;
+    if (!e.reported) await err(`rlmh: ${e.message}\n`);
+    return 1;
+  }
+}
+
+async function setup(args: string[]): Promise<number> {
+  const unknown = args.find((a) => !["--yes", "-y", "--force"].includes(a));
+  if (unknown !== undefined) {
+    await err(`rlmh: unknown argument "${unknown}" for setup. Try "rlmh --help".\n`);
+    return 2;
+  }
+  return runSetup({
+    home: home(),
+    yes: args.includes("--yes") || args.includes("-y"),
+    force: args.includes("--force"),
+    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+  });
+}
+
 /** The real process streams, for run, batch and config. */
 function processIO(): CliIO {
   return {
@@ -76,9 +111,13 @@ export async function main(argv: string[]): Promise<number> {
   // run, batch and config parse their own flags, --verbose included, so a value like `--question --verbose` survives
   const at = argv.indexOf(command!);
   const own = [...(argv.slice(0, at).includes("--verbose") ? ["--verbose"] : []), ...argv.slice(at + 1)];
-  if (command === "run") return runCommand(own, processIO());
-  if (command === "batch") return batchCommand(own, processIO());
+  if (command === "run" || command === "batch") {
+    const stop = await engineReady();
+    if (stop !== null) return stop;
+    return command === "run" ? runCommand(own, processIO()) : batchCommand(own, processIO());
+  }
   if (command === "config") return configCommand(own, processIO());
+  if (command === "setup") return setup(own.filter((a) => a !== "--verbose"));
   if (command === "--version" && rest.length === 0) {
     await out(`rlmh ${APP_VERSION}\n`);
     return 0;
@@ -87,7 +126,7 @@ export async function main(argv: string[]): Promise<number> {
     await out(USAGE);
     return 0;
   }
-  if (command === "info" && rest.length === 0) return info(verbose);
+  if (command === "info" && rest.length === 0) return (await engineReady()) ?? info(verbose);
   const what = ["--version", "--help", "info"].includes(command!) ? `argument "${rest[0]}"` : `command "${command}"`;
   await err(`rlmh: unknown ${what}. Try "rlmh --help".\n`);
   return 2;
@@ -100,6 +139,8 @@ async function interactive(): Promise<number> {
     await err(`rlmh needs an interactive terminal; use \`rlmh run\` for scripts.${mintty}\n`);
     return 1;
   }
+  const stop = await engineReady();
+  if (stop !== null) return stop;
   const { ApprovalQueue } = await import("./interface/approvals.ts");
   const { Session } = await import("./session.ts");
   const queue = new ApprovalQueue();

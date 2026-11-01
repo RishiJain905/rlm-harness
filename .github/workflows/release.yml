@@ -1,0 +1,128 @@
+name: release
+
+# Step 10. A v* tag builds four rlmh binaries on native runners and publishes them with install.sh,
+# install.ps1 and SHA256SUMS. workflow_dispatch builds and uploads the artifacts but never publishes.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.output }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            output: rlmh-linux-x64
+          - os: windows-latest
+            output: rlmh-windows-x64.exe
+          - os: macos-14
+            output: rlmh-darwin-arm64
+          - os: macos-15-intel
+            output: rlmh-darwin-x64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Install app dependencies
+        working-directory: app
+        run: bun install --frozen-lockfile
+      - name: Embed the engine
+        working-directory: app
+        run: bun run scripts/embed-engine.ts
+      - name: Compile
+        working-directory: app
+        # D-44: never load a .env or bunfig.toml from the folder rlmh runs in. --reject-unresolved: a
+        # binary can never ship without build/engine-files.ts. bun build does not create ../dist on Windows.
+        run: |
+          mkdir -p ../dist
+          version=$(sed -n 's/^export const APP_VERSION = "\(.*\)";$/\1/p' src/version.ts)
+          flags=(--compile --reject-unresolved --no-compile-autoload-dotenv --no-compile-autoload-bunfig)
+          if [ "$RUNNER_OS" = Windows ]; then
+            flags+=(--windows-title rlmh --windows-publisher rlm-harness --windows-version "$version.0" --windows-description "RLM harness")
+          fi
+          bun build "${flags[@]}" --outfile "../dist/${{ matrix.output }}" src/main.ts
+      - name: The binary carries the engine
+        # --reject-unresolved does not catch a missing literal import() in Bun 1.4.4, so check the bytes
+        run: |
+          bundle=$(sed -n 's/^export const ENGINE_BUNDLE_SHA256 = "\(.*\)";$/\1/p' app/build/engine-files.ts)
+          test -n "$bundle"
+          grep -q "$bundle" "dist/${{ matrix.output }}"
+      - name: Ad hoc signature
+        # Apple Silicon kills unsigned binaries.
+        if: runner.os == 'macOS'
+        run: codesign --force --sign - "dist/${{ matrix.output }}"
+      - name: Check --version
+        run: |
+          out="$("dist/${{ matrix.output }}" --version | tr -d '\r')"
+          echo "$out"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            test "$out" = "rlmh ${GITHUB_REF_NAME#v}"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.output == 'rlmh-windows-x64.exe' && 'rlmh-windows-x64' || matrix.output }}
+          path: dist/${{ matrix.output }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: CI must have passed on this commit
+        run: |
+          passed=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq length)
+          if [ "$passed" -lt 1 ]; then
+            echo "CI has not passed on this commit"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cp install.sh install.ps1 dist/
+          cd dist
+          sha256sum rlmh-* install.sh install.ps1 > SHA256SUMS
+          cat SHA256SUMS
+      - name: Release
+        run: |
+          cat > notes.md <<'EOF'
+          Install on macOS or Linux:
+
+              curl -fsSL https://github.com/RishiJain905/rlm-harness/releases/latest/download/install.sh | sh
+
+          Install on Windows (PowerShell):
+
+              irm https://github.com/RishiJain905/rlm-harness/releases/latest/download/install.ps1 | iex
+
+          On first run `rlmh` asks before it downloads Python 3.12 through uv.
+
+          The checksums catch a corrupted download, not a compromised release. The binaries are not code
+          signed: macOS ones carry an ad hoc signature only, and Windows may show SmartScreen's
+          "Unknown publisher", or Smart App Control may block the binary.
+          EOF
+          prerelease=()
+          case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md "${prerelease[@]}"
