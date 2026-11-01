@@ -241,6 +241,10 @@ export async function runUpdate(o: UpdateOptions): Promise<number> {
   }
   const binary = join(binDir(o.home), platform === "win32" ? "rlmh.exe" : "rlmh");
   if (!o.check && !samePath(execPath, binary, platform)) {
+    if (/[\\/]node_modules[\\/]/.test(execPath)) {
+      o.err("This rlmh was installed with npm or bun; update it with npm i -g rlmh@latest (or bun add -g --trust rlmh@latest).");
+      return 2;
+    }
     o.err(
       `This rlmh (${execPath}) is not the one the installer put in ${binDir(o.home)}, so "rlmh update" would not replace it. ` +
         `Run the installer to update that one (see ${repo}).`,

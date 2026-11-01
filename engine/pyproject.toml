@@ -7,7 +7,8 @@ dependencies = []
 license = "MIT"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+# zizmor audits .github/ in the verify gate and CI; pinned here so it runs offline from uv.lock
+dev = ["pytest>=8", "zizmor==1.31.1"]
 
 [build-system]
 requires = ["hatchling"]

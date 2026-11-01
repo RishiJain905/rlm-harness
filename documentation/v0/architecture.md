@@ -732,7 +732,7 @@ export interface SetupOptions { home: string; yes: boolean; force?: boolean; int
   runUv?: UvRunner; bundle?: EngineBundle | null; platform?: NodeJS.Platform;
   runPython?: UvRunner; checkEngine?: EngineCheck; sourceDir?: string }   // the last three are test seams (D-124)
 export async function loadBundle(): Promise<EngineBundle | null>;          // build/engine-files.ts, or null from source
-export function findUv(opts: { home: string; env?: Record<string, string | undefined> }): string | null; // <home>/bin/uv[.exe], then PATH
+export function findUv(opts: { home: string; env?: Record<string, string | undefined>; exeDir?: string | null }): string | null; // <home>/bin/uv[.exe], then beside the compiled binary (D-130), then PATH
 export function extractEngine(bundle: EngineBundle, dest: string): void;  // byte-exact, via <dest>.tmp then rename
 export async function runSetup(o: SetupOptions): Promise<number>;         // `rlmh setup [--yes|-y] [--force]`
 export async function ensureEngine(o: Omit<SetupOptions, "yes">): Promise<void>; // throws EngineNotFound
@@ -742,6 +742,7 @@ export async function ensureEngine(o: Omit<SetupOptions, "yes">): Promise<void>;
 - **Order of `runSetup`.** Already installed (marker for this version with this bundle's hash, and its Python and `__main__.py` exist) → a Python from any marker, else `uv python find 3.12` inside `<home>/python` → else ask (unless `--yes`) and `uv python install 3.12` → extract → probe the Python → write `.installed.json` last → start the installed engine for `engine.info` (D-123); a failed check deletes the marker. Messages and the question are the step 10 spec's.
 - **The installers.** `install.sh` (POSIX `sh`) and `install.ps1` (Windows PowerShell 5.1 and 7, ASCII) at the repo root; inputs `RLMH_VERSION`, `RLMH_HOME`, `RLMH_DOWNLOAD_BASE`, `RLMH_NO_MODIFY_PATH`; uv pinned to 0.13.6 with its archives' SHA-256 in each script (D-128).
 - **Workflows.** `ci.yml` gains the `install` job (`scripts/install-check.sh`, D-127); `release.yml` builds four binaries on a `v*` tag or `workflow_dispatch` and publishes only on a tag, after CI passed on that commit.
+- **npm (D-130, after v0.1.0).** `npm/` holds the templates: `rlmh` (bin `bin/rlmh.exe`, a placeholder with no `#!`; `install.js`, the postinstall that hard-links `@rlmh/<platform>-<arch>`'s `bin/rlmh[.exe]` and `bin/uv[.exe]` into `rlmh/bin/`) and the platform package. `scripts/npm-pack.sh <assets> <version> <out>` packs release assets (checked against `SHA256SUMS`) with uv (checked against the installers' pins). `scripts/npm-check.sh <tarballs> <assets> [--quick]` installs them from a local Verdaccio with npm and Bun and checks the command is the binary. `ci.yml`'s `npm` job runs both on each OS. `npm.yml` packs a release and publishes only when asked, and `release.yml` calls it after `publish`.
 
 ## 8. Settings schema (`settings.ts`)
 

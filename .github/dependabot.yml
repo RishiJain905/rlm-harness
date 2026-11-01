@@ -1,0 +1,14 @@
+# KV cache: none
+# Keeps the workflows' commit-SHA action pins current: one grouped pull request a week, for
+# versions at least 7 days old. It only opens pull requests; nothing merges without Rishi.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]

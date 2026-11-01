@@ -75,6 +75,7 @@ These work since step 2. On Rishi's PC, Bun 1.4.4 is installed in-repo at `.bun/
 | Compiled binary (in `app/`) | `bun run build`: runs `scripts/embed-engine.ts`, then writes `../dist/rlmh` with the engine inside |
 | Setup from a compiled binary | `RLMH_HOME=<tmp> ../dist/rlmh setup --yes` (needs uv in `<tmp>/bin` or on PATH; downloads Python 3.12, tens of MB) |
 | One leg of the CI install job, off CI (repo root) | a folder holding `rlmh-<os>-<arch>`, `install.sh`, `install.ps1` and their `SHA256SUMS`, then `HOME=<scratch> SHELL=/bin/bash PATH=<no uv> bash scripts/install-check.sh <folder>`. Point `HOME` at a scratch folder: it writes `$HOME/.rlm-harness` and an rc file |
+| npm packages (D-130, repo root) | `bash scripts/npm-pack.sh <assets> <version> <out>` (a folder of `rlmh-<os>-<arch>` plus `SHA256SUMS`; downloads uv's archive), then `bash scripts/npm-check.sh <out> <assets> [--quick]` (Verdaccio on 127.0.0.1:4873; npm, `bun add -g --trust` and plain `bun add -g`; without `--quick`, setup with the bundled uv, so take uv off PATH first) |
 | Lint the installers | `shellcheck install.sh`; parse `install.ps1` with `[System.Management.Automation.Language.Parser]::ParseFile` under Windows PowerShell 5.1. In a cloud container, `uv pip install shellcheck-py actionlint-py` into a scratch venv; the PowerShell 7 Linux tarball comes from github.com release downloads |
 | Rebuild the catalog (in `app/`) | `bun run scripts/build-catalog.ts --commit <OMP sha>`, or `--file <path> --commit <sha>`. The only code here that touches the network, and only when a developer runs it. Run it twice and compare `sha256sum catalog/models.json` |
 | Permission hand check (step 4) | `uv run --project engine python engine/tests/test_permissions.py --mode default --repo <dir> --cell "<code>" …`: a real worker, bridge and permissions; it prints each `approval.request` and reads `y`, `a` or `n`. Without `--repo` it runs read mode in a temp folder |
@@ -121,10 +122,11 @@ This repo is public, and `rlmh` holds other people's API keys and runs model-wri
 | `engine-tests` | `uv run --locked --project engine pytest engine/tests -q`. `--locked` also fails when `uv.lock` is out of date |
 | `app-typecheck` | `bun run typecheck` in `app/` |
 | `app-tests` | `bun test` in `app/` |
+| `workflows` | `uv run --locked --project engine zizmor --offline --no-progress .github/`: zizmor 1.31.1, pinned in engine's dev group, audits the workflows; any finding fails. CI's Linux build runs it too (D-131) |
 
 - **When to run it:** run the full gate before saying a step or task is done, and before asking Rishi to commit. Read the verdict and the FAIL blocks; for detail on one failing test, rerun just that test.
 - **Scoped runs.** While iterating, pass a path: `scripts\verify.ps1 engine/tests/test_link.py`, or `app/test/gateway`. Only a full, unscoped PASS ends a task.
-- **SKIP lines.** The engine and app stages print SKIP only when `engine/pyproject.toml` or `app/package.json` is missing. Both exist since step 2, so a PASS needs all four stages to run. Never add a skip or an exclusion to turn a FAIL into a PASS.
+- **SKIP lines.** The engine and app stages print SKIP only when `engine/pyproject.toml` or `app/package.json` is missing. Both exist since step 2, so a PASS needs the engine and app stages to run, and the `workflows` stage skips only on a scoped run. Never add a skip or an exclusion to turn a FAIL into a PASS.
 - **What it doesn't replace:** a spec's "Done when" list. Compile checks, hand checks, Windows Terminal checks and green CI on three OSes still apply.
 - **New behaviour needs a test the gate runs.** A new check, such as a linter, goes into both scripts as a new stage.
 - **Repeated failures.** If the same failure survives two fixes, stop patching and re-diagnose from first principles.

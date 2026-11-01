@@ -141,6 +141,15 @@ describe("where it can run", () => {
     expect(await runUpdate({ ...r.opts, execPath: elsewhere, check: true })).toBe(0);
     expect(said(r.out)).toContain("0.1.1");
   });
+
+  test("an rlmh installed through npm or bun is pointed at its package manager", async () => {
+    const r = rig();
+    const npmBin = join(temp(), "node_modules", "@rlmh", "win32-x64", "bin", "rlmh.exe");
+    expect(await runUpdate({ ...r.opts, execPath: npmBin })).toBe(2);
+    expect(said(r.err)).toContain("npm i -g rlmh@latest");
+    expect(r.gh.requests).toEqual([]);
+    expect(r.runs).toEqual([]);
+  });
 });
 
 describe("which release", () => {

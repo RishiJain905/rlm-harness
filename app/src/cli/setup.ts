@@ -93,11 +93,23 @@ export async function loadBundle(): Promise<EngineBundle | null> {
   }
 }
 
-/** <home>/bin/uv[.exe], then PATH. */
-export function findUv(opts: { home: string; env?: Record<string, string | undefined> }): string | null {
-  const own = join(binDir(opts.home), process.platform === "win32" ? "uv.exe" : "uv");
+/**
+ * <home>/bin/uv[.exe], then the folder holding this compiled binary (where the npm packages put uv,
+ * D-130), then PATH. `exeDir` replaces that folder for tests; null skips it.
+ */
+export function findUv(opts: { home: string; env?: Record<string, string | undefined>; exeDir?: string | null }): string | null {
+  const name = process.platform === "win32" ? "uv.exe" : "uv";
+  const own = join(binDir(opts.home), name);
   if (existsSync(own)) return own;
+  const exeDir = opts.exeDir === undefined ? compiledDir() : opts.exeDir;
+  if (exeDir !== null && existsSync(join(exeDir, name))) return join(exeDir, name);
   return Bun.which("uv", { PATH: pathOf(opts.env ?? process.env) }) ?? null;
+}
+
+/** The folder holding the running binary when compiled; null when running from source under bun. */
+function compiledDir(): string | null {
+  const dir = import.meta.dir;
+  return dir.includes("$bunfs") || dir.includes("~BUN") ? dirname(process.execPath) : null;
 }
 
 /** Timing of the setup lock; tests shorten it. */

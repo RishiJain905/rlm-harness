@@ -32,9 +32,12 @@ jobs:
         shell: bash
     steps:
       - run: git config --global core.autocrlf false
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          no-cache: true # a release never restores a cache (zizmor cache-poisoning)
           bun-version: 1.4.4
       - name: Install app dependencies
         working-directory: app
@@ -71,7 +74,7 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             test "$out" = "rlmh ${GITHUB_REF_NAME#v}"
           fi
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.output == 'rlmh-windows-x64.exe' && 'rlmh-windows-x64' || matrix.output }}
           path: dist/${{ matrix.output }}
@@ -88,7 +91,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: CI must have passed on this commit
         run: |
           passed=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq length)
@@ -96,7 +101,7 @@ jobs:
             echo "CI has not passed on this commit"
             exit 1
           fi
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
@@ -129,3 +134,16 @@ jobs:
           prerelease=()
           case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md "${prerelease[@]}"
+
+  # D-130: pack the npm packages from the release just published. They are published only when the
+  # repo variable NPM_PUBLISH is 1, and then only after the npm environment's reviewer approves.
+  npm:
+    needs: publish
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/npm.yml # zizmor: ignore[self-repository] resolved from this commit by GitHub; actionlint 1.7.12 rejects $/
+    with:
+      tag: ${{ github.ref_name }}
+      publish: ${{ vars.NPM_PUBLISH == '1' }}

@@ -4,7 +4,7 @@
 # Usage: scripts\verify.ps1 [TEST_PATH]
 #   TEST_PATH (optional) scopes the test stages: engine/... runs only that pytest path,
 #   app/... runs only that bun test path. Only a full run with no TEST_PATH ends a task.
-# Stages: secrets, engine-tests, app-typecheck, app-tests. The engine and app stages report
+# Stages: secrets, engine-tests, app-typecheck, app-tests, workflows. The engine and app stages report
 # SKIP until engine/ or app/ exists (step 2 of the v0 build). Windows PowerShell 5.1 compatible.
 param([string]$Scope = "")
 
@@ -88,6 +88,17 @@ if ($appSkip) {
     } finally {
         Pop-Location
     }
+}
+
+# 5. workflows: zizmor (pinned in engine's dev group) audits .github/ offline; any finding fails
+Stage "workflows"
+if ($Scope) {
+    Write-Output "SKIP (scoped to $Scope)"
+} elseif (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Fail "workflows" "uv not on PATH"
+} else {
+    uv run --locked --project engine zizmor --offline --no-progress .github/
+    if ($LASTEXITCODE -ne 0) { Fail "workflows" "zizmor reported findings" }
 }
 
 Write-Output ""
