@@ -112,6 +112,21 @@ describe("findUv", () => {
     expect(findUv({ home: join(temp(), "empty"), env: { PATH: onPath } })).toBe(join(onPath, `uv${EXE}`));
     expect(findUv({ home: join(temp(), "empty"), env: { PATH: temp() } })).toBeNull();
   });
+
+  test("beside_the_binary_after_home_bin_before_path", () => {
+    // the npm layout (D-130): uv sits next to the compiled rlmh
+    const exeDir = temp();
+    writeFileSync(join(exeDir, `uv${EXE}`), "");
+    const onPath = temp();
+    writeFileSync(join(onPath, `uv${EXE}`), "");
+    if (process.platform !== "win32") Bun.spawnSync(["chmod", "+x", join(onPath, "uv")]);
+    const empty = join(temp(), "empty");
+    expect(findUv({ home: empty, env: { PATH: onPath }, exeDir })).toBe(join(exeDir, `uv${EXE}`));
+    const h = homeWithUv();
+    expect(findUv({ home: h, env: { PATH: onPath }, exeDir })).toBe(join(h, "bin", `uv${EXE}`));
+    expect(findUv({ home: empty, env: { PATH: onPath }, exeDir: temp() })).toBe(join(onPath, `uv${EXE}`));
+    expect(findUv({ home: empty, env: { PATH: onPath }, exeDir: null })).toBe(join(onPath, `uv${EXE}`));
+  });
 });
 
 describe("extractEngine", () => {

@@ -170,3 +170,42 @@ jobs:
           if command -v sha256sum >/dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
           (cd served && "${sum[@]}" rlmh-* install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS)
           bash scripts/install-check.sh served
+
+  # D-130: the npm packages, packed from this build's binary and installed from a local registry with
+  # npm, `bun add -g --trust` and a plain `bun add -g`, then first run with the bundled uv and a
+  # fake-provider question. Touches the network for uv's archive, Verdaccio and Python 3.12; no key.
+  npm:
+    name: npm ${{ matrix.target }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-14
+            target: darwin-arm64
+          - os: windows-latest
+            target: windows-x64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@v8
+        with:
+          name: rlmh-${{ matrix.target }}
+          path: assets
+      - name: Pack, install and run
+        run: |
+          if command -v sha256sum >/dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
+          (cd assets && "${sum[@]}" rlmh-* > SHA256SUMS && cat SHA256SUMS)
+          version=$(sed -n 's/^export const APP_VERSION = "\(.*\)";$/\1/p' app/src/version.ts)
+          bash scripts/npm-pack.sh assets "$version" out
+          bash scripts/npm-check.sh out assets

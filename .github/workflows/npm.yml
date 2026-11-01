@@ -1,0 +1,113 @@
+name: npm
+
+# D-130. Packs the npm packages from a GitHub release's assets (checked against its SHA256SUMS),
+# installs them from a local registry, and publishes them only when asked. release.yml calls it after
+# a tag's release (publishing only when the repo variable NPM_PUBLISH is 1); workflow_dispatch packs
+# an existing release and publishes only with publish: true. Publishing runs in the `npm`
+# environment, whose required reviewer approves each run, with npm trusted publishing (no token).
+# The tag must hold npm/ and scripts/npm-pack.sh, and a binary whose findUv looks beside itself, so
+# v0.1.0 cannot be packed: npm starts at the next release.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to pack, e.g. v0.1.1
+        type: string
+        required: true
+      publish:
+        description: Publish to npm (the npm environment's reviewer still approves)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Download the release
+        # the npm binaries are the release assets byte for byte, never a rebuild
+        run: |
+          case "$TAG" in v*) ;; *) echo "the tag must start with v: $TAG"; exit 1 ;; esac
+          gh release download "$TAG" --dir dist --pattern 'rlmh-*' --pattern SHA256SUMS
+          cd dist
+          sha256sum -c --ignore-missing SHA256SUMS
+          set -- rlmh-*
+          test "$#" = 4
+      - name: Pack
+        run: |
+          bash scripts/npm-pack.sh dist "${TAG#v}" out
+          set -- out/*.tgz
+          test "$#" = 5
+      - name: Install from a local registry
+        run: bash scripts/npm-check.sh out dist --quick
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-tarballs
+          path: out/*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: pack
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance
+    env:
+      TAG: ${{ inputs.tag }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-tarballs
+          path: out
+      - name: npm 11.5.1 or later, for trusted publishing
+        run: npm install -g npm@11.7.0
+      - name: Publish
+        # platform packages first, so rlmh's optional dependencies exist when rlmh appears; a version
+        # already on npm is skipped, so a re-run after a partial failure finishes the job
+        run: |
+          version=${TAG#v}
+          dist_tag=latest
+          case "$version" in *-*) dist_tag=next ;; esac
+          for pass in platform rlmh; do
+            for t in out/*.tgz; do
+              case "$(basename "$t")" in rlmh-win32-* | rlmh-darwin-* | rlmh-linux-*) kind=platform ;; *) kind=rlmh ;; esac
+              [ "$kind" = "$pass" ] || continue
+              name=$(tar -xzOf "$t" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "$name@$version is already on npm"
+                continue
+              fi
+              npm publish "$t" --access public --provenance --tag "$dist_tag"
+            done
+          done

@@ -2,3 +2,4 @@
 *.png binary
 *.ico binary
 scripts/*.sh text eol=lf
+npm/rlmh/bin/rlmh.exe text eol=lf

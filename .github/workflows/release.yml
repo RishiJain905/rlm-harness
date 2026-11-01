@@ -126,3 +126,16 @@ jobs:
           prerelease=()
           case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md "${prerelease[@]}"
+
+  # D-130: pack the npm packages from the release just published. They are published only when the
+  # repo variable NPM_PUBLISH is 1, and then only after the npm environment's reviewer approves.
+  npm:
+    needs: publish
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/npm.yml
+    with:
+      tag: ${{ github.ref_name }}
+      publish: ${{ vars.NPM_PUBLISH == '1' }}

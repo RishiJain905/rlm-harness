@@ -1,0 +1,32 @@
+{
+  "name": "rlmh",
+  "version": "0.0.0",
+  "description": "RLM harness: a model-agnostic harness for Recursive Language Models. This package installs the compiled rlmh binary for your platform.",
+  "license": "MIT",
+  "homepage": "https://github.com/RishiJain905/rlm-harness",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RishiJain905/rlm-harness.git"
+  },
+  "bin": {
+    "rlmh": "bin/rlmh.exe"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/rlmh.exe",
+    "install.js",
+    "LICENSE",
+    "README.md"
+  ],
+  "optionalDependencies": {
+    "@rlmh/darwin-arm64": "0.0.0",
+    "@rlmh/darwin-x64": "0.0.0",
+    "@rlmh/linux-x64": "0.0.0",
+    "@rlmh/win32-x64": "0.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
