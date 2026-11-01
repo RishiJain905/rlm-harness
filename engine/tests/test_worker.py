@@ -252,14 +252,16 @@ def test_env_strips_keys_and_temp_is_scratch(tmp_path: Path, monkeypatch: pytest
                  "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_VALUE_7"):
         monkeypatch.setenv(name, "FAKE-value")  # git's env config goes as a whole (D-62)
     monkeypatch.setenv("RLMH_TEST_PLAIN", "kept")
+    monkeypatch.setenv("PYTHONUNBUFFERED", "1")  # the engine's, never the model's commands'
     code = ("import os, tempfile\nprint(sorted(k for k, v in os.environ.items() if v == 'FAKE-value'))\n"
-            "print(os.environ.get('RLMH_TEST_PLAIN'))\nprint(tempfile.gettempdir())")
+            "print(os.environ.get('RLMH_TEST_PLAIN'))\nprint(tempfile.gettempdir())\n"
+            "print(os.environ.get('PYTHONUNBUFFERED'))")
 
     async def main() -> None:
         async with started(tmp_path) as w:
             r = await w.run_cell(code)
-            listed, plain, temp = r.stdout.splitlines()
-            assert (listed, plain) == ("[]", "kept")
+            listed, plain, temp, unbuffered = r.stdout.splitlines()
+            assert (listed, plain, unbuffered) == ("[]", "kept", "None")
             assert os.path.realpath(temp) == os.path.realpath(tmp_path / "scratch")
 
     go(main())

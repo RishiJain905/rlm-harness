@@ -146,12 +146,53 @@ def _logged(target_arg: str):
 # ----------------------------------------------------------------------------- paths and files
 
 
+TMP_ALIAS = "/tmp"
+
+
+def _tmp_dir():
+    """Windows only: the folder that stands for training's /tmp, <scratch>/tmp, made on first use. A Windows Python
+    opens /tmp/x as <drive>:\\tmp\\x and Git Bash as its own temp folder, so the two never met; training's sandbox
+    had one /tmp. None on POSIX, where /tmp is already one folder for both."""
+    if sys.platform != "win32" or not _config["scratch"]:
+        return None
+    folder = os.path.join(_config["scratch"], "tmp")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
 def _abs(path: str) -> str:
     path, alias = os.fspath(path), _config["alias"]
     # The model knows the repository as /work/repo (3a): map that prefix, and only a whole path segment of it.
     if alias and isinstance(path, str) and (path == alias or path.startswith(alias + "/")):
         path = _config["root"] + path[len(alias):]
+    elif isinstance(path, str) and (path == TMP_ALIAS or path.startswith(TMP_ALIAS + "/")):
+        tmp = _tmp_dir()
+        if tmp:
+            path = tmp + path[len(TMP_ALIAS):]
     return os.path.normpath(os.path.join(_config["root"], path))
+
+
+def _segment(name: str) -> str:
+    """A regex for `name` as a whole path segment where a path starts (`/x/work/repo`, `/work/repository` and
+    `~/tmp` don't match)."""
+    return r"(?<![\w.~/-])" + re.escape(name) + r"(?![\w.-])"
+
+
+def _alias_in_cmd(cmd: str) -> str:
+    """A shell command with the /work/repo alias (3a) as the workspace, written with `/`: training's sandbox had
+    that folder, so the model writes `cd /work/repo && pytest`. On Windows /tmp becomes the folder the file tools
+    use for it too (_tmp_dir)."""
+    if not isinstance(cmd, str):
+        return cmd
+    alias = _config["alias"]
+    if alias and alias in cmd:
+        root = _slashed(_config["root"])
+        cmd = re.sub(_segment(alias), lambda _m: root, cmd)
+    if TMP_ALIAS in cmd:
+        tmp = _tmp_dir()
+        if tmp:
+            cmd = re.sub(_segment(TMP_ALIAS), lambda _m: _slashed(tmp), cmd)
+    return cmd
 
 
 def _slashed(path: str) -> str:
@@ -577,6 +618,7 @@ def shell(cmd: str, timeout: float = SHELL_TIMEOUT_S) -> ShellResult:
     if _config["time_left"]:
         limit = max(1.0, min(limit, _config["time_left"]() - 2.0))
     spec = _config["shell"]
+    cmd = _alias_in_cmd(cmd)  # after the ask, which shows the command as the model wrote it
     if spec["kind"] == "powershell":
         cmd = PS_UTF8 + cmd
     with _quiet():  # approved above, so the audit hook does not ask again
@@ -620,7 +662,10 @@ def shell(cmd: str, timeout: float = SHELL_TIMEOUT_S) -> ShellResult:
     reader.join(timeout=5)  # a process that left the group can hold the pipe open; don't wait on it
     if not reader.is_alive():
         proc.stdout.close()
-    out = b"".join(list(kept)).decode(errors="replace")[-SHELL_KEEP_CHARS:]
+    out = b"".join(list(kept)).decode(errors="replace")
+    if sys.platform == "win32":  # native programs end lines with \r\n; training's Linux shell gave the model \n
+        out = out.replace("\r\n", "\n")
+    out = out[-SHELL_KEEP_CHARS:]
     if timed_out:
         return ShellResult(SHELL_TIMEOUT_CODE, out + f"\n[timed out after {limit:g} s and killed]")
     return ShellResult(proc.returncode, out)

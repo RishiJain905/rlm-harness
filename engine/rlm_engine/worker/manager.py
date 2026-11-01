@@ -88,8 +88,11 @@ RequestHandler = Callable[[dict], Awaitable[dict]]  # a worker `request` -> the 
 
 def worker_env(scratch: Path) -> dict[str, str]:
     """The engine's environment minus key-like names (D-29) and git's env config (D-62), with the temp folders
-    pointed at scratch."""
+    pointed at scratch. PYTHONUNBUFFERED is the engine's own (the app sets it for the link); the worker ignores it
+    under -I, so it would only reach the model's commands, whose Python would then print in another order than in
+    training's sandbox (a traceback before buffered prints there, after them here)."""
     env = {k: v for k, v in os.environ.items() if not KEY_ENV.search(k) and not GIT_ENV_CONFIG.fullmatch(k)}
+    env.pop("PYTHONUNBUFFERED", None)
     env.update(TMPDIR=str(scratch), TEMP=str(scratch), TMP=str(scratch))
     return env
 

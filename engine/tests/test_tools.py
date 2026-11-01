@@ -415,10 +415,8 @@ def test_shell_code_output_and_printed_tail(root: Path, shell_spec: dict) -> Non
     else:
         assert "out" in r.out and "err" in r.out
     long = rt.shell(py("print('x' * 5000 + 'END')", shell_spec["kind"]))
-    assert len(long.out) == 5004 + (1 if WINDOWS else 0)  # "\r\n" from a Windows Python
-    assert str(long).startswith(f"exit 0\n[... {len(long.out) - rt.SHELL_SHOW_CHARS:,} earlier characters]")
-    if not WINDOWS:
-        assert str(long).startswith("exit 0\n[... 3,504 earlier characters]")
+    assert len(long.out) == 5004  # a Windows Python's "\r\n" reaches the model as "\n", as in training
+    assert str(long).startswith("exit 0\n[... 3,504 earlier characters]")
     assert str(long).rstrip().endswith("END")
 
 
@@ -429,6 +427,58 @@ def test_shell_cwd_is_the_root(root: Path, shell_spec: dict) -> None:
     assert os.path.realpath(out.strip()) == os.path.realpath(root)
     if shell_spec["kind"] != "powershell":
         assert rt.shell("pwd").code == 0
+
+
+def test_shell_maps_the_repo_alias(root: Path, shell_spec: dict) -> None:
+    # training's sandbox had /work/repo, so the model writes `cd /work/repo && ...` (3a, S-25)
+    rt.configure(root=str(root), shell=shell_spec)
+    put(root, "pkg/mod.py", "x = 1\n")
+    if shell_spec["kind"] == "powershell":
+        r = rt.shell("Set-Location /work/repo; Get-Content /work/repo/pkg/mod.py")
+    else:
+        r = rt.shell("cd /work/repo && cat /work/repo/pkg/mod.py && cd /work/repo/pkg && ls")
+    assert r.code == 0, r.out
+    assert "x = 1" in r.out
+
+
+def test_shell_lines_end_as_in_training(root: Path, shell_spec: dict) -> None:
+    rt.configure(root=str(root), shell=shell_spec)
+    r = rt.shell(py("print('a'); print('b')", shell_spec["kind"]))
+    assert r.code == 0
+    if WINDOWS:  # a native Python prints \r\n there; the model saw \n in training
+        assert "\r" not in r.out and "a\nb\n" in r.out
+    else:  # POSIX output is passed on as it is, as training's shell did
+        assert rt.shell("printf 'x\\r\\ny\\n'").out == "x\r\ny\n"
+
+
+def test_the_repo_alias_maps_only_whole_segments(root: Path) -> None:
+    rt.configure(root=str(root), shell=DEFAULT_SHELL)
+    mapped = rt._slashed(str(root))
+    assert rt._alias_in_cmd("cd /work/repo && ls /work/repo/src") == f"cd {mapped} && ls {mapped}/src"
+    assert rt._alias_in_cmd('pytest "/work/repo/tests" x=/work/repo') == f'pytest "{mapped}/tests" x={mapped}'
+    for untouched in ("ls /work/repository", "ls /x/work/repo", "ls ~/work/repo", "echo work/repo", "ls ./work/repo"):
+        assert rt._alias_in_cmd(untouched) == untouched
+    rt.configure(root=str(root), shell=DEFAULT_SHELL, alias=None)
+    assert rt._alias_in_cmd("cd /work/repo") == "cd /work/repo"
+
+
+def test_tmp_is_one_folder_for_the_tools_and_the_shell(root: Path, tmp_path: Path, shell_spec: dict) -> None:
+    # training's sandbox had one /tmp; natively on Windows a Python and Git Bash each had their own
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    rt.configure(root=str(root), shell=shell_spec, scratch=str(scratch))
+    rt.write_file("/tmp/probe.py", "print('ran from tmp')\n")
+    r = rt.shell(py("exec(open('/tmp/probe.py').read())", shell_spec["kind"]) if not WINDOWS
+                 else (f'& "{sys.executable}" /tmp/probe.py' if shell_spec["kind"] == "powershell"
+                       else f'"{sys.executable.replace(chr(92), "/")}" /tmp/probe.py'))
+    assert r.code == 0, r.out
+    assert "ran from tmp" in r.out
+    if WINDOWS:
+        assert (scratch / "tmp" / "probe.py").is_file()  # inside scratch, which is always writable (D-12)
+        assert rt._alias_in_cmd("ls /tmp ~/tmp /tmpx") == f"ls {rt._slashed(str(scratch / 'tmp'))} ~/tmp /tmpx"
+    else:
+        assert rt._alias_in_cmd("ls /tmp") == "ls /tmp"  # POSIX keeps the real /tmp, as training's sandbox did
+        os.remove("/tmp/probe.py")
 
 
 def test_shell_timeout_kills_the_group_and_keeps_output(root: Path, shell_spec: dict) -> None:
