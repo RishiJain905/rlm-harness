@@ -17,6 +17,56 @@ A step can start once every step it depends on is `done`, or `review` if Rishi h
 | 9 | [Smoke run](specs/step-09-smoke-run.md) | done | claude/eager-heisenberg-pslzk0 | 7, 8 | 2026-10-31 | run in a Linux cloud container: slot a `openrouter/deepseek/deepseek-v4.1-flash-1017` (native), slot b `openrouter/anthropic/claude-haiku-5.5` (forced fenced), both on `default`; 10 runs, no infra error, no rerun; 1/5 exact each (mean reward 0.479 and 0.482); $0.23 against a worst-case estimate of $5.96 and a $6 cap; found OpenRouter's Anthropic models never cached, fixed in the gateway (D-117); the Windows 11 PC run not done; Rishi asked for it to be marked done |
 | 10 | [One-command install](specs/step-10-install.md) | done | claude/eager-heisenberg-pslzk0 | 9 | 2026-11-01 | built in a Linux cloud container; CI green on three OSes, with the `install` job green on all four legs (Done when 1, 2); not yet run: the `release.yml` `workflow_dispatch` run and the `v0.1.0` tag (Done when 3, 4; each needs Rishi's OK), and the PC install from the real release and the uninstall check (Done when 5, 6); Rishi asked for it to be committed, marked done and merged |
 
+## Left to check on Rishi's PC and on GitHub (step 10, 2026-11-01)
+
+The cloud session could not do the GitHub steps: GitHub refused the `workflow_dispatch` run (the session's GitHub app cannot start workflows), and the session's permission check blocked the tag push. Do these in order. Send back the items marked **report**, and the step 10 row and log get updated from them.
+
+**GitHub (Done when 3 and 4)**
+
+1. Check that CI on `main`'s newest commit is green (Actions, workflow `ci`). The release's `publish` job refuses a commit without a green CI run.
+2. Optional dry run (Done when 3): Actions, then `release`, then Run workflow on `main`. It should upload four artifacts (`rlmh-linux-x64`, `rlmh-windows-x64`, `rlmh-darwin-arm64`, `rlmh-darwin-x64`) and skip `publish`.
+3. Tag and publish (Done when 4). From a clone (Git Bash):
+   ```
+   git fetch origin
+   git tag -a v0.1.0 -m "rlmh v0.1.0" origin/main
+   git push origin v0.1.0
+   ```
+   The `release` run builds the four binaries, then `publish` creates the release, not as a prerelease, so `latest` points at it. If a build fails, no release is made; ask before moving the tag.
+4. On the release page, check it lists `rlmh-linux-x64`, `rlmh-windows-x64.exe`, `rlmh-darwin-arm64`, `rlmh-darwin-x64`, `install.sh`, `install.ps1` and `SHA256SUMS`. Download all seven into one empty folder, then in Git Bash there:
+   ```
+   sha256sum -c SHA256SUMS
+   ls -l rlmh-*
+   ```
+   Every line should say `OK`. **Report:** the four sizes.
+
+**Windows PC (Done when 5)**
+
+5. Open a fresh Windows PowerShell 5.1 (`powershell.exe`, not `pwsh`) where `RLMH_ENGINE` and `RLMH_HOME` are not set, and run:
+   ```
+   irm https://github.com/RishiJain905/rlm-harness/releases/latest/download/install.ps1 | iex
+   ```
+   It should print the `rlmh 0.1.0 installed` summary. uv is already on your PATH, so expect `uv … (already on PATH)` and no `bin\uv.exe`. **Report:** any SmartScreen, Defender or Smart App Control prompt.
+6. Open a new terminal in a folder that is not a checkout (for example `cd $env:USERPROFILE`). `rlmh --version` should print `rlmh 0.1.0`.
+7. Run `rlmh`. It should ask the Python 3.12 question before anything else. Answer `y` and time it until the app opens. Python should land under `C:\Users\<you>\.rlm-harness\python\`, and `Get-Content $env:USERPROFILE\.rlm-harness\engine\0.1.0\.installed.json` should name that `python.exe`. **Report:** the minutes, and the Python version it prints.
+8. In the app, save a key in `/providers` yourself, then run one real question on a model you pick. **Report:** the model, whether it finished, and its cost.
+
+**Windows PC (Done when 6), uninstall**
+
+9. In `/providers`, delete the key you saved. Then run the five uninstall commands the installer printed, in Windows PowerShell. Check:
+   ```
+   Test-Path $env:USERPROFILE\.rlm-harness
+   [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+   ```
+   The first should print `False`, and the `Path` should hold no `.rlm-harness` entry. To keep using `rlmh`, run step 5's one-liner again afterwards.
+
+**Earlier steps' PC checks (optional: those steps were marked done without them)**
+
+- Step 2, tasks 7 and 8 ([spec](specs/step-02-skeleton-link.md)): the Windows binary and the empty-screen check in Windows Terminal.
+- Step 3: `test_against_training_source` on the PC, with `RLM_TRAINING_REPO` set.
+- Step 4: the permission hand check on Windows (the CLAUDE.md commands table has the command).
+- Step 7, task 11 ([spec](specs/step-07-interactive-view.md)): the Windows Terminal hand check of the interactive app. The installed `rlmh` from step 7 above can serve.
+- Step 8: the parity run on the LoRA's own transcripts (`scripts\harness_parity.py` in the RLM repo).
+
 ## Log
 
 Newest at the bottom. One line each: `YYYY-MM-DD step N (thread): what happened`. Record here any change you had to make to [architecture.md](architecture.md) or [decisions.md](decisions.md).
@@ -70,3 +120,4 @@ Newest at the bottom. One line each: `YYYY-MM-DD step N (thread): what happened`
 - 2026-11-01 step 9 (claude/eager-heisenberg-pslzk0): checks and hand-off. Full `scripts/verify.sh`: PASS (engine 468 passed, 6 skipped; app 670 pass). CI run 41256154946 (ecaae40) green on macOS, Windows and Linux on the first try. The A/B summary is on `harness-parity-v0` of `RishiJain905/RLM` at e7b5e31. Merged to main by fast-forward, as Rishi asked. Spend for the follow-up: $0.200 (A/B) + $0.0046 (segment check), billed.
 - 2026-11-01 step 10 (claude/eager-heisenberg-pslzk0): built in a Linux cloud container. App: `scripts/embed-engine.ts` (24 files, one `with { type: "file" }` import each), `cli/setup.ts` (`findUv`, `extractEngine`, `runSetup`, `ensureEngine`), `findEngine` item 3, and `rlmh setup [--yes|-y] [--force]` plus the engine check before `info`, `run`, `batch` and bare `rlmh` in `main.ts`. Install: `install.sh` and `install.ps1` (written by an opus-high subagent and reviewed by the lead), uv pinned to 0.13.6 with its four archives' SHA-256 copied from the release's `.sha256` files and checked against the downloaded archives. Workflows: `ci.yml` (embed, `--reject-unresolved`, a bundle-hash check, the `install` job through `scripts/install-check.sh`) and the new `release.yml`. Tests: `app/test/setup.test.ts` (21), three installed-mode cases in `engine.test.ts`. Task 2's embedding proof ran on Linux instead of the PC: all 24 files read back byte-exact from `$bunfs`, through both `Bun.file` and `readFileSync`. Found: `--reject-unresolved` does not catch a missing literal `import()` (D-126). D-122 to D-128 added; architecture §2, §7.1, §7.10 (new) and §10 updated. Rehearsed here: the compiled binary's `rlmh setup --yes` took 6.4 s and fetched CPython 3.12.16 through uv 0.13.6. `scripts/install-check.sh` passed in full against the real binary and both installers on the uv-absent and uv-on-PATH Linux legs. A pseudo-terminal run covered the question: `n` declines with exit 1; Enter installs and `info` continues. The download failure without the proxy env printed the offline message. Sol was not reachable (no `codex:codex-rescue` in a cloud session), so the lead's own pass over the diff stood in.
 - 2026-11-01 step 10 (claude/eager-heisenberg-pslzk0): CI. Run 41260967805 (389f280): builds and both Linux install legs green, and `install.ps1` parsed with no errors under Windows PowerShell 5.1. Two bugs in the CI check script, not the installers, failed the other two legs. macos-14 has no `sha256sum`, so the job now falls back to `shasum -a 256`. Git Bash's `sha256sum` writes `<hex> *<name>`, so the wrong-checksum check had corrupted nothing; it now strips the `*` and fails if it changed nothing. Run 41261596295 (20a2440) was green on all 7 jobs: the macOS, Windows and Linux builds, and the install legs linux-x64, linux-x64 with uv on PATH, darwin-arm64 and windows-x64. Every leg fetched CPython 3.12.16 through uv 0.13.6. The darwin-arm64 download was 23.9 MiB and installed in 2.4 s. Setup took about 3 s on macOS, and 6.4 s in the container. macOS's bash got `~/.bash_profile`, and a login shell found `rlmh` there. On Windows, the user `Path` kept `%USERPROFILE%\rlmh-ci-marker` unexpanded, no key was added under `HKCU:\Software\Python`, and the documented uninstall left no home and no `.rlm-harness` in the `Path`. Not run: `release.yml` (its `workflow_dispatch` and the `v0.1.0` tag each need Rishi's OK), so there are no release binary sizes yet; and the PC checks (Done when 5, 6). The minutes `rlmh setup` takes on the PC are still to record. Full `scripts/verify.sh`: PASS. Merged to main by fast-forward, as Rishi asked.
+- 2026-11-01 step 10 (claude/eager-heisenberg-pslzk0): Rishi OK'd every blocker. GitHub refused the `release.yml` `workflow_dispatch` run (403, "Resource not accessible by integration": the session's GitHub app cannot start workflows), and the session's permission check blocked the `v0.1.0` tag push. No tag was made, locally or on GitHub. The remaining GitHub and PC checks are listed above the log, for Rishi to run on his PC.
