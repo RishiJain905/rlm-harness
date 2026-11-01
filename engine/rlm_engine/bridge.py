@@ -373,7 +373,8 @@ def _timed_out() -> _FetchFailed:
 
 class _Sockets:
     """Every socket one fetch opens, so another thread can cut them off: a watchdog at the deadline, or the run's
-    cancellation. A cut shuts the socket down, which ends a read blocked on it at once, on every OS."""
+    cancellation. A cut shuts the socket down, which ends a read blocked on it at once, on every OS: as an error on
+    Windows, as a clean end of file on Linux, so a reader that sees the end checks `reason` before trusting it."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -543,6 +544,8 @@ def _read_body(response: Any, deadline: float, owner: _Sockets) -> bytes:
         # read1 returns what has arrived; read(n) would wait for n bytes, and a slow trickle would outlast the deadline
         chunk = response.read1(min(_READ_CHUNK, limit - total))
         if not chunk:
+            # On Linux a cut socket reads as a clean end of file, not an error: a cut body is not the whole body.
+            owner.check()
             break
         chunks.append(chunk)
         total += len(chunk)
