@@ -85,22 +85,41 @@ describe("app", () => {
     expect(app.startCalls[0]).toMatchObject({ mode: "repo", task: "Mail a@b.com about it" });
   });
 
-  test("(5) an empty root.model gives the hint and opens /model", async () => {
+  test("(5) first run, no model and no key: /providers opens, then /model; a question still opens /model", async () => {
     const { app, m } = await open({ settings: { "root.model": "" } });
+    let s = await m.waitForText("── /providers");
+    expect(s).toContain("Welcome to rlmh. Connect a provider");
+    await m.press(KEYS.esc);
+    s = await m.waitForText("── /model");
+    expect(s).toContain("Pick the root model");
+    await m.press(KEYS.esc);
+    await m.waitForText("No model picked yet");
     await ask(m, "Summarize @a.txt");
-    const s = await m.waitForText("── /model");
+    s = await m.waitForText("── /model");
     expect(s).toContain("none picked");
     expect(app.startCalls).toHaveLength(0);
     await m.press(KEYS.esc);
     await m.waitForText("No model picked. Use /model.");
+    expect(app.fetchCalls).toHaveLength(0);
   });
 
-  test("(6) no key for a provider that needs one gives the hint", async () => {
+  test("(5b) first run with a provider key in the environment opens /model at once", async () => {
+    const { app, m } = await open({ settings: { "root.model": "" }, env: { OPENROUTER_API_KEY: "sk-or-v1-FAKE0000000000000000" } });
+    const s = await m.waitForText("── /model");
+    expect(s).toContain("Pick the root model");
+    expect(m.frames.some((f) => f.includes("── /providers"))).toBe(false);
+    expect(app.fetchCalls).toHaveLength(0);
+  });
+
+  test("(6) no key for a provider that needs one opens /providers, and the hint stays", async () => {
     const { app, m } = await open({ settings: { "root.model": "anthropic/claude-sonnet-5" } });
+    expect(m.frames.some((f) => f.includes("── /providers"))).toBe(false); // a model is picked: no first-run screens
     await ask(m, "Summarize @a.txt");
-    await m.waitForText("No key for Anthropic. Use /providers.");
+    await m.waitForText("── /providers");
     expect(app.startCalls).toHaveLength(0);
     expect(app.fetchCalls).toHaveLength(0);
+    await m.press(KEYS.esc);
+    await m.waitForText("No key for Anthropic. Use /providers.");
   });
 
   test("(7) no .git: a warning line, and the run still starts; with .git no warning", async () => {

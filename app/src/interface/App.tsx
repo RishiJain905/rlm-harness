@@ -9,11 +9,12 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, parse, resolve } from "node:path";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { provider } from "../gateway/providers.ts";
+import { provider, PROVIDERS } from "../gateway/providers.ts";
 import type { StartRun } from "../session.ts";
 import { APP_VERSION } from "../version.ts";
 import { Approval, approvalHeight } from "./Approval.tsx";
 import { COMMANDS, slashMatches } from "./commands/index.ts";
+import { envKeyVar } from "./commands/providers.tsx";
 import { layoutHeights } from "./format.ts";
 import { Lines } from "./Lines.tsx";
 import { parseQuestion } from "./mentions.ts";
@@ -31,6 +32,9 @@ const QUIT_WINDOW_MS = 2000;
 const MENU_MAX = 8;
 const DENY = { allow: false, remember_for_run: false };
 const HINT = "Ask a question. @file reads files; / for commands";
+const WELCOME_PROVIDERS = "Welcome to rlmh. Connect a provider: pick one, a adds a key; Esc when done.";
+const WELCOME_MODEL = "Pick the root model: Enter on root, then a provider and a model; Esc when done.";
+const NO_MODEL_YET = "No model picked yet: /model picks one, /providers adds a key.";
 
 /** A `.git` in `dir` or a parent. */
 function inGitRepo(dir: string): boolean {
@@ -44,6 +48,12 @@ function inGitRepo(dir: string): boolean {
 function veryLarge(dir: string): boolean {
   const d = resolve(dir);
   return d === resolve(homedir()) || parse(d).root === d;
+}
+
+/** A saved key, or a provider key in the environment. */
+async function anyKey(deps: AppDeps, env: Record<string, string | undefined>): Promise<boolean> {
+  if ((await deps.keys.list()).length > 0) return true;
+  return PROVIDERS.some((p) => p.needsKey && envKeyVar(p, env) !== null);
 }
 
 function messageOf(err: unknown): string {
@@ -84,6 +94,41 @@ export function App(props: { deps: AppDeps }) {
   const ctrlCAt = useRef(0);
   const busy = useRef(false);
   const cancelWhenStarted = useRef(false);
+  // First run, when no model is picked: /providers (only if no key exists anywhere), then /model.
+  const onboarding = useRef<"providers" | "model" | null>(null);
+
+  useEffect(() => {
+    if (deps.session.settings.root.model !== "") return;
+    let live = true;
+    anyKey(deps, env).then(
+      (has) => {
+        if (!live) return;
+        onboarding.current = has ? "model" : "providers";
+        setScreen((s) => s ?? onboarding.current);
+        setHint(has ? WELCOME_MODEL : WELCOME_PROVIDERS);
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [deps, env]);
+
+  /** Closes the open screen; during onboarding, /providers hands on to /model. */
+  const closeScreen = () => {
+    const was = screen;
+    setScreen(null);
+    if (onboarding.current === "providers" && was === "providers" && deps.session.settings.root.model === "") {
+      onboarding.current = "model";
+      setScreen("model");
+      setHint(WELCOME_MODEL);
+      return;
+    }
+    if (onboarding.current !== null) {
+      onboarding.current = null;
+      setHint(deps.session.settings.root.model === "" ? NO_MODEL_YET : null);
+    }
+  };
 
   useEffect(() => {
     deps.session.info().then(
@@ -168,7 +213,11 @@ export function App(props: { deps: AppDeps }) {
     if (def?.needsKey) {
       busy.current = true;
       try {
-        if ((await deps.keys.resolve(rootProvider)) === null) return store.note(`No key for ${def.name}. Use /providers.`, "warn");
+        if ((await deps.keys.resolve(rootProvider)) === null) {
+          store.note(`No key for ${def.name}. Use /providers.`, "warn");
+          setScreen("providers");
+          return;
+        }
       } catch (err) {
         return store.note(`Could not read the saved key for ${def.name}: ${messageOf(err)}`, "error");
       } finally {
@@ -259,7 +308,7 @@ export function App(props: { deps: AppDeps }) {
         deps={deps}
         store={store}
         view={view}
-        close={() => setScreen(null)}
+        close={closeScreen}
         permissionMode={nextMode}
         setPermissionMode={setModeOverride}
         active={keyboardFree}

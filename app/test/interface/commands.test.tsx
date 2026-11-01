@@ -65,6 +65,12 @@ describe("slash commands", () => {
 
   test("(2) /model saves root fake/scripted with thinking low, a free-text id, and sub same as root", async () => {
     const { app, m } = await open({ settings: { "root.model": "", "sub.model": "fake/scripted" } });
+    // the first-run screens open first (no model, no key); leave both
+    await m.waitForText("── /providers");
+    await m.press(KEYS.esc);
+    await m.waitForText("── /model");
+    await m.press(KEYS.esc);
+    await m.waitForText("No model picked yet");
     const fakeAt = PROVIDERS.findIndex((p) => p.id === "fake");
     await command(m, "model");
     await m.press(KEYS.enter); // root
