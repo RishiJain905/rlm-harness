@@ -5,6 +5,9 @@ name: npm
 # a tag's release (publishing only when the repo variable NPM_PUBLISH is 1); workflow_dispatch packs
 # an existing release and publishes only with publish: true. Publishing runs in the `npm`
 # environment, whose required reviewer approves each run, with npm trusted publishing (no token).
+# npm checks the calling workflow's name: tag runs need release.yml registered as each package's
+# trusted publisher (environment npm), dispatch runs need npm.yml. A new registration expires unless
+# it publishes within 2 days. Setup steps: documentation/v0/npm-install.md.
 # The tag must hold npm/ and scripts/npm-pack.sh, and a binary whose findUv looks beside itself, so
 # v0.1.0 cannot be packed: npm starts at the next release.
 
@@ -90,8 +93,11 @@ jobs:
         with:
           name: npm-tarballs
           path: out
-      - name: npm 11.5.1 or later, for trusted publishing
-        run: npm install -g npm@11.7.0
+      # trusted publishing needs Node 22.14 or later and npm 11.5.1 or later
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm install -g npm@11.7.0
       - name: Publish
         # platform packages first, so rlmh's optional dependencies exist when rlmh appears; a version
         # already on npm is skipped, so a re-run after a partial failure finishes the job

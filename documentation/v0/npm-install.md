@@ -103,6 +103,9 @@ The parent session also found that `bun --no-env-file --config=<path> main.ts` b
 - **`release.yml`** gets one new job: `npm: needs: publish, uses: ./.github/workflows/npm.yml, with: {tag: <ref>, publish: true}`. It runs only on a tag, and the environment's reviewer gate still applies.
 - **Auth (recommended): npm trusted publishing.** The job gets `id-token: write`, and npm 11.5.1 or later trades GitHub's OIDC token for a one-time credential, so no `NPM_TOKEN` is stored anywhere.
   - npm sets trusted publishing per package on npmjs.com, and the package must exist first. So there is a one-time bootstrap: Rishi publishes the five tarballs from a `publish: false` run's artifact by hand, then turns on trusted publishing for each package.
+  - npm checks the **calling** workflow's name, so tag runs need `release.yml` registered and dispatch runs need `npm.yml` (a package can have up to 10).
+  - A new configuration expires unless it completes a successful publish within 2 days, so `release.yml` is registered just before a tag that will publish, and `npm.yml` only when a dispatch publish is planned.
+  - Trusted publishing needs Node 22.14 or later and npm 11.5.1 or later, so the publish job installs Node 24 and npm 11.7.0.
   - **Alternative:** a granular `NPM_TOKEN` (publish rights on these packages only, short expiry), stored as a secret of the `npm` environment, not of the repo.
 
 ## Tests
@@ -171,3 +174,20 @@ The parent session also found that `bun --no-env-file --config=<path> main.ts` b
 - CI on Linux and macOS: the `npm` job, and the `sh` fallback tests in `npm.test.ts`.
 - `npm.yml` itself.
 - Any real publish.
+
+## Setting up publishing (once)
+
+1. **The npm org.** Create `rlmh` on npmjs.com. (Done 2026-11-01, by `trjxter`.)
+2. **The GitHub environment.**
+   - In the repo, go to **Settings → Environments → New environment** and name it `npm`.
+   - Under **Deployment protection rules**, tick **Required reviewers** and add yourself.
+   - Leave **Prevent self-review** unticked: you push the tags, and that option would stop you approving your own run.
+   - Optionally, under **Deployment branches and tags**, choose **Selected branches and tags** and add the tag rule `v*` (the `npm.yml` dispatch runs on a branch, so add `main` too).
+3. **The first publish, by hand.** After the first release that holds `npm/` (v0.1.1):
+   1. Download the `npm-tarballs` artifact from that release run's `npm` job, or from a `publish: false` dispatch of `npm.yml`.
+   2. Run `npm publish <file> --access public` for the four `rlmh-<platform>-*.tgz` files, then for `rlmh-<version>.tgz`.
+4. **Trusted publishing, within 2 days of the next tag.** A new trusted-publisher configuration expires if it has not published successfully within 2 days, so do this step just before tagging the release after v0.1.1.
+   - On each of the five packages' **Settings** page on npmjs.com, add a GitHub Actions trusted publisher: owner `RishiJain905`, repository `rlm-harness`, workflow `release.yml` (npm checks the calling workflow), environment `npm`.
+   - Add `npm.yml` the same way only when you plan to publish through a dispatch run.
+   - Once a CI publish has worked, npm can be set to disallow token publishing.
+5. **Turn it on.** Set the repo variable `NPM_PUBLISH` to `1` (**Settings → Secrets and variables → Actions → Variables**), then push the tag. From then on each tag publishes after the `npm` environment's approval.
