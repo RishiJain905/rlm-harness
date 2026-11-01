@@ -5,7 +5,7 @@
 # Usage: scripts/verify.sh [TEST_PATH]
 #   TEST_PATH (optional) scopes the test stages: engine/... runs only that pytest path,
 #   app/... runs only that bun test path. Only a full run with no TEST_PATH ends a task.
-# Stages: secrets, engine-tests, app-typecheck, app-tests. The engine and app stages report
+# Stages: secrets, engine-tests, app-typecheck, app-tests, workflows. The engine and app stages report
 # SKIP until engine/ or app/ exists (step 2 of the v0 build).
 set -u
 
@@ -71,6 +71,16 @@ else
   else
     (cd app && "$BUN" test) || fail app-tests "bun test failed"
   fi
+fi
+
+# 5. workflows: zizmor (pinned in engine's dev group) audits .github/ offline; any finding fails
+stage workflows
+if [ -n "$SCOPE" ]; then
+  echo "SKIP (scoped to $SCOPE)"
+elif ! command -v uv >/dev/null 2>&1; then
+  fail workflows "uv not on PATH"
+else
+  uv run --locked --project engine zizmor --offline --no-progress .github/ || fail workflows "zizmor reported findings"
 fi
 
 echo
