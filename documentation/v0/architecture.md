@@ -288,7 +288,7 @@ One JSON object per line. The worker keeps private dups of its original stdin an
 | engine → worker | `vars` | `id` |
 | worker → engine | `vars` | `id, vars` (answered from the reader thread, even mid-cell) |
 | worker → engine | `request` | `id, op: "llm"\|"llm_batch"\|"fetch"\|"approve", line`, plus `prompts` (llm ops) and, only when some prompt has one, `prefixes` (one string or null per prompt, D-119), `url` (fetch), or `kind, detail, inside_workspace` (approve) |
-| engine → worker | `reply` | `id`, plus `outputs` (llm ops), `text` (fetch) or `allow` (approve); or `error` (raised in the cell as `RuntimeError`, or `PermissionError` for a denied approve) |
+| engine → worker | `reply` | `id`, plus `outputs` (llm ops), `text` (fetch) or `allow` (approve, with `reason: "unattended"` when a non-interactive run denied it, D-154); or `error` (raised in the cell as `RuntimeError`, or `PermissionError` for a denied approve) |
 | worker → engine | `protocol_error` | `error`: a `cell` without a string `code`; the manager logs it and ignores it (D-67) |
 
 - **Ids.** Cell ids and request ids are separate counters, and each side keys them by `type`.

@@ -3,6 +3,7 @@ Notes for this machine:
 - The first fetch to each host asks the user for approval. If it is refused or fails, the call raises an error in your cell.
 - A fetch does not count as a sub-call. Read what you fetch with code, or hand it to sub-calls; do not print whole pages.
 - In coding tasks, `shell(cmd, timeout=120)` runs `{shell}` on this machine, so write commands for {shell}.
+- In coding tasks /work/repo is a name only the REPL's tools understand (read_file, find_files, grep, edit_file, write_file, shell). Plain Python (open, os, pathlib) does not know it, but it already runs in the repository, so give it relative paths.
 - Writes and shell commands may also need the user's approval. A refusal raises PermissionError; try another way.
 - When a coding task asks a question instead of a change, submit() the whole answer, not a one-line summary: what you submit is the answer the user gets.
 - Cheaper sub-calls: `segments()` splits `context` into fixed slices of about 40,000 characters, cut at line ends; each is a str with `.id`, `.start` and `.end`. `llm(prompt, over=seg)` and `llm_batch(prompts, over=segs)` send the segment's text first and your prompt after it, byte for byte the same every time, so the provider caches it: asking about a segment again costs about a tenth of the first time. `over` is one segment for every prompt, or one per prompt.

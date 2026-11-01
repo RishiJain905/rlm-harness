@@ -73,6 +73,60 @@ describe("OpenRouter endpoint pins (D-120)", () => {
     expect(sleeps.delays).toEqual([]); // dropping the pin is not a retry: no wait
   });
 
+  test("two calls pinned together that both fail each try once more unpinned, though the first already dropped the pin", async () => {
+    r = await rig({ server, keys: ["openrouter"] });
+    let pinned = 0;
+    let release!: () => void;
+    const bothArrived = new Promise<void>((res) => (release = res));
+    server.script(async (q, n) => {
+      if (n === 0) return openaiStream({ text: "ok", provider: "DeepInfra" });
+      if (q.body.provider) {
+        // both pinned calls fail together, as when OpenRouter can't reach the pinned endpoint for a moment
+        if (++pinned === 2) release();
+        await bothArrived;
+        return httpError(404, { error: { message: "No allowed providers are available for the selected model", type: "error" } });
+      }
+      await Bun.sleep(100); // the retries answer late, so the second failure is handled while no pin is set
+      return openaiStream({ text: "ok", provider: "Novita" });
+    });
+    await r.gateway.complete(sub(ref("openrouter", DS), "First.", one)); // pins the sub-calls to DeepInfra
+    const [a, b] = await Promise.all([
+      r.gateway.complete(sub(ref("openrouter", DS), "A", { id: "b2", index: 0, size: 1 })),
+      r.gateway.complete(sub(ref("openrouter", DS), "B", { id: "b3", index: 0, size: 1 })),
+    ]);
+    expect([a.text, b.text]).toEqual(["ok", "ok"]);
+    expect(server.requests.slice(1, 3).map((q) => q.body.provider)).toEqual([
+      { order: ["deepinfra"], allow_fallbacks: false },
+      { order: ["deepinfra"], allow_fallbacks: false },
+    ]);
+    expect(server.requests.slice(3).map((q) => q.body.provider ?? null)).toEqual([null, null]);
+    expect(sleeps.delays).toEqual([]);
+  });
+
+  test("a call whose pin failed stays unpinned, though a call beside it pinned the conversation elsewhere meanwhile", async () => {
+    r = await rig({ server, keys: ["openrouter"] });
+    const prompt = (q: { body: Record<string, any> }) => q.body.messages[q.body.messages.length - 1].content as string;
+    server.script(async (q, n) => {
+      if (n === 0) return openaiStream({ text: "ok", provider: "DeepInfra" });
+      const order = q.body.provider?.order?.[0];
+      if (order === "deepinfra") {
+        if (prompt(q) === "B") await Bun.sleep(150); // B's failure lands after A has recovered on Novita and pinned it
+        return httpError(404, { error: { message: "No allowed providers are available for the selected model", type: "error" } });
+      }
+      if (order === "novita") return httpError(404, { error: { message: "No allowed providers are available for the selected model", type: "error" } });
+      return openaiStream({ text: "ok", provider: "Novita" });
+    });
+    await r.gateway.complete(sub(ref("openrouter", DS), "First.", one)); // pins the sub-calls to DeepInfra
+    const [a, b] = await Promise.all([
+      r.gateway.complete(sub(ref("openrouter", DS), "A", { id: "b2", index: 0, size: 1 })),
+      r.gateway.complete(sub(ref("openrouter", DS), "B", { id: "b3", index: 0, size: 1 })),
+    ]);
+    expect([a.text, b.text]).toEqual(["ok", "ok"]);
+    // B's second try went unpinned, not to the Novita pin A had just set
+    const bTries = server.requests.filter((q) => prompt(q) === "B").map((q) => q.body.provider ?? null);
+    expect(bTries).toEqual([{ order: ["deepinfra"], allow_fallbacks: false }, null]);
+  });
+
   test("an endpoint OpenRouter refuses (400) is never pinned again for that model", async () => {
     r = await rig({ server, keys: ["openrouter"] });
     server.script([

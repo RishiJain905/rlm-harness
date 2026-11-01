@@ -263,7 +263,11 @@ class Bridge:
         kind, detail, inside = request.get("kind"), request.get("detail"), request.get("inside_workspace")
         if kind not in KINDS or not isinstance(detail, str) or not isinstance(inside, bool):
             return {"error": "malformed request"}
-        return {"allow": await self.permissions.check(kind, detail, inside_workspace=inside, turn=self.turn)}
+        allowed = await self.permissions.check(kind, detail, inside_workspace=inside, turn=self.turn)
+        if not allowed and not self.permissions.interactive:
+            # D-154: say why, so the model stops trying actions that can never be approved in this run
+            return {"allow": False, "reason": "unattended"}
+        return {"allow": allowed}
 
     # ------------------------------------------------------------------------------------------ fetch
 

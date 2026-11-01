@@ -118,6 +118,8 @@ interface Call {
   info?: ModelInfo;
   key: ResolvedKey | null;
   baseUrl: string;
+  /** Set once this call's pinned attempt failed: the rest of the call goes wherever OpenRouter routes (D-155). */
+  unpinned?: boolean;
 }
 
 /** Most OpenRouter pins kept; the oldest go first. Prefix pins outlive their run, so the map is bounded. */
@@ -348,7 +350,7 @@ export class Gateway {
     };
     let sent = false;
     let fallbacks = 0;
-    let unpinned = false;
+    let pinnedTo: string | null = null; // the gateway's pin the last attempt went to
     const hooks: StreamHooks = {
       maxBytes: LIMITS.MAX_RESPONSE_BYTES,
       onEvent: () => {},
@@ -367,6 +369,7 @@ export class Gateway {
       for (let attempt = 0; ; ) {
         let out: StreamResult;
         try {
+          pinnedTo = this.gatewayPin(c); // read with the body, before any await, so it is the pin this attempt carries
           out = await this.attempt(c, this.buildBody(c, ticket), hooks);
         } catch (err) {
           if (signal.aborted) throw err;
@@ -379,8 +382,10 @@ export class Gateway {
             fallbacks += 1; // not a retry: no sleep, and the try count stays
             continue;
           }
-          if (!unpinned && this.unpin(c, f)) {
-            unpinned = true; // the pinned endpoint failed: try once more wherever OpenRouter routes, and pin there (D-120)
+          if (!c.unpinned && this.unpin(c, f, pinnedTo)) {
+            // the pinned endpoint failed: from here on this call goes wherever OpenRouter routes, even if a call beside
+            // it pins the conversation elsewhere meanwhile, and the endpoint that serves it may become the pin (D-120, D-155)
+            c.unpinned = true;
             continue;
           }
           if (!retryable(f) || attempt + 1 >= TRIES) throw this.failureError(f, def, p, c.key, c.baseUrl, attempt + 1);
@@ -408,7 +413,7 @@ export class Gateway {
   /** The endpoint this call must use: the one chosen in the model ref, else the one its conversation is pinned to. */
   private endpointFor(c: Call): string | null {
     if (c.def.id !== "openrouter") return null;
-    return openRouterEndpoint(c.p.model.model).endpoint ?? this.pins.get(this.pinKey(c)) ?? null;
+    return openRouterEndpoint(c.p.model.model).endpoint ?? (c.unpinned ? null : this.pins.get(this.pinKey(c))) ?? null;
   }
 
   /** After a success: the first endpoint that served a conversation becomes its pin. */
@@ -421,14 +426,19 @@ export class Gateway {
     while (this.pins.size > PIN_CAP) this.pins.delete(this.pins.keys().next().value!);
   }
 
-  /** A pinned call failed: drop the gateway's pin (never the user's choice). A 400 or 404 means OpenRouter can't route
-   *  to that endpoint at all, so it is never pinned again for this model. True when there was a pin to drop. */
-  private unpin(c: Call, f: Failure): boolean {
-    if (c.def.id !== "openrouter" || openRouterEndpoint(c.p.model.model).endpoint) return false;
+  /** The gateway's own pin for this call's conversation, or null (not OpenRouter, the user chose an endpoint, or no pin yet). */
+  private gatewayPin(c: Call): string | null {
+    if (c.def.id !== "openrouter" || openRouterEndpoint(c.p.model.model).endpoint || c.unpinned) return null;
+    return this.pins.get(this.pinKey(c)) ?? null;
+  }
+
+  /** A call sent pinned to `slug` failed: drop that pin (never the user's choice). A 400 or 404 means OpenRouter can't
+   *  route to that endpoint at all, so it is never pinned again for this model. True when the call was pinned, so it
+   *  tries once more unpinned, even when a call beside it in the same conversation already dropped the pin. */
+  private unpin(c: Call, f: Failure, slug: string | null): boolean {
+    if (slug === null) return false;
     const key = this.pinKey(c);
-    const slug = this.pins.get(key);
-    if (slug === undefined) return false;
-    this.pins.delete(key);
+    if (this.pins.get(key) === slug) this.pins.delete(key); // not a newer pin another call set meanwhile
     if (f.kind === "http" && (f.status === 400 || f.status === 404)) this.badPins.add(`${openRouterEndpoint(c.p.model.model).model}\0${slug}`);
     return true;
   }

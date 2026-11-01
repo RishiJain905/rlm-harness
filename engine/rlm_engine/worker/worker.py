@@ -142,8 +142,17 @@ def _request(op: str, **fields) -> dict:
 
 def _approve(kind: str, detail: str, inside_workspace: bool) -> None:
     """Ask the engine for a guarded action (hooks.py, tools.shell, tools.fetch); a denial raises PermissionError."""
-    if not _request("approve", kind=kind, detail=detail, inside_workspace=inside_workspace).get("allow"):
-        raise PermissionError(13, "Permission denied (not approved)", detail)
+    reply = _request("approve", kind=kind, detail=detail, inside_workspace=inside_workspace)
+    if reply.get("allow"):
+        return
+    if reply.get("reason") == "unattended":
+        raise PermissionError(13, UNATTENDED_DENIAL, detail)
+    raise PermissionError(13, "Permission denied (not approved)", detail)
+
+
+# D-154: a run nobody watches refuses every action that would ask, so the model is told not to retry it
+UNATTENDED_DENIAL = ("Permission denied (no one can approve this in this run: every write, command or fetch that needs "
+                     "approval is refused until it ends, so do not retry it; do the work in Python inside the REPL)")
 
 
 def _remote_fetch(url: str) -> str:

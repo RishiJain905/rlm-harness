@@ -563,7 +563,8 @@ def test_approve_denied(tmp_path: Path) -> None:
 
 def test_approve_follows_the_permission_rules(tmp_path: Path) -> None:
     bridge, app = make(tmp_path, answer={"allow": True, "remember_for_run": True}, interactive=False)
-    assert handle(bridge, approve_request("shell", "ls", True)) == {"allow": False}  # non-interactive: denied
+    # non-interactive: denied, and the reply says nobody could have approved it (D-154)
+    assert handle(bridge, approve_request("shell", "ls", True)) == {"allow": False, "reason": "unattended"}
     assert app.approvals == []
     scratch_file = (tmp_path / "scratch" / "f.txt").as_posix()
     assert handle(bridge, approve_request("write", scratch_file, True)) == {"allow": True}  # scratch: silent
