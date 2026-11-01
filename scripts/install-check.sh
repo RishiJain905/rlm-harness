@@ -121,7 +121,9 @@ grep -q 'already installed' "$work/again.txt" || fail "a second setup did not sa
 
 say "8. a wrong SHA256SUMS"
 asset=$(cd "$served" && ls rlmh-*)
-awk -v a="$asset" '$2 == a { d = substr($1, 1, 1); $1 = (d == "0" ? "1" : "0") substr($1, 2) } { print $1 "  " $2 }' "$served/SHA256SUMS" >"$work/sums"
+# sha256sum in Git Bash writes "<hex> *<name>" (binary mode), so match the name without its *
+awk -v a="$asset" '{ n = $2; sub(/^\*/, "", n) } n == a { d = substr($1, 1, 1); $1 = (d == "0" ? "1" : "0") substr($1, 2) } { print $1 "  " $2 }' "$served/SHA256SUMS" >"$work/sums"
+cmp -s "$work/sums" "$served/SHA256SUMS" && fail "could not corrupt the $asset line of SHA256SUMS"
 cp "$work/sums" "$served/SHA256SUMS"
 home2="$work/home2"
 set +e
