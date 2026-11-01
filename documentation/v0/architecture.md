@@ -203,7 +203,7 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 | `approval.request` | `{run_id, kind: "write"\|"shell"\|"network", detail, turn, inside_workspace}` | `{allow: bool, remember_for_run: bool}` |
 
 - **`thinking` is resolved by the engine:** the ref's value, else the profile's `subcall_thinking` for sub-calls, else `"off"` (D-08).
-- **A sub-call's `messages`** is exactly `[{role: "user", content: prompt}]`, with `tools: []`, as in training (`client.subcaller`).
+- **A sub-call's `messages`** is exactly `[{role: "user", content: prompt}]`, with `tools: []`, as in training (`client.subcaller`). Under a profile with `cache_api` (the default profile, D-119) a sub-call may carry a stable prefix: `content` is `prefix + "\n\n" + prompt`, still one string (D-04), and the params gain `prefix: {chars, key}`, where `chars` is the prefix's length with the separator and `key` the first 16 hex characters of its sha256, the same in every run. The gateway marks it on marker-based providers and routes by it (§7.3).
 - **A root call's `tools`** is `[PYTHON_TOOL]` in native format and `[]` in fenced format.
 
 ### 5.3 Events: engine → app notifications
@@ -279,13 +279,13 @@ One JSON object per line. The worker keeps private dups of its original stdin an
 
 | Direction | `type` | Fields |
 |---|---|---|
-| engine → worker | `init` | `mode, context, workspace, scratch, base_tree, cell_timeout_s, subcall_max_chars, subcall_oversize, shell: {kind, argv}, repo_alias: "/work/repo"` |
+| engine → worker | `init` | `mode, context, workspace, scratch, base_tree, cell_timeout_s, subcall_max_chars, subcall_oversize, shell: {kind, argv}, repo_alias: "/work/repo"`, plus `cache_api: true, segment_chars` when the profile turns cache-shaped sub-calls on (D-119) |
 | worker → engine | `ready` | `python, tools: "t1"\|null` |
 | engine → worker | `cell` | `id, code` |
 | worker → engine | `result` | `id, stdout, stdout_chars, stderr, error, submitted, answer, threads` (training's keys) |
 | engine → worker | `vars` | `id` |
 | worker → engine | `vars` | `id, vars` (answered from the reader thread, even mid-cell) |
-| worker → engine | `request` | `id, op: "llm"\|"llm_batch"\|"fetch"\|"approve", line`, plus `prompts` (llm ops), `url` (fetch), or `kind, detail, inside_workspace` (approve) |
+| worker → engine | `request` | `id, op: "llm"\|"llm_batch"\|"fetch"\|"approve", line`, plus `prompts` (llm ops) and, only when some prompt has one, `prefixes` (one string or null per prompt, D-119), `url` (fetch), or `kind, detail, inside_workspace` (approve) |
 | engine → worker | `reply` | `id`, plus `outputs` (llm ops), `text` (fetch) or `allow` (approve); or `error` (raised in the cell as `RuntimeError`, or `PermissionError` for a denied approve) |
 | worker → engine | `protocol_error` | `error`: a `cell` without a string `code`; the manager logs it and ignores it (D-67) |
 
@@ -420,7 +420,7 @@ export const RETRY: { DELAYS_S; RETRY_AFTER_MAX_S; MAX_FALLBACKS; sleep(ms, sign
 export type AppEvents = {
   "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number };
   "call.delta": { call_id: string; text?: string; reasoning?: string; reset?: true };  // reset: a broken stream is retried whole; drop this call's text so far
-  "call.end":   { call_id: string; run_id: string; usage: Usage; finish_reason: string; seconds: number; error?: ModelErrorData };
+  "call.end":   { call_id: string; run_id: string; usage: Usage; finish_reason: string; seconds: number; error?: ModelErrorData; endpoint?: string | null };  // endpoint: OpenRouter's serving endpoint (D-120)
   "engine.event": { method: string; params: any };   // every run.* notification, as received
   "engine.exit": { code: number; stderr: string[] };
 };
@@ -671,7 +671,7 @@ Built at step 6 (2026-10-31). What steps 7, 8 and 9 can rely on, beyond the sign
 - **`tasks.jsonl` lines (D-28).** Read mode is `{"id", "question", "input": str | [str]}` and repo mode `{"id", "task", "repo", "test_hint"?}`. Paths are relative to the tasks file's folder. There are no gold answers.
 - **`--json`** writes one object per line to stdout:
   - `{"type": "<event method>", …params}` for every `run.*` event in §5.3 (`model.cancel` is an order to the gateway, not printed)
-  - `{"type": "gateway.call", run_id, role, subcall_id, model, usage, seconds, error}` per finished model call
+  - `{"type": "gateway.call", run_id, role, subcall_id, model, usage, seconds, error, endpoint}` per finished model call (`endpoint`: the OpenRouter endpoint that served it, else null; D-120)
   - `{"type": "batch.finished", runs, failed, cost_usd}` last, for `batch`
   - Nothing else goes to stdout; errors go to stderr.
 - **Approvals outside the interactive app.** `rlmh run` on a TTY asks on the terminal (`y` allows, `a` allows for the run, `n` or Enter denies). `rlmh batch`, or no TTY, sends `interactive: false` (D-15).
@@ -706,6 +706,8 @@ Built at step 9 (2026-10-31). What step 10 can rely on:
 - **The compiled `rlmh` finished read-mode batches on two real models** through OpenRouter: 10 runs, no infra error, no rerun, $0.23 in all. Slot a (`deepseek/deepseek-v4.1-flash-1017`) took the native `python` tool through `call_format = auto`, and slot b (`anthropic/claude-haiku-5.5`) was forced to fenced text (S-32). The run was on Linux in a cloud container, with `RLMH_ENGINE` pointing at the source engine; the Windows run and the installed engine are step 10's.
 - **`scripts/harness_smoke.py`** drives the binary only as an argument list (`rlmh batch … --json`), passes its own environment unchanged, and folds each `--json` line as it arrives. Terminating `rlmh` mid-batch, as its cost cap does, left no engine or worker process on Linux: the engine saw its stdin close and exited (§1).
 - **Caching through OpenRouter (D-117):** the smoke run's root cache hit rate was 77% for the DeepSeek model and 0 for the Anthropic one, because the gateway sent OpenRouter only `session_id` (D-38) and OpenRouter caches Anthropic models only with `cache_control`. The gateway now adds a top-level `cache_control: {type: "ephemeral"}` to OpenRouter requests for `anthropic/` and `~anthropic/` models whenever the native Anthropic client would place markers (root calls, and batch calls sharing one whole prompt), plus an explicit breakpoint on the system message's one text block; the text doesn't change. A live check on one smoke task then read 82% of the root's input from cache, and a second run read the system prompt on turn 1. `OpenAIContext` gained `markers`; no wire message changed.
+- **Cache-shaped sub-calls (D-119):** under the default profile the REPL has `segments()`, `llm(…, over=)` and `llm_batch(…, shared=, over=)`; the worker sends `prefixes`, the bridge joins `prefix + "\n\n" + prompt` and sends `prefix: {chars, key}`, and the gateway marks it (Anthropic) and routes it by `rlmh-<key>`. training-v4 has none of it, and parity is unchanged (the 5 rehearsal episodes replayed with the same verdicts). Live, a segment read 4 times was served from cache from the second read on, on DeepSeek and Haiku.
+- **OpenRouter endpoint pins (D-120) and billed cost (D-121):** each conversation (routing key) is pinned to the endpoint that first served it, or to the one named in the model ref after `@`; `call.end` and `gateway.call` carry `endpoint`; OpenRouter calls cost what OpenRouter billed.
 - **Routing keys (D-118):** sub-calls send `<run id>-sub` as OpenRouter's `session_id` and OpenAI's `prompt_cache_key`, root calls the run id, so a burst of sub-calls can't move the root to a cold endpoint. A run's root cache hit rate tops out near 80 to 88% at these run lengths (turn 1 misses, and each turn adds a large reply and observation); the report's ceiling is the sum of each turn's previous prompt.
 
 ## 8. Settings schema (`settings.ts`)

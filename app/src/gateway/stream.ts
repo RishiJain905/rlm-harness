@@ -35,6 +35,8 @@ export interface StreamResult {
   toolCall: StreamToolCall | null;
   finish: FinishReason | null;
   served: string | null;
+  /** OpenRouter: the endpoint that served the call (its chunks' `provider`), which the gateway pins to (D-120). */
+  provider: string | null;
   /** The provider's own usage object, or null when the stream had none. */
   usage: unknown;
   /** Everything the replay table might keep; gateway.ts picks per provider. */

@@ -4,7 +4,7 @@ KV cache: what a cell prints, its traceback and the sub-call errors become the m
 is frozen to training's (_Capped, _format_error, _truncate, submit), so the same cell gives the same bytes.
 
 Launched as `python -I -B -X utf8 <dir>/rlm_engine/worker/worker.py` (D-01, D-42). Standard library only, and it
-imports only its sibling files `hooks` and `tools`, by putting its own folder on sys.path for those two imports.
+imports only its sibling files `hooks`, `tools` and `cacheapi` (D-119), by putting its own folder on sys.path for those imports.
 It speaks JSON lines on private dups of its original stdin and stdout (architecture §6.1): the engine sends `init`,
 then `cell`s and `vars`; the worker sends `ready`, `result`s, `vars` answers and `request`s (`llm`, `llm_batch`,
 `fetch`, `approve`), whose `reply` the reader thread hands back to the waiting thread.
@@ -34,6 +34,7 @@ import traceback
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)  # -I leaves the script's folder off sys.path (D-01)
 try:
+    import cacheapi
     import hooks
     import tools
 finally:
@@ -139,8 +140,11 @@ def _remote_fetch(url: str) -> str:
     return _request("fetch", url=url)["text"]
 
 
-def _bridge(op: str, prompts: list) -> list:
-    """One sub-call request to the engine, which enforces the budget."""
+def _bridge(op: str, prompts: list, prefixes: list | None = None) -> list:
+    """One sub-call request to the engine, which enforces the budget. `prefixes` (cacheapi, D-119) rides along only
+    when some prompt has one, so training's requests are unchanged."""
+    if prefixes is not None and any(p is not None for p in prefixes):
+        return _request(op, prompts=prompts, prefixes=prefixes)["outputs"]
     return _request(op, prompts=prompts)["outputs"]
 
 
@@ -444,6 +448,8 @@ def _start(message: dict) -> dict:
                     shell=message.get("shell"), alias=message.get("repo_alias"), approve=_approve,
                     remote_fetch=_remote_fetch)
     namespace = make_namespace(message["context"])
+    if message.get("cache_api"):  # the default profile's cache-shaped sub-calls (D-119); never under training-v4
+        namespace.update(cacheapi.namespace(message["context"], message.get("segment_chars"), _bridge, _SUBCALLS))
     if repo:
         namespace.update(tools.namespace())
     hooks.install(approve=_approve, workspace=workspace, scratch=scratch, tools=tools)

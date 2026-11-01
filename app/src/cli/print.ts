@@ -48,6 +48,7 @@ export function attachJson(bus: Bus<AppEvents>, out: LineSink): () => void {
           usage: c.usage,
           seconds: c.seconds,
           error: c.error ?? null,
+          endpoint: c.endpoint ?? null, // OpenRouter's serving endpoint, null elsewhere (D-120)
         }),
       );
     }),

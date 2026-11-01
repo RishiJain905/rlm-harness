@@ -46,6 +46,7 @@ const REQUIRED = [
   "run.start:result",
   "model.complete:request:root",
   "model.complete:request:sub",
+  "model.complete:request:sub-prefix",
   "model.complete:result",
   "approval.request:request",
   "approval.request:result",
@@ -200,7 +201,7 @@ const FIELDS: Record<string, Spec> = {
       thinking: THINKING,
       turn: "int",
     },
-    { subcall_id: "int", origin: ORIGIN, batch: BATCH },
+    { subcall_id: "int", origin: ORIGIN, batch: BATCH, prefix: obj({ chars: "int", key: "str" }) },
   ),
   "model.complete:result": obj({
     text: "str",

@@ -6,6 +6,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { refreshedModelsPath } from "../paths.ts";
+import { openRouterEndpoint } from "./providers.ts";
 import bundled from "../../catalog/models.json" with { type: "json" };
 
 export interface ModelInfo {
@@ -191,6 +192,7 @@ export class Catalog {
   /** Callers treat the entry as read-only. An id the catalog doesn't know gives undefined. */
   get(provider: string, id: string): ModelInfo | undefined {
     if (provider === FAKE_PROVIDER) return id === FAKE_MODEL_ID ? FAKE_MODEL : undefined;
+    if (provider === "openrouter") id = openRouterEndpoint(id).model; // a chosen endpoint is the same model (D-120)
     return this.view.get(provider)?.get(id);
   }
 

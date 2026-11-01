@@ -23,7 +23,7 @@ from . import contract
 BUILTIN_DIR = Path(__file__).resolve().parent / "profiles"
 
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-_TOP_KEYS = ("contract", "guidance", "root", "sub", "read", "repo")
+_TOP_KEYS = ("contract", "guidance", "cache_api", "root", "sub", "read", "repo")
 _LIMIT_FIELDS = tuple(f.name for f in dataclasses.fields(contract.Limits))
 _THINKING = {"off": None, "low": "low", "medium": "medium", "high": "high"}  # TOML has no null: off means none
 _OVERSIZE = ("truncate", "error")
@@ -55,6 +55,7 @@ class Profile:
     sub_temperature: float
     read: ModeSettings
     repo: ModeSettings
+    cache_api: bool = False  # cache-shaped sub-calls in the REPL (D-119); training-v4 never has them
 
     def system_prompt(self, shell_name: str = "sh") -> str:
         """Prompt v4, then the guidance block (if any) with every `{shell}` filled in."""
@@ -161,7 +162,14 @@ def _load(name: str, folder: Path, source: str) -> Profile:
         sub_temperature=_temperature(name, "sub", data),
         read=_mode(name, "read", data, contract.READ_LIMITS_V4),
         repo=_mode(name, "repo", data, contract.EDIT_LIMITS_V4),
+        cache_api=_bool(name, "cache_api", data.get("cache_api", False)),
     )
+
+
+def _bool(name: str, key: str, value: object) -> bool:
+    if not isinstance(value, bool):
+        raise ProfileError(f"profile {name!r}: {key} must be true or false")
+    return value
 
 
 def _read(name: str, path: Path) -> bytes:

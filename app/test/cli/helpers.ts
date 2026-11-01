@@ -90,7 +90,7 @@ export const EVENT_KEYS: Record<string, string[]> = {
   "run.permission": ["run_id", "turn", "kind", "detail", "allowed", "asked", "remembered"],
   "run.budget": ["run_id", "turns_left", "subcalls_left"],
   "run.finished": ["run_id", "tag", "answer", "submitted", "answer_valid", "turns", "subcalls", "usage", "cost_usd", "infra_error", "infra_kind", "wall_s", "log_path"],
-  "gateway.call": ["run_id", "role", "subcall_id", "model", "usage", "seconds", "error"],
+  "gateway.call": ["run_id", "role", "subcall_id", "model", "usage", "seconds", "error", "endpoint"],
 };
 
 /** The run-log record's top-level keys (§7.8), read mode. The engine's `runlog.RECORD_KEYS` can't be imported here. */

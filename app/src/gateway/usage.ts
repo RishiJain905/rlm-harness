@@ -64,6 +64,12 @@ export function toUsage(raw: unknown, info?: ModelInfo, chars?: { input: number;
   return u;
 }
 
+/** OpenRouter's own charge for a call (its usage `cost`, in USD), or null when the stream had none (D-121). */
+export function billedCost(raw: unknown): number | null {
+  const cost = isObject(raw) ? raw.cost : undefined;
+  return typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? cost : null;
+}
+
 /** D-22: uncached input, cache reads, cache writes and output, each at its own price. 0 without a catalog entry. */
 export function costOf(u: Usage, info?: ModelInfo): number {
   if (!info) return 0;

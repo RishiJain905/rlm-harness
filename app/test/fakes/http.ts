@@ -139,6 +139,8 @@ export interface StreamOptions {
 }
 
 export interface OpenAIStreamOptions extends StreamOptions {
+  /** OpenRouter: the endpoint that served the call, on every chunk as `provider`. */
+  provider?: string;
   /** Where reasoning goes: reasoning_content (DeepSeek, vLLM) or reasoning (OpenRouter). */
   reasoningField?: "reasoning_content" | "reasoning";
   reasoningDetails?: unknown[];
@@ -158,7 +160,8 @@ export interface AnthropicStreamOptions extends StreamOptions {
 export function openaiStream(o: OpenAIStreamOptions = {}): Response {
   const model = o.model ?? "served-model";
   const events: unknown[] = [];
-  const chunk = (delta: Record<string, unknown>, extra: Record<string, unknown> = {}) => events.push({ id: "chatcmpl-1", object: "chat.completion.chunk", model, choices: [{ index: 0, delta, ...extra }] });
+  const served = o.provider === undefined ? {} : { provider: o.provider };
+  const chunk = (delta: Record<string, unknown>, extra: Record<string, unknown> = {}) => events.push({ id: "chatcmpl-1", object: "chat.completion.chunk", model, ...served, choices: [{ index: 0, delta, ...extra }] });
   chunk({ role: "assistant", content: "" });
   for (const part of pieces(o.reasoning ?? "", o.chunkChars)) chunk({ [o.reasoningField ?? "reasoning_content"]: part });
   if (o.reasoningDetails) for (const d of o.reasoningDetails) chunk({ reasoning_details: [d] });

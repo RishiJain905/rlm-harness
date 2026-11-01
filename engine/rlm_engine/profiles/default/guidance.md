@@ -4,3 +4,6 @@ Notes for this machine:
 - A fetch does not count as a sub-call. Read what you fetch with code, or hand it to sub-calls; do not print whole pages.
 - In coding tasks, `shell(cmd, timeout=120)` runs `{shell}` on this machine, so write commands for {shell}.
 - Writes and shell commands may also need the user's approval. A refusal raises PermissionError; try another way.
+- Cheaper sub-calls: `segments()` splits `context` into fixed slices of about 40,000 characters, cut at line ends; each is a str with `.id`, `.start` and `.end`. `llm(prompt, over=seg)` and `llm_batch(prompts, over=segs)` send the segment's text first and your prompt after it, byte for byte the same every time, so the provider caches it: asking about a segment again costs about a tenth of the first time. `over` is one segment for every prompt, or one per prompt.
+- `llm_batch(prompts, shared=text)` sends `text` first in every prompt of the batch, paid once and then read from cache, so put long instructions, label definitions and examples there instead of repeating them in each prompt.
+- Prefer these to pasting context into prompts yourself. A segment counts toward a sub-call's size limit, and each prompt is still one sub-call.

@@ -61,6 +61,12 @@ export function providerName(id: string): string {
   return provider(id)?.name ?? id;
 }
 
+/** An OpenRouter model id may name the endpoint to use after "@": "deepseek/x@deepinfra/fp8" (D-120). */
+export function openRouterEndpoint(model: string): { model: string; endpoint: string | null } {
+  const at = model.indexOf("@");
+  return at > 0 && at < model.length - 1 ? { model: model.slice(0, at), endpoint: model.slice(at + 1) } : { model, endpoint: null };
+}
+
 /** "openrouter/anthropic/x" splits at the first "/". Throws on an empty provider or model. */
 export function parseModelRef(s: string, thinking: ModelRef["thinking"] = null): ModelRef {
   const slash = s.indexOf("/");

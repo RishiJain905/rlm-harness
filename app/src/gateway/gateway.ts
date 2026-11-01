@@ -23,20 +23,22 @@ import {
 } from "../protocol.ts";
 import { getSetting, type Settings } from "../settings.ts";
 import { buildAnthropicRequest, streamAnthropic, type ThinkingShape } from "./anthropic.ts";
-import { ANTHROPIC_SPLIT_PREFIX, BatchGate, type BatchTicket } from "./cache.ts";
+import { ANTHROPIC_SPLIT_PREFIX, BatchGate, prefixWorthMarking, routeKey, type BatchTicket } from "./cache.ts";
 import type { Catalog, ModelInfo } from "./catalog.ts";
 import { FakeError, FakeProvider, newFakeRunState, type FakeRunState } from "./fake.ts";
 import { KeyReadError, type KeyStore, type ResolvedKey } from "./keys.ts";
 import { buildOpenAIRequest, DROPPABLE_FIELDS, streamOpenAI } from "./openai.ts";
-import { provider, providerName, type ProviderDef } from "./providers.ts";
+import { openRouterEndpoint, provider, providerName, type ProviderDef } from "./providers.ts";
 import { AttemptError, causeText, type Failure, type Replay, type StreamHooks, type StreamResult } from "./stream.ts";
-import { emptyUsage, replyChars, requestChars, RunTotals, toUsage } from "./usage.ts";
+import { billedCost, emptyUsage, replyChars, requestChars, RunTotals, toUsage } from "./usage.ts";
 
 export type AppEvents = {
   "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number };
   /** reset: a broken stream is retried whole; drop this call's text and reasoning so far. */
   "call.delta": { call_id: string; text?: string; reasoning?: string; reset?: true };
-  "call.end": { call_id: string; run_id: string; usage: Usage; finish_reason: string; seconds: number; error?: ModelErrorData };
+  "call.end": { call_id: string; run_id: string; usage: Usage; finish_reason: string; seconds: number; error?: ModelErrorData;
+                /** OpenRouter: the endpoint that served the call, so a pinned conversation can be checked (D-120). */
+                endpoint?: string | null };
   /** Every run.* notification, as received. */
   "engine.event": { method: string; params: any };
   "engine.exit": { code: number; stderr: string[] };
@@ -107,6 +109,15 @@ interface Call {
   baseUrl: string;
 }
 
+/** Most OpenRouter pins kept; the oldest go first. Prefix pins outlive their run, so the map is bounded. */
+const PIN_CAP = 2000;
+
+/** OpenRouter's `provider` field as an endpoint slug for `provider.order` (D-120): a slug passes through, a display
+ *  name ("DeepInfra", "Amazon Bedrock") becomes its base slug ("deepinfra", "amazon-bedrock"). */
+export function endpointSlug(provider: string): string {
+  return /^[a-z0-9][a-z0-9.-]*(\/[a-z0-9][a-z0-9.-]*)*$/.test(provider) ? provider : provider.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
 export class Gateway {
   /** Read at call time, so a caller may replace it after a settings change. */
   settings: Settings;
@@ -121,6 +132,10 @@ export class Gateway {
   /** Parameter fallback, remembered for the process: `<provider>\0<model>` -> dropped fields. */
   private readonly dropped = new Map<string, Set<string>>();
   private readonly shapes = new Map<string, ThinkingShape>();
+  /** OpenRouter: `<model>\0<routing key>` -> the endpoint slug that conversation is pinned to (D-120). */
+  private readonly pins = new Map<string, string>();
+  /** `<model>\0<slug>` OpenRouter refused to route to (400 or 404): never pinned again. */
+  private readonly badPins = new Set<string>();
   private readonly gate: BatchGate;
   private nextCall = 0;
 
@@ -162,10 +177,10 @@ export class Gateway {
     run.calls.add(ac);
     const seconds = () => Math.round(Date.now() - startedAt) / 1000;
     try {
-      const { result, usage } = await this.call(p, run, callId, ac.signal);
+      const { result, usage, endpoint } = await this.call(p, run, callId, ac.signal);
       run.totals.add(p.role, usage);
       const done: ModelCompleteResult = { ...result, usage, seconds: seconds() };
-      this.bus.emit("call.end", { call_id: callId, run_id: p.run_id, usage, finish_reason: done.finish_reason, seconds: done.seconds });
+      this.bus.emit("call.end", { call_id: callId, run_id: p.run_id, usage, finish_reason: done.finish_reason, seconds: done.seconds, endpoint: endpoint ?? null });
       return done;
     } catch (err) {
       const error = ac.signal.aborted ? this.error("cancelled", p, null, "The call was cancelled.") : this.asModelError(err, p);
@@ -182,6 +197,11 @@ export class Gateway {
     const run = this.runs.get(runId);
     if (run) for (const ac of [...run.calls]) ac.abort(new Error("cancelled"));
     this.gate.dropRun(runId);
+    // the run's own conversations are over; prefix pins (rlmh-<key>) outlive it, for the next run on the same input
+    for (const key of [...this.pins.keys()]) {
+      const route = key.slice(key.indexOf("\0") + 1);
+      if (route === runId || route === `${runId}-sub`) this.pins.delete(key);
+    }
   }
 
   totals(runId: string): { root: Usage; sub: Usage; cost_usd: number; cache_hit_rate: number | null } {
@@ -264,7 +284,7 @@ export class Gateway {
 
   // -- one call --
 
-  private async call(p: ModelCompleteParams, run: RunState, callId: string, signal: AbortSignal): Promise<{ result: Omit<ModelCompleteResult, "usage" | "seconds">; usage: Usage }> {
+  private async call(p: ModelCompleteParams, run: RunState, callId: string, signal: AbortSignal): Promise<{ result: Omit<ModelCompleteResult, "usage" | "seconds">; usage: Usage; endpoint?: string | null }> {
     const def = provider(p.model.provider);
     if (!def) throw this.error("other", p, null, `Unknown provider "${p.model.provider}" in ${p.model.provider}/${p.model.model}.`);
     const info = this.catalog.get(def.id, p.model.model);
@@ -277,7 +297,9 @@ export class Gateway {
     let ticket: BatchTicket | null = null;
     if (p.role === "sub" && p.batch && p.batch.size > 1 && def.caching !== "none") {
       const member = { index: p.batch.index, size: p.batch.size, prompt: p.messages[p.messages.length - 1]?.content ?? "" };
-      const opts = { caching: def.caching, cacheMinTokens: info?.cache_min_tokens ?? null, split: ANTHROPIC_SPLIT_PREFIX };
+      // with a stable prefix the call marks its own block, so Anthropic needs only the leader-first order (D-119)
+      const caching = p.prefix && def.caching === "anthropic" ? "auto" : def.caching;
+      const opts = { caching, cacheMinTokens: info?.cache_min_tokens ?? null, split: ANTHROPIC_SPLIT_PREFIX };
       ticket = await this.gate.enter(`${p.run_id}\0${p.batch.id}`, member, opts, signal);
     }
     try {
@@ -287,7 +309,7 @@ export class Gateway {
     }
   }
 
-  private async attempts(c: Call, ticket: BatchTicket | null): Promise<{ result: Omit<ModelCompleteResult, "usage" | "seconds">; usage: Usage }> {
+  private async attempts(c: Call, ticket: BatchTicket | null): Promise<{ result: Omit<ModelCompleteResult, "usage" | "seconds">; usage: Usage; endpoint?: string | null }> {
     const { p, def, signal } = c;
     const slots = this.slotsFor(def.id);
     let held = false; // the slot is given back while sleeping, so the final give must know
@@ -301,6 +323,7 @@ export class Gateway {
     };
     let sent = false;
     let fallbacks = 0;
+    let unpinned = false;
     const hooks: StreamHooks = {
       onEvent: () => {},
       onContent: () => ticket?.content(),
@@ -330,6 +353,10 @@ export class Gateway {
             fallbacks += 1; // not a retry: no sleep, and the try count stays
             continue;
           }
+          if (!unpinned && this.unpin(c, f)) {
+            unpinned = true; // the pinned endpoint failed: try once more wherever OpenRouter routes, and pin there (D-120)
+            continue;
+          }
           if (!retryable(f) || attempt + 1 >= TRIES) throw this.failureError(f, def, p, c.key, c.baseUrl, attempt + 1);
           give();
           await RETRY.sleep(this.delayMs(attempt, f.headers), signal);
@@ -338,11 +365,46 @@ export class Gateway {
           attempt += 1;
           continue;
         }
+        this.pin(c, out);
         return this.finish(c, out);
       }
     } finally {
       give();
     }
+  }
+
+  // -- OpenRouter endpoint pins (D-120) --
+
+  private pinKey(c: Call): string {
+    return `${openRouterEndpoint(c.p.model.model).model}\0${routeKey(c.p)}`;
+  }
+
+  /** The endpoint this call must use: the one chosen in the model ref, else the one its conversation is pinned to. */
+  private endpointFor(c: Call): string | null {
+    if (c.def.id !== "openrouter") return null;
+    return openRouterEndpoint(c.p.model.model).endpoint ?? this.pins.get(this.pinKey(c)) ?? null;
+  }
+
+  /** After a success: the first endpoint that served a conversation becomes its pin. */
+  private pin(c: Call, out: StreamResult): void {
+    if (c.def.id !== "openrouter" || !out.provider || openRouterEndpoint(c.p.model.model).endpoint) return;
+    const key = this.pinKey(c);
+    const slug = endpointSlug(out.provider);
+    if (this.pins.has(key) || this.badPins.has(`${openRouterEndpoint(c.p.model.model).model}\0${slug}`)) return;
+    this.pins.set(key, slug);
+    while (this.pins.size > PIN_CAP) this.pins.delete(this.pins.keys().next().value!);
+  }
+
+  /** A pinned call failed: drop the gateway's pin (never the user's choice). A 400 or 404 means OpenRouter can't route
+   *  to that endpoint at all, so it is never pinned again for this model. True when there was a pin to drop. */
+  private unpin(c: Call, f: Failure): boolean {
+    if (c.def.id !== "openrouter" || openRouterEndpoint(c.p.model.model).endpoint) return false;
+    const key = this.pinKey(c);
+    const slug = this.pins.get(key);
+    if (slug === undefined) return false;
+    this.pins.delete(key);
+    if (f.kind === "http" && (f.status === 400 || f.status === 404)) this.badPins.add(`${openRouterEndpoint(c.p.model.model).model}\0${slug}`);
+    return true;
   }
 
   private buildBody(c: Call, ticket: BatchTicket | null): Record<string, unknown> {
@@ -351,8 +413,9 @@ export class Gateway {
     const dropped = this.dropped.get(modelKey) ?? new Set<string>();
     const replay = (m: Extract<Message, { role: "assistant" }>) => (m.tool_call ? run.replay.get(replayKey(m.content, m.tool_call.id)) : undefined);
     const markers = p.role === "root" || (ticket?.marker ?? false);
-    if (def.client === "anthropic") return buildAnthropicRequest(p, { shape: this.shapes.get(modelKey), dropped, markers, replay });
-    return buildOpenAIRequest(p, { provider: def, info: c.info, dropped, replay, markers });
+    const prefixMark = prefixWorthMarking(p, c.info?.cache_min_tokens ?? null);
+    if (def.client === "anthropic") return buildAnthropicRequest(p, { shape: this.shapes.get(modelKey), dropped, markers, prefixMark, replay });
+    return buildOpenAIRequest(p, { provider: def, info: c.info, dropped, replay, markers, prefixMark, endpoint: this.endpointFor(c) });
   }
 
   /** One streamed attempt with its idle and total timeouts. */
@@ -417,7 +480,7 @@ export class Gateway {
     return ms;
   }
 
-  private finish(c: Call, out: StreamResult): { result: Omit<ModelCompleteResult, "usage" | "seconds">; usage: Usage } {
+  private finish(c: Call, out: StreamResult): { result: Omit<ModelCompleteResult, "usage" | "seconds">; usage: Usage; endpoint?: string | null } {
     const { p, def, run } = c;
     let toolCall: ToolCall | null = null;
     if (out.toolCall) {
@@ -429,13 +492,16 @@ export class Gateway {
       if (replay) run.replay.set(replayKey(out.text, toolCall.id), replay);
     }
     const usage = toUsage(out.usage, c.info, { input: requestChars(p), output: replyChars(out.text, toolCall) });
+    const billed = def.id === "openrouter" ? billedCost(out.usage) : null;
+    if (billed !== null) usage.cost_usd = billed; // what OpenRouter charged, whichever endpoint served it (D-121)
     return {
       result: { text: out.text, tool_call: toolCall, reasoning: out.reasoning === "" ? null : out.reasoning, finish_reason: finish, served_model: out.served ?? p.model.model },
       usage,
+      endpoint: out.provider,
     };
   }
 
-  private async fakeCall(c: Call): Promise<{ result: Omit<ModelCompleteResult, "usage" | "seconds">; usage: Usage }> {
+  private async fakeCall(c: Call): Promise<{ result: Omit<ModelCompleteResult, "usage" | "seconds">; usage: Usage; endpoint?: string | null }> {
     const slots = this.slotsFor(c.def.id);
     await slots.take(c.signal);
     try {

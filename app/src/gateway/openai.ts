@@ -3,8 +3,9 @@
 
 import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError, type OpenAI } from "openai";
 import type { Message, ModelCompleteParams } from "../protocol.ts";
+import { routeKey, splitPrefix } from "./cache.ts";
 import type { ModelInfo } from "./catalog.ts";
-import type { ProviderDef } from "./providers.ts";
+import { openRouterEndpoint, type ProviderDef } from "./providers.ts";
 import { isObject, sdkAttemptError, type Replay, type SdkErrors, type StreamHooks, type StreamResult, type StreamToolCall } from "./stream.ts";
 
 const ERRORS: SdkErrors = { APIError, APIConnectionError, APIConnectionTimeoutError, APIUserAbortError };
@@ -21,6 +22,10 @@ export interface OpenAIContext {
   replay(m: Extract<Message, { role: "assistant" }>): Replay | undefined;
   /** Cache markers: root calls, and batch calls that share one whole prompt (cache.ts). Only OpenRouter's Anthropic models use them (D-117). */
   markers: boolean;
+  /** OpenRouter: mark the sub-call's stable prefix (p.prefix) as its own block; only Anthropic models use it (D-119). */
+  prefixMark: boolean;
+  /** OpenRouter: the endpoint this call must use, chosen in the model ref or pinned by the gateway (D-120). */
+  endpoint: string | null;
 }
 
 /** OpenRouter model ids served by Anthropic, `~anthropic/…` aliases included. */
@@ -38,7 +43,12 @@ export function buildOpenAIRequest(p: ModelCompleteParams, ctx: OpenAIContext): 
   const keep = (field: string) => !ctx.dropped.has(field);
   const on = p.thinking !== "off";
   const marked = anthropicMarkers(id, p, ctx);
-  const body: Record<string, unknown> = { model: p.model.model, messages: p.messages.map((m, i) => toMessage(m, id, hasTools, ctx, marked && i === 0)) };
+  const prefixAt = id === "openrouter" && ctx.prefixMark && OPENROUTER_ANTHROPIC.test(p.model.model) && p.prefix ? p.messages.length - 1 : -1;
+  const model = id === "openrouter" ? openRouterEndpoint(p.model.model).model : p.model.model;
+  const body: Record<string, unknown> = {
+    model,
+    messages: p.messages.map((m, i) => (i === prefixAt ? prefixMessage(m, p.prefix!.chars) : null) ?? toMessage(m, id, hasTools, ctx, marked && i === 0)),
+  };
   if (hasTools) body.tools = p.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
   body[id === "openai" ? "max_completion_tokens" : "max_tokens"] = p.max_tokens;
   if (keep("temperature") && !(id === "openai" && ctx.info?.reasoning)) body.temperature = p.temperature;
@@ -61,19 +71,28 @@ export function buildOpenAIRequest(p: ModelCompleteParams, ctx: OpenAIContext): 
       if (keep("chat_template_kwargs")) body.chat_template_kwargs = on ? { enable_thinking: true, reasoning_effort: p.thinking } : { enable_thinking: false };
       break;
   }
-  // The routing key pins a conversation to one backend and its warm cache. Sub-calls get their own, so a burst of
-  // them (and the failover it can cause) never moves the root's backend (D-118).
-  const routeKey = p.role === "root" ? p.run_id : `${p.run_id}-sub`;
-  if (id === "openai") body.prompt_cache_key = routeKey;
+  // The routing key pins a conversation to one backend and its warm cache (cache.ts routeKey, D-118, D-119)
+  const key = routeKey(p);
+  if (id === "openai") body.prompt_cache_key = key;
   if (id === "openrouter") {
-    body.session_id = routeKey;
+    body.session_id = key;
     // Anthropic caches only with cache_control: the top-level field puts the breakpoint on the last block and moves it
     // as the conversation grows; the system prompt's own breakpoint (toMessage) lets every run read it (D-117)
     if (anthropicMarkers(id, p, ctx)) body.cache_control = { type: "ephemeral" };
+    // once a conversation has an endpoint, every call goes there: another endpoint has another, cold cache (D-120)
+    if (ctx.endpoint) body.provider = { order: [ctx.endpoint], allow_fallbacks: false };
   }
   body.stream = true;
   if (keep("stream_options")) body.stream_options = { include_usage: true };
   return body;
+}
+
+/** A sub-call's user message as two text parts, the stable prefix marked; null when the split doesn't apply (D-119). */
+function prefixMessage(m: Message, chars: number): Record<string, unknown> | null {
+  if (m.role !== "user") return null;
+  const parts = splitPrefix(m.content, chars);
+  if (!parts) return null;
+  return { role: "user", content: [{ type: "text", text: parts[0], cache_control: { type: "ephemeral" } }, { type: "text", text: parts[1] }] };
 }
 
 function toMessage(m: Message, providerId: string, hasTools: boolean, ctx: OpenAIContext, marked: boolean): Record<string, unknown> {
@@ -107,7 +126,7 @@ function toMessage(m: Message, providerId: string, hasTools: boolean, ctx: OpenA
 
 /** Streams one attempt. Throws AttemptError for every failure, the abort included. */
 export async function streamOpenAI(client: OpenAI, body: Record<string, unknown>, hooks: StreamHooks, signal: AbortSignal): Promise<StreamResult> {
-  const out: StreamResult = { text: "", reasoning: "", toolCall: null, finish: null, served: null, usage: null, replay: {} };
+  const out: StreamResult = { text: "", reasoning: "", toolCall: null, finish: null, served: null, provider: null, usage: null, replay: {} };
   const calls = new Map<number, StreamToolCall & { extra?: unknown }>();
   let firstIndex: number | null = null;
   let reasoningContent = "";
@@ -125,6 +144,7 @@ export async function streamOpenAI(client: OpenAI, body: Record<string, unknown>
       hooks.onEvent();
       if (!isObject(chunk)) continue;
       if (typeof chunk.model === "string" && chunk.model !== "" && out.served === null) out.served = chunk.model;
+      if (typeof chunk.provider === "string" && chunk.provider !== "" && out.provider === null) out.provider = chunk.provider;
       if (chunk.usage) out.usage = chunk.usage;
       const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
       if (!isObject(choice)) continue;

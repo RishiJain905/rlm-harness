@@ -12,6 +12,7 @@ requests to `Permissions`. Nothing the worker sends can set `infra_error`: only 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 import urllib.error
 import urllib.request
@@ -27,6 +28,7 @@ from .profiles import Profile
 
 OPS = ("llm", "llm_batch", "fetch", "approve")
 INFRA_REPLY = "sub-call failed for an infrastructure reason; this episode will be discarded"
+PREFIX_SEPARATOR = "\n\n"  # cacheapi.SEPARATOR: between a sub-call's stable prefix and its prompt (D-119)
 
 # fetch (D-16). Module-level, so tests can patch them.
 FETCH_TIMEOUT_S = 30
@@ -97,12 +99,18 @@ class Bridge:
             return {"error": "prompts must be a list of strings"}
         if op == "llm" and len(prompts) != 1:
             return {"error": "llm takes exactly one prompt"}
+        prefixes = request.get("prefixes")  # cache-shaped sub-calls (D-119); training's requests have none
+        if prefixes is None:
+            prefixes = [None] * len(prompts)
+        elif not (isinstance(prefixes, list) and len(prefixes) == len(prompts)
+                  and all(p is None or isinstance(p, str) for p in prefixes)):
+            return {"error": "prefixes must be a list of strings or nulls, one per prompt"}
         if self.infra_error:
             return {"error": INFRA_REPLY}
         if self.subcalls_used + len(prompts) > self.max_subcalls:
             return self._reject(prompts, request, contract.budget_exhausted_message(self.max_subcalls))
         if self.limits.subcall_oversize == "error":
-            longest = max((len(p) for p in prompts), default=0)
+            longest = max((len(_joined(prefix, p)) for prefix, p in zip(prefixes, prompts)), default=0)
             if longest > self.limits.subcall_max_chars:
                 return self._reject(prompts, request, contract.oversize_message(longest, self.limits.subcall_max_chars))
         if not prompts:
@@ -118,7 +126,7 @@ class Bridge:
 
         results = await asyncio.gather(
             *(
-                self._one(first_id + i, prompt, origin, {"id": batch_id, "index": i, "size": n})
+                self._one(first_id + i, prompt, origin, {"id": batch_id, "index": i, "size": n}, prefixes[i])
                 for i, prompt in enumerate(prompts)
             ),
             return_exceptions=True,
@@ -151,8 +159,10 @@ class Bridge:
         self._subcall_event(None, self._origin(request), batch, longest, "rejected", message, 0.0)
         return {"error": message}
 
-    async def _one(self, subcall_id: int, prompt: str, origin: dict, batch: dict) -> str:
-        prompt = contract.truncate_prompt(contract.clean_text(prompt), self.limits.subcall_max_chars)
+    async def _one(self, subcall_id: int, prompt: str, origin: dict, batch: dict, prefix: str | None = None) -> str:
+        if prefix is not None:
+            prefix = contract.clean_text(prefix)
+        prompt = contract.truncate_prompt(_joined(prefix, contract.clean_text(prompt)), self.limits.subcall_max_chars)
         params = {
             "run_id": self.run_id,
             "role": "sub",
@@ -167,6 +177,10 @@ class Bridge:
             "origin": dict(origin),
             "batch": dict(batch),
         }
+        if prefix:  # the gateway marks and routes it for the provider's cache; the key is the same in every run
+            chars = len(prefix) + len(PREFIX_SEPARATOR)
+            if chars < len(prompt):
+                params["prefix"] = {"chars": chars, "key": hashlib.sha256(prefix.encode("utf-8")).hexdigest()[:16]}
         started = time.monotonic()
         self._subcall_event(subcall_id, origin, batch, len(prompt), "sent", None, None)
         usage: dict | None = None
@@ -252,6 +266,11 @@ class Bridge:
 
 
 # ---------------------------------------------------------------------------------------------- errors
+
+
+def _joined(prefix: str | None, prompt: str) -> str:
+    """A cache-shaped sub-call's text: the stable prefix first, byte for byte, then the prompt (D-119)."""
+    return prompt if prefix is None else prefix + PREFIX_SEPARATOR + prompt
 
 
 class _BadResult(Exception):

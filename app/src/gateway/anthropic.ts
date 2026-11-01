@@ -3,7 +3,7 @@
 
 import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError, type Anthropic } from "@anthropic-ai/sdk";
 import type { Message, ModelCompleteParams, Thinking } from "../protocol.ts";
-import { anthropicBreakpoints } from "./cache.ts";
+import { anthropicBreakpoints, splitPrefix } from "./cache.ts";
 import { isObject, sdkAttemptError, type Replay, type SdkErrors, type StreamHooks, type StreamResult } from "./stream.ts";
 
 const ERRORS: SdkErrors = { APIError, APIConnectionError, APIConnectionTimeoutError, APIUserAbortError };
@@ -53,6 +53,8 @@ export interface AnthropicContext {
   dropped: ReadonlySet<string>;
   /** Cache markers: root calls, and batch calls that share one whole prompt (cache.ts). */
   markers: boolean;
+  /** Mark the sub-call's stable prefix (p.prefix) as its own block (D-119). */
+  prefixMark?: boolean;
   /** The thinking blocks to put back on this assistant message, if any (D-33). */
   replay(m: Extract<Message, { role: "assistant" }>): Replay | undefined;
 }
@@ -69,8 +71,11 @@ export function buildAnthropicRequest(p: ModelCompleteParams, ctx: AnthropicCont
     if (last && last.role === role) last.content.push(...blocks); // neighbours of a dropped message merge
     else messages.push({ role, content: blocks });
   };
-  for (const m of p.messages) {
-    if (m.role === "user") push("user", [{ type: "text", text: m.content }]);
+  const prefixAt = ctx.prefixMark && p.prefix ? p.messages.length - 1 : -1;
+  p.messages.forEach((m, i) => {
+    const parts = i === prefixAt && m.role === "user" ? splitPrefix(m.content, p.prefix!.chars) : null;
+    if (parts) push("user", [{ type: "text", text: parts[0], cache_control: { type: "ephemeral" } }, { type: "text", text: parts[1] }]);
+    else if (m.role === "user") push("user", [{ type: "text", text: m.content }]);
     else if (m.role === "tool") push("user", [{ type: "tool_result", tool_use_id: m.tool_call_id, content: m.content }]);
     else if (m.role === "assistant") {
       const blocks: Block[] = [...(ctx.replay(m)?.thinking_blocks ?? [])];
@@ -78,7 +83,7 @@ export function buildAnthropicRequest(p: ModelCompleteParams, ctx: AnthropicCont
       if (m.tool_call) blocks.push({ type: "tool_use", id: m.tool_call.id, name: m.tool_call.name, input: m.tool_call.arguments });
       if (m.content !== "" || m.tool_call) push("assistant", blocks); // an empty assistant message is dropped
     }
-  }
+  });
 
   let thinking: Block | undefined;
   let outputConfig: Block | undefined;
@@ -109,7 +114,7 @@ export function buildAnthropicRequest(p: ModelCompleteParams, ctx: AnthropicCont
 
 /** Streams one attempt as raw events, keeping thinking blocks and signatures as received. Throws AttemptError. */
 export async function streamAnthropic(client: Anthropic, body: Record<string, unknown>, hooks: StreamHooks, signal: AbortSignal): Promise<StreamResult> {
-  const out: StreamResult = { text: "", reasoning: "", toolCall: null, finish: null, served: null, usage: null, replay: {} };
+  const out: StreamResult = { text: "", reasoning: "", toolCall: null, finish: null, served: null, provider: null, usage: null, replay: {} };
   const blocks = new Map<number, Block>();
   const order: number[] = [];
   let usage: Record<string, unknown> | null = null;

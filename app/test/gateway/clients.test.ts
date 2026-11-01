@@ -49,7 +49,7 @@ afterEach(() => {
 
 describe("golden bodies", () => {
   test("openai", () => {
-    const body = buildOpenAIRequest(p("openai", "gpt-4.1"), { provider: provider("openai")!, dropped: new Set(), replay: noReplay, markers: true });
+    const body = buildOpenAIRequest(p("openai", "gpt-4.1"), { provider: provider("openai")!, dropped: new Set(), replay: noReplay, markers: true, prefixMark: false, endpoint: null });
     const expected = {
       model: "gpt-4.1",
       messages: [
@@ -69,9 +69,9 @@ describe("golden bodies", () => {
       stream_options: { include_usage: true },
     };
     expect(JSON.stringify(body)).toBe(JSON.stringify(expected));
-    const again = buildOpenAIRequest(p("openai", "gpt-4.1"), { provider: provider("openai")!, dropped: new Set(), replay: noReplay, markers: true });
+    const again = buildOpenAIRequest(p("openai", "gpt-4.1"), { provider: provider("openai")!, dropped: new Set(), replay: noReplay, markers: true, prefixMark: false, endpoint: null });
     expect(JSON.stringify(again)).toBe(JSON.stringify(body));
-    const noTools = buildOpenAIRequest(p("deepseek", "x", { tools: [] }), { provider: provider("deepseek")!, dropped: new Set(), replay: noReplay, markers: true });
+    const noTools = buildOpenAIRequest(p("deepseek", "x", { tools: [] }), { provider: provider("deepseek")!, dropped: new Set(), replay: noReplay, markers: true, prefixMark: false, endpoint: null });
     expect("tools" in noTools).toBe(false);
     expect("tool_choice" in body).toBe(false);
   });

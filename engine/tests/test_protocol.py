@@ -44,6 +44,7 @@ REQUIRED = [
     "run.start:result",
     "model.complete:request:root",
     "model.complete:request:sub",
+    "model.complete:request:sub-prefix",
     "model.complete:result",
     "approval.request:request",
     "approval.request:result",
@@ -216,7 +217,7 @@ FIELDS = {
             "thinking": THINKING,
             "turn": INT,
         },
-        {"subcall_id": INT, "origin": ORIGIN, "batch": BATCH},
+        {"subcall_id": INT, "origin": ORIGIN, "batch": BATCH, "prefix": obj({"chars": INT, "key": STR})},
     ),
     "model.complete:result": obj(
         {

@@ -1,6 +1,7 @@
 // KV cache: adds cache markers on whole blocks only (no text is split, merged or reordered, so the model reads the same bytes with or without them); same input, same bytes, no clock, no randomness, fixed key order.
 // Also the llm_batch rule (D-24): which call goes first, and when the rest follow.
 
+import type { ModelCompleteParams } from "../protocol.ts";
 import type { ProviderDef } from "./providers.ts";
 
 /** Splitting a prompt into two text blocks needs proof (count_tokens on both shapes) that the model sees the same bytes. Off until then. */
@@ -35,6 +36,30 @@ export function anthropicBreakpoints<B extends MarkableBody>(body: B, opts: { sp
   }
   out.messages = [...messages.slice(0, -1), { ...last, content }];
   return out;
+}
+
+/**
+ * The routing key that keeps a conversation on one backend and its warm cache (OpenAI's prompt_cache_key,
+ * OpenRouter's session_id and endpoint pin): root calls use the run id, sub-calls `<run>-sub` so their bursts never
+ * move the root (D-118), and a sub-call with a stable prefix the prefix's own key, the same in every run, so calls
+ * that repeat a segment or preamble land where it is already cached (D-119).
+ */
+export function routeKey(p: Pick<ModelCompleteParams, "run_id" | "role" | "prefix">): string {
+  if (p.role === "root") return p.run_id;
+  return p.prefix ? `rlmh-${p.prefix.key}` : `${p.run_id}-sub`;
+}
+
+/** A sub-call's stable prefix and the rest of its text, split at `chars`; null unless that is a proper split. */
+export function splitPrefix(text: string, chars: number): [string, string] | null {
+  if (!Number.isSafeInteger(chars) || chars <= 0 || chars >= text.length) return null;
+  const code = text.charCodeAt(chars - 1);
+  if (code >= 0xd800 && code <= 0xdbff) return null; // would cut a surrogate pair
+  return [text.slice(0, chars), text.slice(chars)];
+}
+
+/** Whether a sub-call's prefix is long enough to be worth a cache marker on a marker-based provider (chars / 4). */
+export function prefixWorthMarking(p: Pick<ModelCompleteParams, "prefix">, cacheMinTokens: number | null): boolean {
+  return p.prefix !== undefined && Math.ceil(p.prefix.chars / 4) >= (cacheMinTokens ?? DEFAULT_CACHE_MIN_TOKENS);
 }
 
 /** The longest common prefix, by characters, never ending inside a surrogate pair. */

@@ -100,6 +100,15 @@ def kill_tree(proc: subprocess.Popen) -> None:
         pass
 
 
+SEGMENT_CHARS = 40_000  # a context segment for cache-shaped sub-calls: ~10K tokens, over every provider's cache minimum
+
+
+def segment_chars(limits: contract.Limits) -> int:
+    """The default segment size: SEGMENT_CHARS, or two thirds of a sub-call's limit if that is smaller, so a segment
+    always leaves room for the prompt (D-119)."""
+    return min(SEGMENT_CHARS, limits.subcall_max_chars * 2 // 3)
+
+
 class Worker:
     """One run's REPL worker. Restarted after a timeout or a crash; `close()` kills it for good.
 
@@ -113,7 +122,8 @@ class Worker:
 
     def __init__(self, *, mode: str, context: str, workspace: Path, scratch: Path, limits: contract.Limits,
                  messages: contract.CellMessages, on_request: RequestHandler, shell: ShellSpec,
-                 base_tree: str | None = None, python: str = sys.executable, wall_cap_s: float = 1800.0) -> None:
+                 base_tree: str | None = None, python: str = sys.executable, wall_cap_s: float = 1800.0,
+                 cache_api: bool = False) -> None:
         if mode not in ("read", "repo"):
             raise ValueError(f"unknown mode {mode!r}")
         self.mode = mode
@@ -125,6 +135,7 @@ class Worker:
         self.on_request = on_request
         self.shell = shell
         self.base_tree = base_tree
+        self.cache_api = cache_api  # the profile's cache-shaped sub-calls (D-119)
         self.python = python
         # training's edit sandbox: the cap sits a full default cap above the cell's own limit
         self.wall_cap_s = wall_cap_s + (limits.cell_timeout_s if mode == "repo" else 0)
@@ -402,7 +413,8 @@ class Worker:
                 "scratch": str(self.scratch), "base_tree": self.base_tree,
                 "cell_timeout_s": self.limits.cell_timeout_s, "subcall_max_chars": self.limits.subcall_max_chars,
                 "subcall_oversize": self.limits.subcall_oversize,
-                "shell": {"kind": self.shell.kind, "argv": list(self.shell.argv)}, "repo_alias": REPO_ALIAS}
+                "shell": {"kind": self.shell.kind, "argv": list(self.shell.argv)}, "repo_alias": REPO_ALIAS,
+                **({"cache_api": True, "segment_chars": segment_chars(self.limits)} if self.cache_api else {})}
 
     def _spawn(self) -> None:
         kwargs: dict[str, Any] = {}

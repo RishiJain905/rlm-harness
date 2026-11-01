@@ -1,5 +1,6 @@
 contract = "v4"
 guidance = "guidance.md"
+cache_api = true              # cache-shaped sub-calls: segments(), llm(..., over=), llm_batch(..., shared=, over=) (D-119)
 
 [root]
 temperature = 1.0

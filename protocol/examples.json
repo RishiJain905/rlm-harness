@@ -174,6 +174,26 @@
       }}
     },
     {
+      "name": "model.complete:request:sub-prefix",
+      "direction": "engine->app",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": "e5", "method": "model.complete", "params": {
+        "run_id": "r_0123456789ab",
+        "role": "sub",
+        "model": {"provider": "openai", "model": "example-sub-model", "thinking": "low"},
+        "messages": [{"role": "user", "content": "line 0001: an example context line\nline 0002: another example line\n\n\nHow many lines mention travel?"}],
+        "tools": [],
+        "max_tokens": 2048,
+        "temperature": 0.0,
+        "thinking": "low",
+        "turn": 2,
+        "subcall_id": 3,
+        "origin": {"turn": 2, "line": 5},
+        "batch": {"id": "b2", "index": 0, "size": 1},
+        "prefix": {"chars": 69, "key": "3f9a0c1d2e4b5a69"}
+      }}
+    },
+    {
       "name": "model.complete:result",
       "direction": "app->engine",
       "kind": "result",

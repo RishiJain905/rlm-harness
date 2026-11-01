@@ -113,7 +113,8 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
                         permissions=perms)
         worker = worker_factory(mode=spec.mode, context=spec.context, workspace=workspace_path, scratch=scratch,
                                 limits=limits, messages=contract.cell_messages(limits, edit=repo_mode),
-                                on_request=bridge.handle, shell=shell, base_tree=base_tree)
+                                on_request=bridge.handle, shell=shell, base_tree=base_tree,
+                                cache_api=spec.profile.cache_api)
         await worker.start()
         emit("run.started", {
             "tag": spec.tag, "mode": spec.mode, "profile": spec.profile.name,
