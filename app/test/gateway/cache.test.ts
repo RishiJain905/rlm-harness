@@ -124,6 +124,49 @@ describe("cache keys", () => {
     expect([msgs[0], msgs[2], msgs[4], msgs[6]]).toEqual([sysMarked, sysMarked, plain, plain]);
     expect(server.requests.map((q) => countMarkers(q.body))).toEqual([2, 0, 2, 0, 0, 0, 0, 0]);
   });
+
+  test("OpenRouter's Alibaba-cached models: breakpoints on the system prompt and the last message, root calls only, text unchanged (D-119)", async () => {
+    r = await rig({ server, keys: ["openrouter"] });
+    server.script(() => openaiStream({ text: "ok" }));
+    const mark = (text: string) => [{ type: "text", text, cache_control: { type: "ephemeral" } }];
+    const call = { id: "call_1", name: "python", arguments: { code: "print(1)" } };
+    // native: the last message is a tool result, which carries the marker itself
+    const native: ModelCompleteParams["messages"] = [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "first" },
+      { role: "assistant", content: "", tool_call: call },
+      { role: "tool", tool_call_id: "call_1", content: "1\n" },
+    ];
+    // fenced: the last message is a user observation
+    const fenced: ModelCompleteParams["messages"] = [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "first" },
+      { role: "assistant", content: "reply" },
+      { role: "user", content: "second" },
+    ];
+    await r.gateway.complete(params(ref("openrouter", "qwen/qwen3-max"), { messages: native }));
+    await r.gateway.complete(params(ref("openrouter", "qwen/qwen3-coder-plus"), { messages: fenced }));
+    await r.gateway.complete(params(ref("openrouter", "deepseek/deepseek-v3.2"), { messages: fenced }));
+    await r.gateway.complete(sub(ref("openrouter", "qwen/qwen3-max"), "Summarize.", { id: "b1", index: 0, size: 1 })); // a plain sub-call
+    await r.gateway.complete(params(ref("openrouter", "qwen/qwen3.5-plus-02-15"), { messages: fenced })); // a snapshot: no explicit caching
+    await r.gateway.complete(params(ref("openrouter", "qwen/qwen3-coder"), { messages: fenced })); // not on the list
+    const [toolLast, userLast, deepseek, plainSub, snapshot, unlisted] = server.requests.map((q) => q.body);
+    expect(toolLast.messages).toEqual([
+      { role: "system", content: mark("SYS") },
+      { role: "user", content: "first" },
+      { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "python", arguments: '{"code":"print(1)"}' } }] },
+      { role: "tool", tool_call_id: "call_1", content: mark("1\n") },
+    ]);
+    const fencedMarked = [{ role: "system", content: mark("SYS") }, { role: "user", content: "first" }, { role: "assistant", content: "reply" }, { role: "user", content: mark("second") }];
+    expect(userLast.messages).toEqual(fencedMarked);
+    expect(deepseek.messages).toEqual(fencedMarked);
+    expect(plainSub.messages).toEqual([{ role: "user", content: "Summarize." }]);
+    expect(snapshot.messages).toEqual(fenced);
+    expect(unlisted.messages).toEqual(fenced);
+    // exactly 2 per marked call, none top-level: Alibaba has no automatic field
+    expect(server.requests.map((q) => countMarkers(q.body))).toEqual([2, 2, 2, 0, 0, 0]);
+    expect(server.requests.map((q) => "cache_control" in q.body)).toEqual([false, false, false, false, false, false]);
+  });
 });
 
 describe("sharedPrefix and planBatch", () => {

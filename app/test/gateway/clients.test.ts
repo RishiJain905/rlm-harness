@@ -141,11 +141,12 @@ describe("streaming", () => {
 
 describe("mapping tables", () => {
   const LEVELS: Thinking[] = ["off", "low", "medium", "high"];
-  const ROWS: { id: string; model: string; path: string; host: string; maxField: string; temperature: boolean; cache: Record<string, unknown> }[] = [
+  const ROWS: { id: string; model: string; path: string; host: string; maxField: string; temperature: boolean; cache: Record<string, unknown>; markers?: string[] }[] = [
     { id: "openai", model: "gpt-4.1", path: "/v1/chat/completions", host: "api.openai.com", maxField: "max_completion_tokens", temperature: true, cache: { prompt_cache_key: "r_0123456789ab" } },
     { id: "openai", model: "gpt-5", path: "/v1/chat/completions", host: "api.openai.com", maxField: "max_completion_tokens", temperature: false, cache: { prompt_cache_key: "r_0123456789ab" } },
     { id: "deepseek", model: "deepseek-v4-pro", path: "/chat/completions", host: "api.deepseek.com", maxField: "max_tokens", temperature: true, cache: {} },
     { id: "openrouter", model: "anthropic/claude-sonnet-5", path: "/api/v1/chat/completions", host: "openrouter.ai", maxField: "max_tokens", temperature: true, cache: { session_id: "r_0123456789ab", cache_control: { type: "ephemeral" } } },
+    { id: "openrouter", model: "qwen/qwen3-max", path: "/api/v1/chat/completions", host: "openrouter.ai", maxField: "max_tokens", temperature: true, cache: { session_id: "r_0123456789ab" }, markers: ["system", "user"] },
     { id: "gemini", model: "gemini-3.5-flash", path: "/v1beta/openai/chat/completions", host: "generativelanguage.googleapis.com", maxField: "max_tokens", temperature: true, cache: {} },
     { id: "local", model: "qwen", path: "/v1/chat/completions", host: "localhost:8000", maxField: "max_tokens", temperature: true, cache: {} },
     { id: "custom", model: "m", path: "/v2/chat/completions", host: "custom.example:9000", maxField: "max_tokens", temperature: true, cache: {} },
@@ -181,6 +182,9 @@ describe("mapping tables", () => {
         const keys = Object.keys(req.body).filter((k) => k !== "model" && k !== "messages");
         expect(keys).toEqual(Object.keys(expected));
         for (const [k, v] of Object.entries(expected)) expect(req.body[k]).toEqual(v);
+        // which messages carry a per-block cache breakpoint (D-117 marks the system prompt, D-119 also the last message)
+        const marked = req.body.messages.filter((m: any) => Array.isArray(m.content) && m.content.some((b: any) => b.cache_control)).map((m: any) => m.role);
+        expect(marked).toEqual(row.markers ?? (row.cache.cache_control ? ["system"] : []));
       }
     });
   }

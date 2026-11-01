@@ -176,7 +176,7 @@ The link carries what happened and requests to deliver. Every decision about the
 | Anthropic | `@anthropic-ai/sdk` | Breakpoints at the end of the system prompt and on the latest message |
 | OpenAI | `openai` | Automatic; `prompt_cache_key` = run id, `<run id>-sub` for sub-calls (D-118) |
 | DeepSeek | `openai`, DeepSeek's endpoint | Automatic |
-| OpenRouter | `openai`, OpenRouter's endpoint | `session_id` = run id, `<run id>-sub` for sub-calls (D-118); Anthropic models also get `cache_control` (D-117) |
+| OpenRouter | `openai`, OpenRouter's endpoint | `session_id` = run id, `<run id>-sub` for sub-calls (D-118); Anthropic models also get `cache_control` (D-117), Alibaba-cached Qwen models per-block breakpoints (D-119) |
 | Google Gemini | `openai`, Gemini's OpenAI-compatible endpoint | What the endpoint offers |
 | Local server: vLLM, Ollama, LM Studio, llama.cpp | `openai`, a localhost URL | The server's prefix cache |
 | Custom | `openai`, any OpenAI-compatible URL | What the endpoint offers |

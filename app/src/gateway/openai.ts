@@ -1,4 +1,4 @@
-// KV cache: builds request bytes for every OpenAI-compatible provider; same input, same bytes (no clock, no randomness, fixed key order: model, messages, tools, max tokens, temperature, thinking fields, cache fields, stream, stream_options), replay only from what the provider sent.
+// KV cache: builds request bytes for every OpenAI-compatible provider; same input, same bytes (no clock, no randomness, fixed key order: model, messages, tools, max tokens, temperature, thinking fields, cache fields, stream, stream_options), replay only from what the provider sent; a cache marker turns a message's string into one text part holding the same bytes, with the marker as a field beside it, so the model reads the same text with or without it.
 // The Chat Completions mapping (spec step 5) and the stream reader, through the openai SDK.
 
 import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError, type OpenAI } from "openai";
@@ -19,16 +19,40 @@ export interface OpenAIContext {
   dropped: ReadonlySet<string>;
   /** The replay to attach to this assistant message, if any (D-33). */
   replay(m: Extract<Message, { role: "assistant" }>): Replay | undefined;
-  /** Cache markers: root calls, and batch calls that share one whole prompt (cache.ts). Only OpenRouter's Anthropic models use them (D-117). */
+  /** Cache markers: root calls, and batch calls that share one whole prompt (cache.ts). Only OpenRouter's Anthropic (D-117) and Alibaba-cached (D-119) models use them. */
   markers: boolean;
 }
 
 /** OpenRouter model ids served by Anthropic, `~anthropic/…` aliases included. */
 const OPENROUTER_ANTHROPIC = /^~?anthropic\//;
 
-/** Whether this call carries Anthropic cache breakpoints: an OpenRouter Anthropic model on a marked call (D-117). */
-function anthropicMarkers(providerId: string, p: ModelCompleteParams, ctx: OpenAIContext): boolean {
-  return providerId === "openrouter" && ctx.markers && OPENROUTER_ANTHROPIC.test(p.model.model);
+/**
+ * OpenRouter models served by Alibaba, which caches only with per-block breakpoints and has no top-level field
+ * (OpenRouter's prompt-caching docs, "Alibaba Qwen"). Exact ids: snapshot endpoints such as `qwen/qwen3.5-plus-02-15`
+ * don't cache. `deepseek/deepseek-v3.2` caches only when Alibaba serves it; OpenRouter handles the marker for the rest (D-119).
+ */
+const OPENROUTER_ALIBABA = new Set(["qwen/qwen3-max", "qwen/qwen-plus", "qwen/qwen3.6-plus", "qwen/qwen3-coder-plus", "qwen/qwen3-coder-flash", "deepseek/deepseek-v3.2"]);
+
+interface CacheMarkers {
+  /** Indexes of the messages whose one text part carries a breakpoint. */
+  blocks: ReadonlySet<number>;
+  /** OpenRouter's top-level automatic breakpoint. */
+  auto: boolean;
+}
+
+/** Where this call's cache breakpoints go: only OpenRouter, only on a marked call. */
+function cacheMarkers(providerId: string, p: ModelCompleteParams, ctx: OpenAIContext): CacheMarkers {
+  if (providerId !== "openrouter" || !ctx.markers) return { blocks: new Set(), auto: false };
+  const model = p.model.model;
+  const system = p.messages[0]?.role === "system" ? [0] : [];
+  // Anthropic: the top-level field puts a breakpoint on the last block and moves it as the conversation grows; the
+  // system prompt's own breakpoint lets every run read it (D-117)
+  if (OPENROUTER_ANTHROPIC.test(model)) return { blocks: new Set(system), auto: true };
+  // Alibaba: both breakpoints explicit, where anthropicBreakpoints (cache.ts) puts them: the end of system and the last
+  // message. That is often a tool result; OpenRouter's ChatToolMessage takes text parts with cache_control, so it
+  // carries the marker itself (D-119)
+  if (OPENROUTER_ALIBABA.has(model)) return { blocks: new Set([...system, p.messages.length - 1]), auto: false };
+  return { blocks: new Set(), auto: false };
 }
 
 /** Pure: the Chat Completions body for one model.complete request. */
@@ -37,8 +61,8 @@ export function buildOpenAIRequest(p: ModelCompleteParams, ctx: OpenAIContext): 
   const hasTools = p.tools.length > 0;
   const keep = (field: string) => !ctx.dropped.has(field);
   const on = p.thinking !== "off";
-  const marked = anthropicMarkers(id, p, ctx);
-  const body: Record<string, unknown> = { model: p.model.model, messages: p.messages.map((m, i) => toMessage(m, id, hasTools, ctx, marked && i === 0)) };
+  const markers = cacheMarkers(id, p, ctx);
+  const body: Record<string, unknown> = { model: p.model.model, messages: p.messages.map((m, i) => toMessage(m, id, hasTools, ctx, markers.blocks.has(i))) };
   if (hasTools) body.tools = p.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
   body[id === "openai" ? "max_completion_tokens" : "max_tokens"] = p.max_tokens;
   if (keep("temperature") && !(id === "openai" && ctx.info?.reasoning)) body.temperature = p.temperature;
@@ -67,9 +91,7 @@ export function buildOpenAIRequest(p: ModelCompleteParams, ctx: OpenAIContext): 
   if (id === "openai") body.prompt_cache_key = routeKey;
   if (id === "openrouter") {
     body.session_id = routeKey;
-    // Anthropic caches only with cache_control: the top-level field puts the breakpoint on the last block and moves it
-    // as the conversation grows; the system prompt's own breakpoint (toMessage) lets every run read it (D-117)
-    if (anthropicMarkers(id, p, ctx)) body.cache_control = { type: "ephemeral" };
+    if (markers.auto) body.cache_control = { type: "ephemeral" };
   }
   body.stream = true;
   if (keep("stream_options")) body.stream_options = { include_usage: true };
@@ -79,13 +101,10 @@ export function buildOpenAIRequest(p: ModelCompleteParams, ctx: OpenAIContext): 
 function toMessage(m: Message, providerId: string, hasTools: boolean, ctx: OpenAIContext, marked: boolean): Record<string, unknown> {
   switch (m.role) {
     case "system":
-      // one text block with the engine's exact string; the breakpoint is a field beside it, not text (D-117)
-      if (marked) return { role: "system", content: [{ type: "text", text: m.content, cache_control: { type: "ephemeral" } }] };
-      return { role: m.role, content: m.content };
     case "user":
-      return { role: m.role, content: m.content };
+      return { role: m.role, content: markedContent(m.content, marked) };
     case "tool":
-      return { role: "tool", tool_call_id: m.tool_call_id, content: m.content };
+      return { role: "tool", tool_call_id: m.tool_call_id, content: markedContent(m.content, marked) };
     case "assistant": {
       const out: Record<string, unknown> = { role: "assistant", content: m.content };
       const replay = ctx.replay(m);
@@ -103,6 +122,14 @@ function toMessage(m: Message, providerId: string, hasTools: boolean, ctx: OpenA
       return out;
     }
   }
+}
+
+/**
+ * A marked message: one text part with the engine's exact string, the breakpoint a field beside it, not text (D-117,
+ * D-119). An empty string stays plain, since an empty block can't hold a breakpoint.
+ */
+function markedContent(text: string, marked: boolean): string | Record<string, unknown>[] {
+  return marked && text !== "" ? [{ type: "text", text, cache_control: { type: "ephemeral" } }] : text;
 }
 
 /** Streams one attempt. Throws AttemptError for every failure, the abort included. */
