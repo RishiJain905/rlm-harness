@@ -692,6 +692,42 @@ def test_read_mode_scratch_writes_never_ask(tmp_path: Path) -> None:
     run(main(), 60)
 
 
+@pytest.mark.parametrize("allow", [False, True], ids=["deny", "allow"])
+def test_udp_sends_ask_like_a_connect(tmp_path: Path, allow: bool) -> None:
+    """UDP needs no connect: sendto and sendmsg to an address ask for the host as a connect does."""
+    receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    receiver.bind(("127.0.0.1", 0))
+    receiver.settimeout(0.5)
+    port = receiver.getsockname()[1]
+    cells = [f"import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+             f"s.sendto(b'to', ('127.0.0.1', {port}))"]
+    if hasattr(socket.socket, "sendmsg"):  # POSIX only
+        cells.append(f"import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+                     f"s.sendmsg([b'msg'], [], 0, ('127.0.0.1', {port}))")
+
+    async def main() -> None:
+        async with real_run(tmp_path, "default", ALLOW if allow else DENY) as r:
+            for code in cells:
+                before = len(r.app.approvals)
+                result = await r.worker.run_cell(code)
+                asked = [(a["kind"], a["detail"], a["inside_workspace"]) for a in r.app.approvals[before:]]
+                assert asked == [("network", f"127.0.0.1:{port}", False)], code
+                if allow:
+                    assert result.error is None, result.error
+                else:
+                    assert DENIED in (result.error or ""), result.error
+
+    try:
+        run(main(), 60)
+        received = []
+        with contextlib.suppress(OSError):
+            while True:
+                received.append(receiver.recv(64))
+        assert received == ([b"to", b"msg"][: len(cells)] if allow else [])
+    finally:
+        receiver.close()
+
+
 class _Pages(http.server.BaseHTTPRequestHandler):
     hits: list[str] = []
 

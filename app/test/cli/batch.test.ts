@@ -3,9 +3,9 @@
 // process run from a folder other than the tasks file's. Plus the pre-flight checks and the batch name.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { batchName, checkTasks } from "../../src/cli/batch.ts";
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { join, sep } from "node:path";
+import { batchName, canonicalRoot, checkTasks, rootsOverlap } from "../../src/cli/batch.ts";
 import { jsonLines, REAL, rlmh, temp, type Temp } from "./helpers.ts";
 
 let t: Temp;
@@ -107,6 +107,92 @@ describe("the pool", () => {
         .filter((e) => e.type === "run.started" || e.type === "run.finished")
         .map((e) => `${e.type === "run.started" ? "start" : "end"} ${e.tag}`);
       expect(order).toEqual(["start q1", "end q1", "start q2", "end q2", "start q3", "end q3"]);
+    },
+    REAL,
+  );
+});
+
+describe("repo tasks on one folder (a run edits the folder itself)", () => {
+  const slow = { root: [{ text: "thinking..", tool_call: { code: "submit('42')" } }], chunk_chars: 1, delay_ms: 60 };
+
+  test("rootsOverlap: the same folder, or one inside the other, and nothing else", () => {
+    const base = join(sep, "work", "repos");
+    expect(rootsOverlap(join(base, "app"), join(base, "app"))).toBe(true);
+    expect(rootsOverlap(join(base, "app"), join(base, "app", "pkg"))).toBe(true);
+    expect(rootsOverlap(join(base, "app", "pkg"), join(base, "app"))).toBe(true);
+    expect(rootsOverlap(join(base, "app"), join(base, "app2"))).toBe(false); // a shared name prefix is not a shared folder
+    expect(rootsOverlap(join(base, "app"), join(base, "lib"))).toBe(false);
+    expect(rootsOverlap(join(sep), join(base, "app"))).toBe(true); // the filesystem root holds everything
+    if (process.platform === "win32" || process.platform === "darwin") expect(rootsOverlap(join(base, "App"), join(base, "app"))).toBe(true);
+    else expect(rootsOverlap(join(base, "App"), join(base, "app"))).toBe(false);
+  });
+
+  test("canonicalRoot follows spellings, and checkTasks records it for repo tasks only", () => {
+    const file = join(tasksDir, "canon.jsonl");
+    const text = [
+      JSON.stringify({ id: "plain", task: "T", repo: "repo" }),
+      JSON.stringify({ id: "dots", task: "T", repo: "./repo/../repo/" }),
+      JSON.stringify({ id: "read", question: "Q?", input: "data/a.txt" }),
+    ].join("\n");
+    const { tasks, problems } = checkTasks(text, file);
+    expect(problems).toEqual([]);
+    expect(tasks.map((x) => x.root)).toEqual([canonicalRoot(repo), canonicalRoot(repo), undefined]);
+    expect(rootsOverlap(tasks[0]!.root!, tasks[1]!.root!)).toBe(true);
+    expect(canonicalRoot(join(t.dir, "no", "such", "folder"))).toBe(join(t.dir, "no", "such", "folder")); // not there: as given
+    if (process.platform !== "win32") {
+      const alias = join(t.dir, "repo-alias");
+      if (!existsSync(alias)) symlinkSync(repo, alias);
+      expect(canonicalRoot(alias)).toBe(canonicalRoot(repo));
+      expect(rootsOverlap(canonicalRoot(alias), canonicalRoot(repo))).toBe(true);
+    }
+  });
+
+  test(
+    "--jobs 3: two tasks on one folder (spelled two ways) and one inside it run one after the other; a read task runs beside them",
+    async () => {
+      mkdirSync(join(repo, "pkg"), { recursive: true });
+      const file = tasksFile("same-repo.jsonl", [
+        { id: "fix1", task: "Fix it.", repo: "repo" },
+        { id: "fix2", task: "Fix it again.", repo: "./repo/../repo" },
+        { id: "fix3", task: "Fix the package.", repo: "repo/pkg" },
+        { id: "q", question: "Q?", input: "data/a.txt" },
+      ]);
+      const r = await rlmh(["batch", file, "--jobs", "3", "--permission-mode", "accept-edits", "--json", ...FAKE], {
+        home: join(t.dir, "home-same-repo"),
+        script: t.script(slow),
+      });
+      expect({ code: r.code, stderr: r.stderr.slice(-1500) }).toMatchObject({ code: 0 });
+      const events = jsonLines(r.stdout).filter((e) => e.type === "run.started" || e.type === "run.finished");
+      const at = (type: string, tag: string) => events.findIndex((e) => e.type === type && e.tag === tag);
+      for (const tag of ["fix1", "fix2", "fix3", "q"]) {
+        expect(at("run.started", tag)).toBeGreaterThanOrEqual(0);
+        expect(at("run.finished", tag)).toBeGreaterThan(at("run.started", tag));
+      }
+      // the three repo runs never overlap: each starts after the one before it finished (file order)
+      expect(at("run.started", "fix2")).toBeGreaterThan(at("run.finished", "fix1"));
+      expect(at("run.started", "fix3")).toBeGreaterThan(at("run.finished", "fix2"));
+      // the read task was not held up behind them
+      expect(at("run.started", "q")).toBeLessThan(at("run.finished", "fix1"));
+    },
+    REAL,
+  );
+
+  test(
+    "different folders still run together",
+    async () => {
+      const other = join(tasksDir, "repo2");
+      mkdirSync(other, { recursive: true });
+      const file = tasksFile("two-repos.jsonl", [
+        { id: "one", task: "Fix it.", repo: "repo" },
+        { id: "two", task: "Fix it.", repo: "repo2" },
+      ]);
+      const r = await rlmh(["batch", file, "--jobs", "2", "--permission-mode", "accept-edits", "--json", ...FAKE], {
+        home: join(t.dir, "home-two-repos"),
+        script: t.script(slow),
+      });
+      expect(r.code).toBe(0);
+      const types = jsonLines(r.stdout).map((e) => e.type);
+      expect(types.lastIndexOf("run.started")).toBeLessThan(types.indexOf("run.finished"));
     },
     REAL,
   );

@@ -17,7 +17,7 @@ interface MarkableBody {
 
 /**
  * Breakpoints at the end of `system` and on the last block of the last message: 2 of Anthropic's 4.
- * `splitAt` (chars) splits the last message's first text block there and marks the first part;
+ * `splitAt` (UTF-16 code units, see splitPrefix) splits the last message's first text block there and marks the first part;
  * only for the shared-prefix experiment behind ANTHROPIC_SPLIT_PREFIX.
  */
 export function anthropicBreakpoints<B extends MarkableBody>(body: B, opts: { splitAt?: number } = {}): B {
@@ -29,8 +29,9 @@ export function anthropicBreakpoints<B extends MarkableBody>(body: B, opts: { sp
   const last = messages[messages.length - 1]!;
   let content = last.content;
   const first = content[0];
-  if (opts.splitAt !== undefined && first?.type === "text" && typeof first.text === "string" && opts.splitAt > 0 && opts.splitAt < first.text.length) {
-    content = [marked({ ...first, text: first.text.slice(0, opts.splitAt) }), { ...first, text: first.text.slice(opts.splitAt) }, ...content.slice(1)];
+  const splitAt = opts.splitAt !== undefined && first?.type === "text" && typeof first.text === "string" ? pairSafe(first.text, opts.splitAt) : 0;
+  if (first && typeof first.text === "string" && splitAt > 0 && splitAt < first.text.length) {
+    content = [marked({ ...first, text: first.text.slice(0, splitAt) }), { ...first, text: first.text.slice(splitAt) }, ...content.slice(1)];
   } else if (content.length > 0) {
     content = [...content.slice(0, -1), marked(content[content.length - 1]!)];
   }
@@ -49,12 +50,29 @@ export function routeKey(p: Pick<ModelCompleteParams, "run_id" | "role" | "prefi
   return p.prefix ? `rlmh-${p.prefix.key}` : `${p.run_id}-sub`;
 }
 
-/** A sub-call's stable prefix and the rest of its text, split at `chars`; null unless that is a proper split. */
+/**
+ * `at` moved back one code unit when it falls between the two halves of a surrogate pair, so a split never leaves half
+ * an emoji on each side. Only a position inside a pair moves; a lone surrogate is left alone.
+ */
+export function pairSafe(text: string, at: number): number {
+  if (at <= 0 || at >= text.length) return at;
+  const before = text.charCodeAt(at - 1);
+  const after = text.charCodeAt(at);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff ? at - 1 : at;
+}
+
+/**
+ * A sub-call's stable prefix and the rest of its text, split at `chars`; null unless that is a proper split.
+ * The unit of `chars` on the wire is UTF-16 code units, what JavaScript indexes a string by (`"😀".length` is 2),
+ * so the engine counts the prefix that way and a string slice here lands exactly where it meant. A position
+ * that still falls inside a pair (a count made in another unit) moves back to the pair's start: the block
+ * ends one character short, its bytes still the same in every call, rather than losing the cache marker.
+ */
 export function splitPrefix(text: string, chars: number): [string, string] | null {
   if (!Number.isSafeInteger(chars) || chars <= 0 || chars >= text.length) return null;
-  const code = text.charCodeAt(chars - 1);
-  if (code >= 0xd800 && code <= 0xdbff) return null; // would cut a surrogate pair
-  return [text.slice(0, chars), text.slice(chars)];
+  const at = pairSafe(text, chars);
+  if (at <= 0) return null;
+  return [text.slice(0, at), text.slice(at)];
 }
 
 /** Whether a sub-call's prefix is long enough to be worth a cache marker on a marker-based provider (chars / 4). */

@@ -2,11 +2,17 @@
 // `rlmh setup` and the first-run check (step 10, decision 10a): find or fetch Python 3.12 through uv
 // into <home>/python/, copy the engine out of this binary into <home>/engine/<APP_VERSION>/, write
 // .installed.json last, then start the installed engine once to check it.
+//
+// Safe to run twice at once and to be killed half way: one setup per destination at a time (a lock
+// file), the engine is written to a folder of its own and swapped in with the old one kept aside until
+// the new one has started, and a crash's leftovers are put right under the lock by the next setup.
+// Once this version's engine is in place (installed now, or found at start-up), the engine folders of
+// other versions are removed under the same lock; a folder a running older rlmh still uses stays.
 
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   EngineNotFound,
   engineEnv,
@@ -94,20 +100,272 @@ export function findUv(opts: { home: string; env?: Record<string, string | undef
   return Bun.which("uv", { PATH: pathOf(opts.env ?? process.env) }) ?? null;
 }
 
-/** Writes every file byte-exact into <dest>.tmp, then swaps it in for <dest>. */
-export function extractEngine(bundle: EngineBundle, dest: string): void {
-  const tmp = `${dest}.tmp`;
-  rmSync(tmp, { recursive: true, force: true });
-  mkdirSync(tmp, { recursive: true });
-  for (const f of bundle.files) {
-    const bytes = readFileSync(f.file);
-    if (sha256(bytes) !== f.sha256) throw new Error(`the embedded ${f.path} does not match its manifest`);
-    const target = join(tmp, f.path);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, bytes);
+/** Timing of the setup lock; tests shorten it. */
+export const SETUP_LOCK = {
+  /** How often a waiting setup looks again. */
+  pollMs: 100,
+  /** A lock this old is taken as abandoned even if its pid is alive (the pid may have been reused). */
+  staleMs: 60 * 60_000,
+  /** How long a setup waits for the lock before it gives up and names the file. */
+  waitMs: 30 * 60_000,
+};
+
+const uniqueSuffix = () => `${process.pid}-${randomBytes(4).toString("hex")}`;
+
+/** Writes every file byte-exact into a new folder next to `dest` (named `<dest>.tmp-<pid>-<random>`) and returns it. A bad file removes the folder. */
+export function stageEngine(bundle: EngineBundle, dest: string): string {
+  const staging = `${dest}.tmp-${uniqueSuffix()}`;
+  mkdirSync(staging, { recursive: true });
+  try {
+    for (const f of bundle.files) {
+      const bytes = readFileSync(f.file);
+      if (sha256(bytes) !== f.sha256) throw new Error(`the embedded ${f.path} does not match its manifest`);
+      const target = join(staging, f.path);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, bytes);
+    }
+  } catch (err) {
+    rmSync(staging, { recursive: true, force: true });
+    throw err;
   }
+  return staging;
+}
+
+/**
+ * Puts `staging` where `dest` is. An existing `dest` is renamed aside, never deleted: its new name is returned (null
+ * when there was none) for swapBack to restore or discard to remove. When the swap fails, `dest` is as it was.
+ */
+export function swapIn(staging: string, dest: string): string | null {
+  const aside = existsSync(dest) ? `${dest}.old-${uniqueSuffix()}` : null;
+  try {
+    if (aside !== null) renameSync(dest, aside);
+    try {
+      renameSync(staging, dest);
+    } catch (err) {
+      if (aside !== null) renameSync(aside, dest);
+      throw err;
+    }
+  } catch (err) {
+    rmSync(staging, { recursive: true, force: true });
+    throw err;
+  }
+  return aside;
+}
+
+/** Undoes swapIn: the engine at `dest` goes and the one set aside comes back. */
+export function swapBack(dest: string, aside: string | null): void {
   rmSync(dest, { recursive: true, force: true });
-  renameSync(tmp, dest);
+  if (aside !== null) renameSync(aside, dest);
+}
+
+/** Removes a folder, for what is already unneeded: a failure (a file still open on Windows) is left for the next setup's sweep. */
+function discard(path: string): void {
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch {
+    // swept next time
+  }
+}
+
+/**
+ * Puts right what a setup that died left next to `dest`: when `dest` is gone and an engine set aside is there (the
+ * crash fell between the two renames), the newest of those comes back; then every staging and set-aside folder
+ * goes. Only for a caller that holds the setup lock, or nobody else's folder is safe to remove.
+ */
+export function sweepEngine(dest: string): void {
+  const parent = dirname(dest);
+  const name = basename(dest);
+  let entries: string[];
+  try {
+    entries = readdirSync(parent);
+  } catch {
+    return;
+  }
+  const aside = entries
+    .filter((e) => e.startsWith(`${name}.old-`))
+    .map((e) => ({ path: join(parent, e), at: statSync(join(parent, e), { throwIfNoEntry: false })?.mtimeMs ?? 0 }))
+    .sort((a, b) => b.at - a.at);
+  if (!existsSync(dest) && aside.length > 0) {
+    try {
+      renameSync(aside[0]!.path, dest);
+      aside.shift();
+    } catch {
+      return; // keep everything: the engine set aside is the only copy
+    }
+  }
+  for (const e of entries) {
+    if (e === `${name}.tmp` || e.startsWith(`${name}.tmp-`)) discard(join(parent, e));
+  }
+  for (const o of aside) discard(o.path);
+}
+
+/** Writes every file byte-exact into a new folder, then swaps it in for <dest>, keeping nothing of the old one. */
+export function extractEngine(bundle: EngineBundle, dest: string): void {
+  const aside = swapIn(stageEngine(bundle, dest), dest);
+  if (aside !== null) discard(aside);
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM"; // alive, but not ours
+  }
+}
+
+/** A lock file is abandoned when the process that wrote it is gone, or it is older than SETUP_LOCK.staleMs. A half-written one counts by its age. */
+function lockAbandoned(path: string): boolean {
+  let holder: { pid?: unknown; at?: unknown } = {};
+  let touched = Date.now();
+  try {
+    touched = statSync(path).mtimeMs;
+    holder = JSON.parse(readFileSync(path, "utf8")) ?? {};
+  } catch {
+    // vanished, or being written
+  }
+  const since = typeof holder.at === "number" ? holder.at : touched;
+  if (Date.now() - since > SETUP_LOCK.staleMs) return true;
+  return typeof holder.pid === "number" && !pidAlive(holder.pid);
+}
+
+/**
+ * Takes the lock file. With `wait`, another live setup is waited for (with a line to say so) and a lock its owner
+ * left behind is taken over; without it, a lock that is held means false at once.
+ */
+async function acquireSetupLock(path: string, out: (line: string) => void, wait: boolean): Promise<boolean> {
+  mkdirSync(dirname(path), { recursive: true });
+  const began = Date.now();
+  let told = false;
+  for (;;) {
+    try {
+      writeFileSync(path, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: "wx" });
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+    if (lockAbandoned(path)) {
+      rmSync(path, { force: true });
+      continue;
+    }
+    if (!wait) return false;
+    if (!told) {
+      out(`Another rlmh setup is running; waiting for it (${path}).`);
+      told = true;
+    }
+    if (Date.now() - began > SETUP_LOCK.waitMs) {
+      throw new Error(`another rlmh setup has held ${path} for over ${Math.round(SETUP_LOCK.waitMs / 60_000)} minutes; if none is running, delete that file and try again`);
+    }
+    await Bun.sleep(SETUP_LOCK.pollMs);
+  }
+}
+
+/** Runs `fn` as the only setup for this lock file. */
+async function withSetupLock<T>(path: string, out: (line: string) => void, fn: () => Promise<T>): Promise<T> {
+  await acquireSetupLock(path, out, true);
+  try {
+    return await fn();
+  } finally {
+    rmSync(path, { force: true });
+  }
+}
+
+// ---- old engine versions
+
+const VERSION_NAME = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+
+/**
+ * What a name in <home>/engine/ is, by its form: `<version>`, a setup's folder beside it (`<version>.tmp-…` while it
+ * stages, `<version>.old-…` for the engine it set aside) or its lock (`<version>.lock`). Null for anything else.
+ */
+export function classifyEngineEntry(name: string): { version: string; kind: "version" | "staging" | "lock" } | null {
+  const lock = /^(.+)\.lock$/.exec(name);
+  const staging = /^(.+)\.(?:tmp|old)(?:-.*)?$/.exec(name);
+  const version = lock?.[1] ?? staging?.[1] ?? name;
+  if (!VERSION_NAME.test(version)) return null;
+  return { version, kind: lock ? "lock" : staging ? "staging" : "version" };
+}
+
+/**
+ * What of <home>/engine/ belongs to some other rlmh version and may go: folders named like a version or a setup's
+ * leftover (or holding an `.installed.json`), unless that version's setup is running now (its lock is live), and
+ * lock files whose owner is gone. This version's own folders, files, symlinks and anything else are never listed.
+ */
+export function oldEngineEntries(home: string): { name: string; path: string; lock: boolean }[] {
+  const engines = join(home, "engine");
+  let entries;
+  try {
+    entries = readdirSync(engines, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const live = (version: string): boolean => {
+    const lock = join(engines, `${version}.lock`);
+    return existsSync(lock) && !lockAbandoned(lock);
+  };
+  const out: { name: string; path: string; lock: boolean }[] = [];
+  for (const e of entries) {
+    const path = join(engines, e.name);
+    const kind = classifyEngineEntry(e.name);
+    if (kind?.version === APP_VERSION) continue; // setup's own sweep looks after these
+    if (kind?.kind === "lock") {
+      if (e.isFile() && lockAbandoned(path)) out.push({ name: e.name, path, lock: true });
+      continue;
+    }
+    if (!e.isDirectory()) continue;
+    if (kind === null && !existsSync(join(path, ".installed.json"))) continue; // not an engine: not ours
+    if (kind !== null && live(kind.version)) continue;
+    out.push({ name: e.name, path, lock: false });
+  }
+  return out;
+}
+
+/**
+ * Removes what oldEngineEntries lists. The caller holds the setup lock. A folder is renamed before it is deleted:
+ * on Windows the rename fails while a running rlmh's engine is using the folder (its Python's working directory),
+ * and then the folder is left whole. Returns the names removed and the names left.
+ */
+export function pruneEngines(home: string): { removed: string[]; left: string[] } {
+  const removed: string[] = [];
+  const left: string[] = [];
+  for (const e of oldEngineEntries(home)) {
+    if (e.lock) {
+      try {
+        rmSync(e.path, { force: true });
+        removed.push(e.name);
+      } catch {
+        left.push(e.name);
+      }
+      continue;
+    }
+    const gone = `${e.path}.old-${uniqueSuffix()}`;
+    try {
+      renameSync(e.path, gone);
+    } catch {
+      left.push(e.name); // in use, or not ours to move: next time
+      continue;
+    }
+    removed.push(e.name);
+    discard(gone); // a failure here leaves a `<version>.old-…` folder, which the next prune finds
+  }
+  return { removed, left };
+}
+
+/**
+ * After this version's engine is in place: removes the other versions' engine folders, under the setup lock. If a
+ * setup is running it does nothing (the next start tries again), and it never waits or prints. Does nothing either
+ * unless this version's installed engine is whole, so the old one stays as a fallback while the new one is missing.
+ */
+export async function pruneOldEngines(home: string): Promise<{ removed: string[]; left: string[] }> {
+  const none = { removed: [], left: [] };
+  if (installedEngine(home, {}) === null || oldEngineEntries(home).length === 0) return none;
+  const lock = `${engineDir(APP_VERSION, home)}.lock`;
+  if (!(await acquireSetupLock(lock, () => {}, false))) return none;
+  try {
+    return pruneEngines(home);
+  } finally {
+    rmSync(lock, { force: true });
+  }
 }
 
 /** `rlmh setup [--yes] [--force]`; returns the exit code. */
@@ -122,7 +380,9 @@ export async function runSetup(o: SetupOptions): Promise<number> {
 export async function ensureEngine(o: Omit<SetupOptions, "yes">): Promise<void> {
   let missing: EngineNotFound;
   try {
-    findEngine({ home: o.home, env: o.env, sourceDir: o.sourceDir });
+    const found = findEngine({ home: o.home, env: o.env, sourceDir: o.sourceDir });
+    // the installed engine is the one in use: tidy away the other versions' (never for a source checkout or RLMH_ENGINE)
+    if (found.cwd === engineDir(APP_VERSION, o.home)) await pruneOldEngines(o.home).catch(() => undefined);
     return;
   } catch (e) {
     if (!(e instanceof EngineNotFound)) return; // a bad RLMH_ENGINE: the command reports it, as before step 10
@@ -153,15 +413,23 @@ async function install(o: SetupOptions, upgrade: boolean): Promise<number> {
     out(`warning: ${home} is ${home.length} characters long, and Windows paths stop at 260 unless long paths are on. If setup or a run fails on a path, set RLMH_HOME=C:\\rlmh and run "rlmh setup" again.`);
   }
   const dest = engineDir(APP_VERSION, home);
-  const marker = readInstalled(dest);
-  if (!o.force && marker !== null && marker.bundle_sha256 === bundle.sha256 && installedEngine(home, {}) !== null) {
-    out(`already installed: engine ${dest}, Python ${marker.python_version} (${marker.python})`);
+  const alreadyInstalled = (): Installed | null => {
+    const marker = readInstalled(dest);
+    return marker !== null && marker.bundle_sha256 === bundle.sha256 && installedEngine(home, {}) !== null ? marker : null;
+  };
+  const done = (marker: Installed) => out(`already installed: engine ${dest}, Python ${marker.python_version} (${marker.python})`);
+  const first = o.force ? null : alreadyInstalled();
+  if (first !== null) {
+    done(first);
+    await pruneOldEngines(home).catch(() => undefined);
     return 0;
   }
 
+  // Everything that can end the setup, or ask a question, comes before the lock, so a prompt never holds it.
   let python = o.force ? null : await existingPython(home, env, runUv);
+  let uv: string | null = null;
   if (python === null) {
-    const uv = findUv({ home, env });
+    uv = findUv({ home, env });
     if (uv === null) {
       out(NO_UV(home));
       return 1;
@@ -171,65 +439,100 @@ async function install(o: SetupOptions, upgrade: boolean): Promise<number> {
         out(NO_TTY);
         return 1;
       }
-      if (!(await (o.ask ?? askLine)(QUESTION(home)))) {
+      if (!(await (o.ask ?? askYesNo)(QUESTION(home)))) {
         out(DECLINED);
         return 1;
       }
     }
-    const installEnv = {
-      ...stripKeys(env),
-      UV_PYTHON_INSTALL_DIR: pythonDir(home),
-      UV_PYTHON_BIN_DIR: join(pythonDir(home), "bin"),
-      UV_PYTHON_INSTALL_BIN: "0",
-      UV_PYTHON_INSTALL_REGISTRY: "0",
-    };
-    const installed = await runUv([uv, "python", "install", "3.12", ...(o.force ? ["--reinstall"] : [])], installEnv);
-    if (installed.code !== 0) {
-      out(DOWNLOAD_FAILED(installed.code));
-      return 1;
-    }
-    const found = await uvFind(uv, home, env, runUv);
-    if (found === null) {
-      out(`uv installed Python 3.12, but "uv python find 3.12" did not report it.`);
-      return 1;
-    }
-    if (!found.inside) {
-      out(`"uv python find 3.12" gave ${found.path}, which is outside ${pythonDir(home)}; refusing to use it.`);
-      return 1;
-    }
-    python = found.path;
   }
 
-  if (upgrade) out(`Copying the engine for rlmh ${APP_VERSION} to ${dest}`);
-  extractEngine(bundle, dest);
-  const probe = await runPython([python, "-E", "-s", "-c", PROBE, dest], stripKeys(env), { quiet: true });
-  const [version = "", shell = ""] = probe.stdout.split(/\r?\n/).map((s) => s.trim());
-  if (probe.code !== 0 || version === "") {
-    out(`The Python at ${python} did not run (exit ${probe.code}). Run "rlmh setup --force" to install it again.`);
-    return 1;
-  }
-  writeInstalled(dest, {
-    app_version: APP_VERSION,
-    bundle_sha256: bundle.sha256,
-    python,
-    python_version: version,
-    installed_at: new Date().toISOString(),
+  return withSetupLock(`${dest}.lock`, out, async () => {
+    // a setup that ran while this one waited may have finished the job
+    const meanwhile = o.force ? null : alreadyInstalled();
+    if (meanwhile !== null) {
+      done(meanwhile);
+      pruneEngines(home);
+      return 0;
+    }
+    sweepEngine(dest);
+
+    if (python === null) {
+      const installEnv = {
+        ...stripKeys(env),
+        UV_PYTHON_INSTALL_DIR: pythonDir(home),
+        UV_PYTHON_BIN_DIR: join(pythonDir(home), "bin"),
+        UV_PYTHON_INSTALL_BIN: "0",
+        UV_PYTHON_INSTALL_REGISTRY: "0",
+      };
+      const installed = await runUv([uv!, "python", "install", "3.12", ...(o.force ? ["--reinstall"] : [])], installEnv);
+      if (installed.code !== 0) {
+        out(DOWNLOAD_FAILED(installed.code));
+        return 1;
+      }
+      const found = await uvFind(uv!, home, env, runUv);
+      if (found === null) {
+        out(`uv installed Python 3.12, but "uv python find 3.12" did not report it.`);
+        return 1;
+      }
+      if (!found.inside) {
+        out(`"uv python find 3.12" gave ${found.path}, which is outside ${pythonDir(home)}; refusing to use it.`);
+        return 1;
+      }
+      python = found.path;
+    }
+
+    if (upgrade) out(`Copying the engine for rlmh ${APP_VERSION} to ${dest}`);
+    // The new engine is written beside the old one and swapped in; the old one stays aside until the new one has started.
+    let aside: string | null;
+    try {
+      aside = swapIn(stageEngine(bundle, dest), dest);
+    } catch (err) {
+      out(`Could not put the engine in ${dest}: ${err instanceof Error ? err.message : String(err)}. An engine already there was left as it was.`);
+      return 1;
+    }
+    let committed = false;
+    try {
+      const probe = await runPython([python, "-E", "-s", "-c", PROBE, dest], stripKeys(env), { quiet: true });
+      const [version = "", shell = ""] = probe.stdout.split(/\r?\n/).map((s) => s.trim());
+      if (probe.code !== 0 || version === "") {
+        out(`The Python at ${python} did not run (exit ${probe.code}). Run "rlmh setup --force" to install it again.`);
+        return 1;
+      }
+      writeInstalled(dest, {
+        app_version: APP_VERSION,
+        bundle_sha256: bundle.sha256,
+        python,
+        python_version: version,
+        installed_at: new Date().toISOString(),
+      });
+
+      const cmd = installedEngine(home, engineEnv(home, env));
+      const check = cmd === null ? { ok: false as const, message: "the extracted engine is incomplete", stderr: [] } : await (o.checkEngine ?? checkInstalled)(cmd);
+      if (!check.ok) {
+        out(`The installed engine did not start: ${check.message}`);
+        for (const line of check.stderr) out(line);
+        return 1;
+      }
+      committed = true;
+      pruneEngines(home); // this version is in place: the other versions' folders have no use
+      if (!upgrade) {
+        out(`Python   ${python} (${version})`);
+        out(`engine   ${dest}`);
+        if (shell !== "") out(`shell() will use: ${shell}`);
+      }
+      return 0;
+    } finally {
+      if (committed) {
+        if (aside !== null) discard(aside);
+      } else {
+        try {
+          swapBack(dest, aside); // the engine that was there comes back; with none, the new one is removed
+        } catch (err) {
+          out(`warning: could not put the previous engine back in ${dest}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
   });
-
-  const cmd = installedEngine(home, engineEnv(home, env));
-  const check = cmd === null ? { ok: false as const, message: "the extracted engine is incomplete", stderr: [] } : await (o.checkEngine ?? checkInstalled)(cmd);
-  if (!check.ok) {
-    rmSync(join(dest, ".installed.json"), { force: true });
-    out(`The installed engine did not start: ${check.message}`);
-    for (const line of check.stderr) out(line);
-    return 1;
-  }
-  if (!upgrade) {
-    out(`Python   ${python} (${version})`);
-    out(`engine   ${dest}`);
-    if (shell !== "") out(`shell() will use: ${shell}`);
-  }
-  return 0;
 }
 
 /** Step 2: the Python of any installed engine that still exists, else the one uv already has in <home>/python. */
@@ -298,15 +601,19 @@ const spawnRunner: UvRunner = async (argv, env, opts = {}) => {
   }
 };
 
-/** One line from the terminal: Enter or y means yes. The question goes to stderr, so --json stdout stays clean. */
-async function askLine(question: string): Promise<boolean> {
+/**
+ * One line from the terminal. y or yes is yes; Enter is yes when `defaultYes` and no otherwise; anything else, and Ctrl-D,
+ * is no. The question goes to stderr, so --json stdout stays clean.
+ */
+export async function askYesNo(question: string, defaultYes = true): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {
     const answer = await new Promise<string | null>((done) => {
       rl.once("close", () => done(null)); // Ctrl-D: no
       rl.question(question, done);
     });
-    return answer !== null && /^\s*(y|yes)?\s*$/i.test(answer);
+    if (answer === null) return false;
+    return defaultYes ? /^\s*(y|yes)?\s*$/i.test(answer) : /^\s*(y|yes)\s*$/i.test(answer);
   } finally {
     rl.close();
   }

@@ -12,7 +12,7 @@ export const MAIN = join(APP, "src", "main.ts");
 /** A first `uv run` may fetch Python. */
 export const REAL = 120_000;
 
-const KEY_LIKE = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i;
+const KEY_LIKE = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|HEADERS/i;
 
 export interface Temp {
   dir: string;

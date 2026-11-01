@@ -56,6 +56,7 @@ class Profile:
     read: ModeSettings
     repo: ModeSettings
     cache_api: bool = False  # cache-shaped sub-calls in the REPL (D-119); training-v4 never has them
+    file_hash: str = ""  # profile_hash() of the bytes this profile was loaded from
 
     def system_prompt(self, shell_name: str = "sh") -> str:
         """Prompt v4, then the guidance block (if any) with every `{shell}` filled in."""
@@ -73,11 +74,9 @@ class Profile:
         return contract.prompt_hash(texts)
 
     def profile_hash(self) -> str:
-        """sha256 of the LF-normalised profile.toml, a NUL byte, and the guidance file; re-read on each call."""
-        toml_bytes = _read(self.name, self.path / "profile.toml")
-        guidance_path = _guidance_path(self.name, self.path, _parse(self.name, toml_bytes).get("guidance", ""))
-        guidance_bytes = _read(self.name, guidance_path) if guidance_path else b""
-        return hashlib.sha256(toml_bytes + b"\x00" + guidance_bytes).hexdigest()
+        """sha256 of the LF-normalised profile.toml, a NUL byte, and the guidance file: the bytes this profile was
+        loaded from, so a file edited or deleted during a run doesn't change the hash its record shows."""
+        return self.file_hash
 
     def mode(self, mode: str) -> ModeSettings:
         if mode == "read":
@@ -141,7 +140,8 @@ def _load_user(name: str, folder: Path) -> Profile:
 
 
 def _load(name: str, folder: Path, source: str) -> Profile:
-    data = _parse(name, _read(name, folder / "profile.toml"))
+    toml_bytes = _read(name, folder / "profile.toml")
+    data = _parse(name, toml_bytes)
     for key in data:
         if key not in _TOP_KEYS:
             raise ProfileError(f"profile {name!r}: unknown key {key!r}")
@@ -150,9 +150,10 @@ def _load(name: str, folder: Path, source: str) -> Profile:
     if data["contract"] != contract.CONTRACT_VERSION:
         raise ProfileError(f"profile {name!r}: contract must be {contract.CONTRACT_VERSION!r}, not {data['contract']!r}")
     guidance_path = _guidance_path(name, folder, data.get("guidance", ""))
-    guidance = ""
+    guidance, guidance_bytes = "", b""
     if guidance_path:
-        guidance = _decode(name, f"guidance file {guidance_path.name!r}", _read(name, guidance_path)).strip()
+        guidance_bytes = _read(name, guidance_path)
+        guidance = _decode(name, f"guidance file {guidance_path.name!r}", guidance_bytes).strip()
     return Profile(
         name=name,
         source=source,
@@ -163,6 +164,7 @@ def _load(name: str, folder: Path, source: str) -> Profile:
         read=_mode(name, "read", data, contract.READ_LIMITS_V4),
         repo=_mode(name, "repo", data, contract.EDIT_LIMITS_V4),
         cache_api=_bool(name, "cache_api", data.get("cache_api", False)),
+        file_hash=hashlib.sha256(toml_bytes + b"\x00" + guidance_bytes).hexdigest(),
     )
 
 
@@ -258,6 +260,10 @@ def _limit(where: str, field: str, value: object) -> object:
     least = 0 if field == "max_subcalls" else 1
     if isinstance(value, bool) or not isinstance(value, int) or value < least:
         raise ProfileError(f"{where} must be an integer of at least {least}")
+    if field == "output_max_chars" and value > contract.OUTPUT_MAX_CHARS:
+        # The REPL keeps at most contract.OUTPUT_MAX_CHARS of a cell's output (worker.py's frozen cap), so a larger
+        # cap could never be met.
+        raise ProfileError(f"{where} must be at most {contract.OUTPUT_MAX_CHARS:,}, the most a cell's output keeps")
     return value
 
 

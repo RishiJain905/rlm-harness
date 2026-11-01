@@ -94,6 +94,37 @@ describe("errors table", () => {
     expect(gerr.message).toBe(`Google Gemini rejected the key "$GOOGLE_API_KEY" (ends in ${KEYS.gemini!.slice(-4)}). Fix that variable, or save a key in /providers.`);
   });
 
+  test("auth: a short key shows no part of itself, saved or from the environment", async () => {
+    server.script(() => httpError(401));
+    const saved = await make({ settings: { "providers.custom.base_url": "http://127.0.0.1:9/v1" } });
+    await saved.keys.add("custom", "FAKE-k3y", "tiny");
+    const err = await fails(saved, params(ref("custom", "anything")));
+    expect(err.message).toBe('Custom endpoint rejected the key "tiny". Re-enter or delete it in /providers.');
+    expect(err.data).toMatchObject({ kind: "auth", status: 401 });
+    expect(JSON.stringify(saved.events)).not.toContain("k3y");
+
+    const env = await make({ env: { OPENAI_API_KEY: "FAKE-k3y" } });
+    const eerr = await fails(env, params(OPENAI));
+    expect(eerr.message).toBe('OpenAI rejected the key "$OPENAI_API_KEY". Fix that variable, or save a key in /providers.');
+    expect(JSON.stringify(env.events)).not.toContain("k3y");
+  });
+
+  test("auth: the last four characters show from 16 characters up, the rule KeyInfo.last4 uses", async () => {
+    server.script(() => httpError(401));
+    for (const [key, shown] of [["FAKE-key-012345", false], ["FAKE-key-0123456", true]] as const) {
+      expect(key.length).toBe(shown ? 16 : 15);
+      const env = await make({ env: { OPENAI_API_KEY: key } });
+      const envErr = await fails(env, params(OPENAI));
+      expect(envErr.message, `env ${key.length}`).toBe(`OpenAI rejected the key "$OPENAI_API_KEY"${shown ? " (ends in 3456)" : ""}. Fix that variable, or save a key in /providers.`);
+
+      const saved = await make({ settings: { "providers.custom.base_url": "http://127.0.0.1:9/v1" } });
+      const info = await saved.keys.add("custom", key, "work");
+      expect(info.last4, `saved ${key.length}`).toBe(shown ? "3456" : "");
+      const savedErr = await fails(saved, params(ref("custom", "anything")));
+      expect(savedErr.message, `saved ${key.length}`).toBe(`Custom endpoint rejected the key "work"${shown ? " (ends in 3456)" : ""}. Re-enter or delete it in /providers.`);
+    }
+  });
+
   test("auth: no key at all", async () => {
     server.script(() => httpError(401));
     const local = await make();

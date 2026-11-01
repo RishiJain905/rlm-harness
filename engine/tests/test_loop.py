@@ -424,3 +424,87 @@ def test_cancel(home: Path) -> None:
     assert app.sent("run.finished")[0]["infra_error"] == "cancelled"
     assert not (home / "scratch" / spec.run_id).exists()
     assert app.cancelled == [spec.run_id]
+
+
+# ---------------------------------------------------------------------------------------------- the run log fails
+
+
+@pytest.mark.parametrize("call", ["write", "fsync"])
+def test_run_log_failure_fails_the_run(home: Path, monkeypatch: pytest.MonkeyPatch, call: str) -> None:
+    from rlm_engine import runlog
+
+    def full(*args: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(runlog.os, call, full)
+    app = FakeApp(script={"root": [fenced("submit('42')")]})
+    spec = read_spec(home)
+    record = play(spec, app, home)
+    finished = app.sent("run.finished")[0]
+    assert finished["infra_kind"] == record["infra_kind"] == "runlog"
+    assert finished["infra_error"].startswith("runlog: could not write the run log ")
+    assert "No space left on device" in finished["infra_error"]
+    assert finished["answer"] == "42" and finished["submitted"] is True  # the answer is still reported
+    assert app.events[-1][0] == "run.finished"
+    assert not (home / "scratch" / spec.run_id).exists()
+
+
+def test_run_log_failure_after_another_failure_keeps_its_kind(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def unwritable(self: object, record: dict) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(loop.RunLog, "append", unwritable)
+    app = FakeApp(script={"root": [fenced("print(1)")], "errors": [{"role": "root", "at": 1, "kind": "auth",
+                                                                    "status": 401}]})
+    record = play(read_spec(home), app, home)
+    finished = app.sent("run.finished")[0]
+    assert finished["infra_kind"] == "auth"
+    assert finished["infra_error"].startswith("auth: ") and "; runlog: could not write the run log " in finished["infra_error"]
+    assert record["infra_error"] == finished["infra_error"]
+
+
+# ---------------------------------------------------------------------------------------------- git and cancellation
+
+
+@needs_git
+def test_cancel_during_the_snapshot_kills_git_first(home: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cancel while git hangs kills it, and only then removes the scratch folder and sends run.finished."""
+    state: dict = {"git_running": False}
+
+    def hanging_snapshot(repo: Path, scratch: Path, *, control: workspace.GitControl) -> str:
+        state["git_running"] = True
+        try:
+            workspace._git(["-c", "alias.hang=!sleep 30", "hang"], repo, control=control)
+        finally:
+            state["scratch_at_kill"] = scratch.exists()
+            state["git_running"] = False
+        raise AssertionError("unreachable: git was killed")
+
+    monkeypatch.setattr(loop.workspace, "snapshot", hanging_snapshot)
+
+    class Watching(FakeApp):
+        def event(self, method: str, params: dict) -> None:
+            if method == "run.finished":
+                state["git_running_at_finish"] = state["git_running"]
+            super().event(method, params)
+
+    async def scenario() -> tuple[FakeApp, loop.RunSpec, float]:
+        app = Watching(script={"root": [fenced("submit('x')")]})
+        spec = repo_spec(home, git_repo)
+        task = asyncio.create_task(loop.run(spec, app, home=home))
+        for _ in range(500):
+            if state["git_running"]:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.5)  # git and its alias shell are up
+        started = asyncio.get_running_loop().time()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return app, spec, asyncio.get_running_loop().time() - started
+
+    app, spec, seconds = run(scenario(), TIMEOUT)
+    assert seconds < 15  # nowhere near the 30 s the hung git would take
+    assert state["git_running_at_finish"] is False and state["scratch_at_kill"] is True
+    assert app.sent("run.finished")[0]["infra_kind"] == "cancelled"
+    assert not (home / "scratch" / spec.run_id).exists()

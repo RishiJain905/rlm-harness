@@ -177,7 +177,7 @@ describe("cache-shaped sub-call prefixes (D-119)", () => {
     expect(splitPrefix("abcdef", 3)).toEqual(["abc", "def"]);
     expect(splitPrefix("abc", 3)).toBeNull(); // nothing after the prefix
     expect(splitPrefix("abc", 0)).toBeNull();
-    expect(splitPrefix("a😀b", 2)).toBeNull(); // would cut the pair
+    expect(splitPrefix("a😀b", 2)).toEqual(["a", "😀b"]); // 2 is inside the pair: the boundary moves back to the pair's start
   });
 });
 

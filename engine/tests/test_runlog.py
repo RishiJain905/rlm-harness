@@ -1,14 +1,18 @@
 """KV cache: none
 
 runlog.py: where a run's log goes, the one-line-per-record file format, torn-line handling, NaN handling, and
-that 8 threads appending at once never interleave. The key list is checked against architecture.md §7.8 itself.
+that 8 threads, or 4 processes, appending at once never interleave. The key list is checked against architecture.md §7.8 itself.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -197,6 +201,55 @@ def test_eight_threads_append_two_hundred_valid_lines(tmp_path: Path) -> None:
     assert path.read_bytes().count(b"\n") == 200
     assert {(r["worker"], r["n"]) for r in records} == {(w, n) for w in range(8) for n in range(25)}
     assert all(r["pad"] == big for r in records)
+
+
+_APPENDER = """
+import sys
+from rlm_engine.runlog import RunLog
+path, worker, count, size = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+log = RunLog(path)
+for n in range(count):
+    log.append({"worker": worker, "n": n, "pad": "y" * size})
+"""
+
+
+def _appender(path: Path, worker: int, count: int, size: int) -> subprocess.Popen:
+    return subprocess.Popen([sys.executable, "-X", "utf8", "-c", _APPENDER, str(path), str(worker), str(count), str(size)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def test_processes_append_without_interleaving(tmp_path: Path) -> None:
+    """Separate processes share no thread lock: only the file lock keeps their records whole."""
+    path = tmp_path / "runs.jsonl"
+    procs = [_appender(path, w, 15, 300_000) for w in range(4)]
+    for proc in procs:
+        _, err = proc.communicate(timeout=120)
+        assert proc.returncode == 0, err.decode(errors="replace")
+    log = RunLog(path)
+    records = log.records()
+    assert log.torn_lines == 0
+    assert len(records) == 60 and path.read_bytes().count(b"\n") == 60
+    assert {(r["worker"], r["n"]) for r in records} == {(w, n) for w in range(4) for n in range(15)}
+    assert all(r["pad"] == "y" * 300_000 for r in records)
+
+
+def test_an_append_waits_for_another_process_lock(tmp_path: Path) -> None:
+    path = tmp_path / "runs.jsonl"
+    path.write_bytes(b"")
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | getattr(os, "O_BINARY", 0))
+    try:
+        with runlog._file_lock(fd):
+            proc = _appender(path, 7, 1, 10)
+            time.sleep(1.0)  # long enough for the child to start and reach the lock
+            assert proc.poll() is None  # still waiting
+            assert path.read_bytes() == b""
+            os.write(fd, b'{"held": true}\n')  # the holder writes; the reader is not blocked by the lock either
+            assert RunLog(path).records() == [{"held": True}]
+        _, err = proc.communicate(timeout=60)
+        assert proc.returncode == 0, err.decode(errors="replace")
+    finally:
+        os.close(fd)
+    assert RunLog(path).records() == [{"held": True}, {"worker": 7, "n": 0, "pad": "y" * 10}]
 
 
 # ----------------------------------------------------------------------------- RECORD_KEYS

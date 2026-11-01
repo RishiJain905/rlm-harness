@@ -184,7 +184,7 @@ export interface ModelCompleteParams {
   subcall_id?: number;
   origin?: Origin;
   batch?: Batch;
-  /** Sub-calls only: the first `chars` characters of the user message are a stable prefix (a context segment or a
+  /** Sub-calls only: the first `chars` UTF-16 code units of the user message are a stable prefix (a context segment or a
    *  batch's shared preamble) that many calls repeat byte for byte; `key` names it. The gateway marks and routes it
    *  for the provider's cache (D-119). */
   prefix?: { chars: number; key: string };

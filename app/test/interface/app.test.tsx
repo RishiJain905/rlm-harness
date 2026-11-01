@@ -3,12 +3,15 @@
 // cancel, an engine exit, quitting, the ASCII fallback and the frame size.
 
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { unicodeSupported } from "../../src/interface/format.ts";
-import { RunStore } from "../../src/interface/store.ts";
-import { createFakeApp, FAKE_LIMITS, scriptedBus, type FakeApp, type FakeAppOptions } from "../fakes/engine.ts";
+import { isActive, RunStore } from "../../src/interface/store.ts";
+import { Link } from "../../src/link.ts";
+import { runsDir } from "../../src/paths.ts";
+import { APP_VERSION } from "../../src/version.ts";
+import { createFakeApp, FAKE_LIMITS, runRecord, scriptedBus, scriptedUsage, type FakeApp, type FakeAppOptions } from "../fakes/engine.ts";
 import { KEYS, mount, type Mounted } from "./helpers.ts";
 
 setDefaultTimeout(20_000);
@@ -39,7 +42,7 @@ describe("app", () => {
   test("(1) the idle screen shows the banner, the folder, the prompt and status idle", async () => {
     const { app, m } = await open();
     const s = await m.waitForText("engine 0.0.0-fake");
-    expect(s).toContain("rlmh 0.1.0");
+    expect(s).toContain(`rlmh ${APP_VERSION}`);
     expect(s).toContain(`folder ${app.deps.cwd}`);
     expect(s).toContain("root fake/scripted");
     expect(s).toContain("Each question is a new run.");
@@ -240,21 +243,259 @@ describe("app", () => {
   });
 });
 
+describe("/clear", () => {
+  const promptLine = (screen: string) => {
+    const line = screen.split("\n").find((l) => /^[│|] > /.test(l)) ?? "";
+    return line.slice(4, -1).trimEnd();
+  };
+  const statusLine = (screen: string) => screen.trimEnd().split("\n").at(-1)!;
+  async function slash(m: Mounted, name: string): Promise<void> {
+    await m.type(`/${name}`);
+    await m.press(KEYS.enter);
+  }
+
+  test("after a finished run it empties the transcript, the history and the mode override, and says so", async () => {
+    const { app, m } = await open({ scenario: "simpleRead" });
+    // this session's mode override: /permissions to default
+    await slash(m, "permissions");
+    await m.waitForText("── /permissions");
+    await m.press(KEYS.up);
+    await m.press(KEYS.enter);
+    await m.waitForText("● default");
+    await m.press(KEYS.esc);
+    await m.waitFor(() => statusLine(m.screen()).includes("| default"));
+    await ask(m, "Summarize @a.txt");
+    await m.waitFor(() => statusLine(m.screen()).startsWith("finished"));
+    expect(app.startCalls[0]!.permissionMode).toBe("default");
+    expect(m.screen()).toContain("Answer");
+    // the history holds the question: Up brings it back
+    await m.press(KEYS.up);
+    await m.waitFor(() => promptLine(m.screen()) === "Summarize @a.txt");
+    await m.press(KEYS.esc);
+    await m.waitFor(() => promptLine(m.screen()).includes("Ask a question"));
+
+    await slash(m, "clear");
+    const s = await m.waitForText("New session.");
+    expect(s).not.toContain("Answer");
+    expect(s).not.toContain("turn 1");
+    expect(s).not.toContain("sub-calls ──"); // the panel is gone
+    expect(statusLine(s)).toStartWith("idle");
+    await m.waitFor(() => statusLine(m.screen()).includes("| accept-edits"));
+    expect(statusLine(m.screen())).not.toContain("| default");
+    // the history is gone, and /clear is not in it
+    await m.press(KEYS.up);
+    await Bun.sleep(150);
+    expect(promptLine(m.screen())).toContain("Ask a question");
+    // nothing was sent to the engine, and the next run uses the settings' mode
+    expect(app.engine.calls.map((c) => c.method)).not.toContain("run.cancel");
+    await ask(m, "Summarize @b.txt");
+    await m.waitFor(() => app.startCalls.length === 2);
+    expect(app.startCalls[1]!.permissionMode).toBe("accept-edits");
+    await m.waitFor(() => statusLine(m.screen()).startsWith("finished"));
+  });
+
+  test("it is refused during a run, which carries on; after Esc cancels it, /clear works", async () => {
+    const { app, m } = await open({ scenario: "hold" });
+    await ask(m, "Summarize @a.txt");
+    await m.waitForText("running");
+    await slash(m, "clear");
+    const s = await m.waitForText("A run is active. Esc cancels it, then /clear.");
+    expect(statusLine(s)).toContain("running");
+    expect(s).toContain("Summarize a.txt"); // the transcript is still there
+    expect(s).not.toContain("New session.");
+    expect(app.engine.calls.some((c) => c.method === "run.cancel")).toBe(false);
+    expect(app.startCalls).toHaveLength(1);
+
+    await m.press(KEYS.esc); // the user's own cancel
+    await m.waitForText("Run cancelled.");
+    await m.waitFor(() => statusLine(m.screen()).startsWith("cancelled"));
+    await m.waitFor(() => promptLine(m.screen()) === "/clear"); // the refused text stayed
+    await m.press(KEYS.enter);
+    const after = await m.waitForText("New session.");
+    expect(after).not.toContain("Run cancelled.");
+    expect(statusLine(after)).toStartWith("idle");
+  });
+
+  test("the slash menu and Tab offer /clear, and /help lists it", async () => {
+    const { m } = await open();
+    await m.type("/");
+    const all = await m.waitForText("/clear");
+    expect(all).toContain("/quit"); // the menu has room for every command
+    await m.press(KEYS.esc);
+    await m.type("/cl");
+    await m.waitFor(() => !m.screen().includes("/context") && m.screen().includes("/clear"));
+    await m.press(KEYS.tab);
+    await m.waitFor(() => promptLine(m.screen()) === "/clear");
+    await m.press(KEYS.esc);
+    await slash(m, "help");
+    const help = await m.waitForText("── /help");
+    expect(help).toContain("/clear");
+    expect(help).toContain("Start a new session");
+  });
+
+  test("the engine's exit survives it: still shown, and questions are still refused", async () => {
+    const { app, m } = await open({ scenario: "hold" });
+    await ask(m, "Summarize @a.txt");
+    await m.waitForText("running");
+    app.engine.crash(1, ["Traceback (most recent call last):", "RuntimeError: boom"]);
+    await m.waitForText("The engine stopped (exit 1). Restart rlmh.");
+    await m.waitForText("failed: engine");
+    await slash(m, "clear");
+    const s = await m.waitForText("New session.");
+    expect(s).not.toContain("Summarize a.txt");
+    expect(s).toContain("The engine stopped (exit 1). Restart rlmh.");
+    expect(s).toContain("RuntimeError: boom");
+    await ask(m, "Summarize @b.txt");
+    await m.waitFor(() => m.screen().split("The engine stopped (exit 1)").length > 2);
+    expect(app.startCalls).toHaveLength(1);
+  });
+
+  test("the run log on disk is untouched: /runs still lists past runs", async () => {
+    const { app, m } = await open({ size: { columns: 120, rows: 40 } });
+    const dir = join(runsDir(app.deps.home), "interactive");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "runs.jsonl"), `${JSON.stringify(runRecord({ run_id: "r_000000000aaa", question: "an earlier question" }))}\n`);
+    await slash(m, "clear");
+    await m.waitForText("New session.");
+    await slash(m, "runs");
+    await m.waitForText("an earlier question");
+  });
+});
+
 describe("RunStore", () => {
-  test("a run cancelled before run.started still takes its id and ends cancelled", async () => {
+  test("clear() returns to an empty idle view, keeping only the engine's exit", async () => {
+    app = await createFakeApp();
+    const store = new RunStore(app.deps);
+    try {
+      store.beginRun({ text: "Q", detail: "read: 1 file" });
+      store.startResolved("r_00000000abcd");
+      scriptedBus(app.bus, "r_00000000abcd").subcall({ status: "sent" });
+      store.clear();
+      await new Promise((r) => setTimeout(r, 120));
+      expect(store.snapshot()).toMatchObject({ phase: "idle", runId: null, entries: [], blocks: [], turns: 0, finished: null, engineExit: null });
+      expect(store.live()).toEqual({ phase: "idle", runId: null });
+      // events of the cleared run no longer find a home
+      scriptedBus(app.bus, "r_00000000abcd").event("run.finished", { answer: "late", submitted: true, infra_error: null, infra_kind: null });
+      await new Promise((r) => setTimeout(r, 120));
+      expect(store.snapshot().phase).toBe("idle");
+
+      app.bus.emit("engine.exit", { code: 3, stderr: ["boom"] });
+      store.clear();
+      await new Promise((r) => setTimeout(r, 120));
+      expect(store.snapshot().engineExit).toEqual({ code: 3, stderr: ["boom"] });
+      expect(store.snapshot().entries).toEqual([{ kind: "error", text: "The engine stopped (exit 3). Restart rlmh.", lines: ["boom"] }]);
+    } finally {
+      store.dispose();
+    }
+  });
+
+  const FINISHED_CANCELLED = { answer: null, submitted: false, infra_error: "cancelled", infra_kind: "cancelled" };
+
+  /** Waits for the published view to show `phase` for run `runId`. */
+  async function settled(store: RunStore, phase: string, runId: string): Promise<void> {
+    const deadline = Date.now() + 2000;
+    while (!(store.snapshot().phase === phase && store.snapshot().runId === runId) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+  }
+
+  test("a run cancelled before start() resolves takes its id from the start result and ends cancelled", async () => {
     app = await createFakeApp();
     const store = new RunStore(app.deps);
     try {
       store.beginRun({ text: "Q", detail: "read: 1 file" });
       store.cancelling();
-      const ref = { provider: "fake", model: "scripted", thinking: null };
-      const sb = scriptedBus(app.bus, "r_00000000abcd");
-      sb.event("run.started", { root: ref, sub: ref, profile: "default", call_format: "native", permission_mode: "accept-edits", limits: FAKE_LIMITS });
-      sb.event("run.finished", { answer: null, submitted: false, infra_error: "cancelled", infra_kind: "cancelled" });
-      const deadline = Date.now() + 2000;
-      while (store.snapshot().phase !== "cancelled" && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      // no run.started at all: run.finished comes first, then start() resolves (the start result and the
+      // notification can be read together, and the notification is handled before the promise continuation)
+      scriptedBus(app.bus, "r_00000000abcd").event("run.finished", FINISHED_CANCELLED);
+      expect(store.live()).toEqual({ phase: "cancelling", runId: null }); // nothing says whose it is yet
+      store.startResolved("r_00000000abcd");
+      await settled(store, "cancelled", "r_00000000abcd");
       expect(store.snapshot()).toMatchObject({ phase: "cancelled", runId: "r_00000000abcd" });
       expect(store.snapshot().entries.at(-1)).toEqual({ kind: "note", text: "Run cancelled.", tone: "warn" });
+    } finally {
+      store.dispose();
+    }
+  });
+
+  test("a run cancelled while starting also ends cancelled when start() resolves first, or run.started comes first", async () => {
+    app = await createFakeApp();
+    const store = new RunStore(app.deps);
+    try {
+      store.beginRun();
+      store.cancelling();
+      store.startResolved("r_00000000abcd");
+      scriptedBus(app.bus, "r_00000000abcd").event("run.finished", FINISHED_CANCELLED);
+      await settled(store, "cancelled", "r_00000000abcd");
+      expect(store.snapshot()).toMatchObject({ phase: "cancelled", runId: "r_00000000abcd" });
+
+      store.beginRun();
+      store.cancelling();
+      const ref = { provider: "fake", model: "scripted", thinking: null };
+      const sb = scriptedBus(app.bus, "r_00000000abce");
+      sb.event("run.started", { root: ref, sub: ref, profile: "default", call_format: "native", permission_mode: "accept-edits", limits: FAKE_LIMITS });
+      sb.event("run.finished", FINISHED_CANCELLED);
+      await settled(store, "cancelled", "r_00000000abce");
+      expect(store.snapshot()).toMatchObject({ phase: "cancelled", runId: "r_00000000abce" });
+    } finally {
+      store.dispose();
+    }
+  });
+
+  test("a startup failure whose start result and run.finished are read together still ends the run", async () => {
+    app = await createFakeApp();
+    // the real Link, given the two lines in one chunk, as a pipe delivers them when the engine writes both at once
+    const encoder = new TextEncoder();
+    let feed!: (text: string) => void;
+    const input = new ReadableStream<Uint8Array>({
+      start(c) {
+        feed = (text) => c.enqueue(encoder.encode(text));
+      },
+    });
+    const link = new Link(input, { write: () => {} });
+    link.onNotification("*", (method, params) => app!.bus.emit("engine.event", { method, params }));
+    const store = new RunStore(app.deps);
+    try {
+      store.beginRun({ text: "Q", detail: "read: 1 file" });
+      // what App.start does with Session.start()
+      void link.request<{ run_id: string }>("run.start", {}).then((r) => store.startResolved(r.run_id));
+      const runId = "r_0000000fa11e";
+      const none = scriptedUsage({ input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cost_usd: 0 });
+      const finished = {
+        run_id: runId, tag: null, answer: null, submitted: false, answer_valid: false, turns: 0, subcalls: 0, cost_usd: 0, wall_s: 0.1,
+        usage: { root: none, sub: none }, infra_error: "the worker did not start", infra_kind: "worker", log_path: "/tmp/runs.jsonl",
+      };
+      feed(
+        `${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { run_id: runId, log_path: "/tmp/runs.jsonl" } })}\n` +
+          `${JSON.stringify({ jsonrpc: "2.0", method: "run.finished", params: finished })}\n`,
+      );
+      await settled(store, "failed", runId);
+      expect(store.snapshot()).toMatchObject({ phase: "failed", runId, failKind: "worker" });
+      expect(store.snapshot().entries.at(-1)).toEqual({ kind: "error", text: "the worker did not start", lines: [] });
+      expect(isActive(store.snapshot().phase)).toBe(false);
+    } finally {
+      store.dispose();
+      link.close();
+    }
+  });
+
+  test("events kept while starting are replayed for this run only, and a failed start discards them", async () => {
+    app = await createFakeApp();
+    const store = new RunStore(app.deps);
+    try {
+      store.beginRun();
+      scriptedBus(app.bus, "r_00000000ffff").event("run.finished", { answer: "x", submitted: true, infra_error: null, infra_kind: null });
+      scriptedBus(app.bus, "r_00000000cafe").event("run.finished", { answer: "mine", submitted: true, infra_error: null, infra_kind: null });
+      store.startResolved("r_00000000cafe");
+      await settled(store, "finished", "r_00000000cafe");
+      expect(store.snapshot()).toMatchObject({ phase: "finished", runId: "r_00000000cafe" });
+      expect(store.snapshot().entries.at(-1)).toEqual({ kind: "answer", text: "mine" });
+
+      store.beginRun();
+      scriptedBus(app.bus, "r_00000000dead").event("run.finished", { answer: "stale", submitted: true, infra_error: null, infra_kind: null });
+      store.startFailed("no such profile");
+      store.beginRun();
+      store.startResolved("r_00000000dead"); // the failed start's events went with it
+      await new Promise((r) => setTimeout(r, 120));
+      expect(store.snapshot().phase).toBe("starting");
     } finally {
       store.dispose();
     }

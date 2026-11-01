@@ -71,6 +71,11 @@ const OS_SECRETS: SecretsLike = {
   delete: (o) => Bun.secrets.delete(o),
 };
 
+/** The last four characters of a key long enough to show them, else "". Every place that shows part of a key uses this. */
+export function last4Of(key: string): string {
+  return key.length >= LAST4_MIN_LENGTH ? key.slice(-4) : "";
+}
+
 /** An error message, or null. Format only, no network. Surrounding whitespace is trimmed first, as `add` does. */
 export function checkFormat(providerId: string, key: string): string | null {
   const k = key.trim();
@@ -133,7 +138,7 @@ export class KeyStore {
         id,
         provider: providerId,
         label: name || `key ${mine.length + 1}`,
-        last4: value.length >= LAST4_MIN_LENGTH ? value.slice(-4) : "",
+        last4: last4Of(value),
         store: "secrets",
         active: !mine.some((k) => k.active),
         created_at: new Date().toISOString(),

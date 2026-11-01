@@ -7,7 +7,7 @@
 import { useInput } from "ink";
 import { useEffect, useState } from "react";
 import { PROVIDERS } from "../../gateway/providers.ts";
-import { getSetting, SCHEMA, type SettingDef } from "../../settings.ts";
+import { defaultSetting, getSetting, SCHEMA, type SettingDef } from "../../settings.ts";
 import { applySetting } from "../store.ts";
 import { paint, span, useTheme, type Line } from "../theme.ts";
 import { fit, Frame, listLines } from "./common.tsx";
@@ -91,7 +91,7 @@ export function SettingsScreen(props: ScreenProps) {
         setEditing(String(value(row.key)));
         setError(null);
       } else if (input === "d") {
-        set(row.key, row.def.default);
+        set(row.key, defaultSetting(row.key));
       }
     },
     { isActive: props.active },
@@ -110,6 +110,6 @@ export function SettingsScreen(props: ScreenProps) {
   }
   body.push([span(fit(`  ${row.def.doc}`, w, theme), { dim: true })]);
   const how = choices ? "Left/Right cycles" : row.def.type === "bool" ? "Space toggles" : "Enter edits";
-  body.push([span(fit(`  ${how}; d resets to ${JSON.stringify(row.def.default)}`, w, theme), { dim: true })]);
+  body.push([span(fit(`  ${how}; d resets to ${JSON.stringify(defaultSetting(row.key))}`, w, theme), { dim: true })]);
   return <Frame title="/settings" hint={editing !== null ? "Enter saves  Esc cancels" : "Up/Down  Esc closes"} body={body} width={w} height={props.height} />;
 }

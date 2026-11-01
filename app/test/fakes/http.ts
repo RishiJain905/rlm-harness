@@ -252,6 +252,45 @@ export function cutMidStream(before = `data: ${JSON.stringify({ model: "served-m
   return new Response(body, { headers: { "content-type": "text/event-stream" } });
 }
 
+/** The first chunks of an OpenAI stream: the role and one content delta, with no finish_reason and no [DONE]. */
+export function openaiPartial(text = "partial "): string {
+  const chunk = (delta: Record<string, unknown>) => `data: ${JSON.stringify({ id: "chatcmpl-1", object: "chat.completion.chunk", model: "served-model", choices: [{ index: 0, delta }] })}
+
+`;
+  return chunk({ role: "assistant", content: "" }) + chunk({ content: text });
+}
+
+/** The first events of an Anthropic stream: message_start, a text block and one text_delta, with no stop_reason and no message_stop. */
+export function anthropicPartial(text = "partial "): string {
+  const event = (name: string, data: unknown) => `event: ${name}
+data: ${JSON.stringify(data)}
+
+`;
+  return (
+    event("message_start", { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", model: "served-model", content: [], stop_reason: null, usage: { input_tokens: 100, output_tokens: 1 } } }) +
+    event("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }) +
+    event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })
+  );
+}
+
+/** Sends `before` (SSE text), then goes quiet and keeps the connection open until the client gives up on it. */
+export function stallMidStream(before: string): Response {
+  let sent = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(ctrl) {
+      if (sent) return new Promise<void>(() => {});
+      sent = true;
+      ctrl.enqueue(new TextEncoder().encode(before));
+    },
+  });
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+}
+
+/** Sends `before` (SSE text), then ends the body cleanly: a connection that closed with no finish event. */
+export function endMidStream(before: string): Response {
+  return new Response(before, { headers: { "content-type": "text/event-stream" } });
+}
+
 function pieces(text: string, size = 8): string[] {
   const out: string[] = [];
   for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));

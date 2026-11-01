@@ -25,14 +25,22 @@ BUN="$(command -v bun || true)"
 
 # 1. secrets: this repo is public. No key-shaped strings and no key, run-log or .env files
 #    in anything tracked or about to be (untracked and not ignored). Fake keys in tests must
-#    contain FAKE (e.g. sk-ant-FAKE...), which this stage ignores.
+#    contain FAKE (e.g. sk-ant-FAKE...), which this stage ignores. Hits print as path:line
+#    only, never the matching text, and a git failure fails the stage instead of passing it.
 stage secrets
 KEY_RE='(^|[^A-Za-z0-9_-])(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9]{36}|hf_[A-Za-z0-9]{30,})|-----BEGIN [A-Z ]*PRIVATE KEY-----'
-hits="$(git grep --untracked -nIE -e "$KEY_RE" -- . ':!scripts/verify.sh' ':!scripts/verify.ps1' | grep -v 'FAKE' || true)"
-files="$(git ls-files --cached --others --exclude-standard | grep -E '(^|/)(\.env(\.[^/]*)?|keys\.json|key-index\.json|runs\.jsonl)$' | grep -vE '(^|/)\.env\.example$' || true)"
+scan_ok=1
+grep_out="$(git grep --untracked -nIE -e "$KEY_RE" -- . ':!scripts/verify.sh' ':!scripts/verify.ps1')"
+rc=$?
+if [ $rc -gt 1 ]; then scan_ok=; fail secrets "git grep failed (exit $rc)"; fi
+hits="$(printf '%s\n' "$grep_out" | grep -v 'FAKE' | grep -v '^$' | cut -d: -f1-2)"
+listed="$(git ls-files --cached --others --exclude-standard)"
+rc=$?
+if [ $rc -ne 0 ]; then scan_ok=; fail secrets "git ls-files failed (exit $rc)"; fi
+files="$(printf '%s\n' "$listed" | grep -E '(^|/)(\.env[^/]*|keys\.json|key-index\.json|runs\.jsonl)$' | grep -vE '(^|/)\.env\.example$')"
 if [ -n "$hits" ]; then echo "$hits" | sed 's/^/  /'; fail secrets "key-shaped strings found (fake keys must contain FAKE)"; fi
 if [ -n "$files" ]; then echo "$files" | sed 's/^/  /'; fail secrets "files that must never be committed"; fi
-[ -z "$hits" ] && [ -z "$files" ] && echo "ok"
+[ -n "$scan_ok" ] && [ -z "$hits" ] && [ -z "$files" ] && echo "ok"
 
 # 2. engine-tests
 stage engine-tests

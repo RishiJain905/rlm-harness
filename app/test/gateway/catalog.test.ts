@@ -1386,6 +1386,89 @@ describe("refreshModels", () => {
     expect(existsSync(refreshedModelsPath(r.home))).toBe(false);
   });
 
+  describe("the byte limit on a model list", () => {
+    const message = "OpenAI returned a stream that could not be read: the model list is larger than 500 bytes, so it was not read";
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `gpt-model-${i}`, object: "model", owned_by: "openai" }));
+
+    test("a body that declares more than the limit is not read, and nothing is written", async () => {
+      r = await rig({ server, keys: ["openai"] });
+      const restore = limits({ MAX_MODEL_LIST_BYTES: 500 });
+      try {
+        server.script(() => jsonResponse({ data: rows(40) })); // about 2 KB, with a content-length
+        const err = await caught(r.gateway.refreshModels("openai"));
+        expect(err).toBeInstanceOf(ModelError);
+        expect(err.data).toMatchObject({ kind: "other" });
+        expect(err.message).toBe(message);
+        expect(existsSync(refreshedModelsPath(r.home))).toBe(false);
+      } finally {
+        restore();
+      }
+    });
+
+    test("a body with no length that never stops is cut off at the limit, long before the timeout", async () => {
+      r = await rig({ server, keys: ["openai"] });
+      const restore = limits({ MAX_MODEL_LIST_BYTES: 500 });
+      try {
+        let sent = 0;
+        server.script(() => {
+          const body = new ReadableStream<Uint8Array>({
+            async pull(ctrl) {
+              await Bun.sleep(1);
+              ctrl.enqueue(new TextEncoder().encode(" ".repeat(100))); // endless padding in front of a JSON value
+              sent += 100;
+            },
+          });
+          return new Response(body, { headers: { "content-type": "application/json" } });
+        });
+        const t0 = Date.now();
+        const err = await caught(r.gateway.refreshModels("openai"));
+        expect(err.message).toBe(message);
+        expect(Date.now() - t0).toBeLessThan(5000); // REFRESH_TIMEOUT_MS is 30 s
+        expect(sent).toBeLessThan(5000); // it stopped reading, and the server stopped being asked for more
+        expect(existsSync(refreshedModelsPath(r.home))).toBe(false);
+      } finally {
+        restore();
+      }
+    });
+
+    test("an error body counts too", async () => {
+      r = await rig({ server, keys: ["openai"] });
+      const restore = limits({ MAX_MODEL_LIST_BYTES: 500 });
+      try {
+        server.script(() => httpError(500, { error: { message: "x".repeat(2000) } }));
+        expect((await caught(r.gateway.refreshModels("openai"))).message).toBe(message);
+      } finally {
+        restore();
+      }
+    });
+
+    test("the pages of one refresh share the limit", async () => {
+      r = await rig({ server, keys: ["anthropic"] });
+      const restore = limits({ MAX_MODEL_LIST_BYTES: 500 });
+      try {
+        const page = (n: number) => jsonResponse({ data: [{ type: "model", id: `claude-page-${n}`, display_name: "x".repeat(250) }], has_more: true, last_id: `claude-page-${n}` });
+        server.script([() => page(1), () => page(2), () => page(3)]);
+        const err = await caught(r.gateway.refreshModels("anthropic"));
+        expect(err.message).toBe("Anthropic returned a stream that could not be read: the model list is larger than 500 bytes, so it was not read");
+        expect(server.requests.length).toBe(2); // the first page fit, the second did not
+        expect(existsSync(refreshedModelsPath(r.home))).toBe(false);
+      } finally {
+        restore();
+      }
+    });
+
+    test("a list under the limit is read whole", async () => {
+      r = await rig({ server, keys: ["openai"] });
+      const restore = limits({ MAX_MODEL_LIST_BYTES: 5000 });
+      try {
+        server.script(() => jsonResponse({ data: rows(40) }));
+        expect((await r.gateway.refreshModels("openai")).length).toBe(40);
+      } finally {
+        restore();
+      }
+    });
+  });
+
   test("a request that gets no answer within REFRESH_TIMEOUT_MS fails as a timeout, once", async () => {
     r = await rig({ server, keys: ["openai"] });
     const restore = limits({ REFRESH_TIMEOUT_MS: 100 });

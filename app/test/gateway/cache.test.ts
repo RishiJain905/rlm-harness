@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { buildAnthropicRequest } from "../../src/gateway/anthropic.ts";
-import { ANTHROPIC_SPLIT_PREFIX, anthropicBreakpoints, planBatch, sharedPrefix } from "../../src/gateway/cache.ts";
+import { ANTHROPIC_SPLIT_PREFIX, anthropicBreakpoints, pairSafe, planBatch, sharedPrefix, splitPrefix } from "../../src/gateway/cache.ts";
 import type { ModelCompleteParams } from "../../src/protocol.ts";
 import { anthropicStream, httpError, openaiStream, startFakeProvider, type FakeServer, type RecordedRequest } from "../fakes/http.ts";
 import { caught, limits, params, recordSleeps, ref, rig, sub, type Rig } from "./helpers.ts";
@@ -71,6 +71,76 @@ describe("anthropic breakpoints", () => {
       { type: "text", text: "own part" },
     ]);
     expect(body.messages[0]!.content.length).toBe(1); // the input is not changed
+  });
+});
+
+describe("prefix positions are UTF-16 code units", () => {
+  // "😀" is one character to Python and two UTF-16 code units: JavaScript's unit, and the one the wire carries
+  const EMOJI = "😀";
+  const SEG = `${EMOJI.repeat(3000)} segment text`; // 3000 emoji and 13 more characters: 6013 units, 3013 code points
+  const SEP = "\n\n";
+  const ASK = "How many lines mention travel?";
+  const text = `${SEG}${SEP}${ASK}`;
+  const units = SEG.length + SEP.length; // 6015; the code-point count, 3015, would be under the cache minimum
+  const OPENROUTER_HAIKU = "anthropic/claude-haiku-5.5";
+  const one = { id: "b1", index: 0, size: 1 };
+  const halves = (blocks: { text: string }[]) => blocks.map((b) => b.text);
+  /** Whether a string has half an emoji: a low surrogate with no high one before it, or a high one with no low one after. */
+  const splitsAPair = (s: string) => /(?<![\ud800-\udbff])[\udc00-\udfff]|[\ud800-\udbff](?![\udc00-\udfff])/.test(s);
+
+  test("pairSafe moves only a position inside a pair", () => {
+    expect(EMOJI.length).toBe(2);
+    expect(pairSafe("a😀b", 0)).toBe(0);
+    expect(pairSafe("a😀b", 1)).toBe(1); // before the pair
+    expect(pairSafe("a😀b", 2)).toBe(1); // between its halves
+    expect(pairSafe("a😀b", 3)).toBe(3); // after the pair
+    expect(pairSafe("a😀b", 4)).toBe(4); // the end
+    expect(pairSafe("a\ud83db", 2)).toBe(2); // a lone high surrogate is not a pair
+    expect(pairSafe("a\ude00b", 2)).toBe(2); // nor is a lone low one
+  });
+
+  test("splitPrefix cuts at the unit count and gives the text back whole", () => {
+    expect(splitPrefix(`${EMOJI}${EMOJI}tail`, 4)).toEqual([`${EMOJI}${EMOJI}`, "tail"]);
+    expect(splitPrefix(`${EMOJI}${EMOJI}tail`, 2)).toEqual([EMOJI, `${EMOJI}tail`]);
+    // a position inside an emoji (a count made in another unit) moves back to its start, and splits nothing
+    const whole = `${EMOJI}${EMOJI}${EMOJI}tail`;
+    const [head, rest] = splitPrefix(whole, 3)!;
+    expect([head, rest]).toEqual([EMOJI, `${EMOJI}${EMOJI}tail`]);
+    expect(`${head}${rest}`).toBe(whole);
+    expect(splitPrefix(`${EMOJI}x`, 1)).toBeNull(); // moving back leaves nothing before the cut
+    expect(splitPrefix("a\ud83db", 2)).toEqual(["a\ud83d", "b"]); // a lone surrogate was never a pair
+  });
+
+  test("the pure breakpoint split lands on a pair boundary too", () => {
+    const body: { messages: { role: string; content: Record<string, unknown>[] }[] } = { messages: [{ role: "user", content: [{ type: "text", text: `a${EMOJI}b` }] }] };
+    expect(anthropicBreakpoints(body, { splitAt: 2 }).messages[0]!.content).toEqual([
+      { type: "text", text: "a", cache_control: { type: "ephemeral" } },
+      { type: "text", text: `${EMOJI}b` },
+    ]);
+  });
+
+  test("Anthropic: a prefix counted in UTF-16 units becomes exactly the marked block", async () => {
+    r = await rig({ server, keys: ["anthropic"] });
+    server.script(() => anthropicStream({ text: "ok" }));
+    await r.gateway.complete(sub(ref("anthropic", "claude-sonnet-5"), text, one, { prefix: { chars: units, key: "emoji" } }));
+    expect(server.requests[0]!.body.messages[0].content).toEqual([
+      { type: "text", text: `${SEG}${SEP}`, cache_control: { type: "ephemeral" } },
+      { type: "text", text: ASK },
+    ]);
+  });
+
+  test("OpenRouter's Anthropic models: the same; and a count that lands inside an emoji still marks a block of whole characters", async () => {
+    r = await rig({ server, keys: ["openrouter"] });
+    server.script(() => openaiStream({ text: "ok" }));
+    await r.gateway.complete(sub(ref("openrouter", OPENROUTER_HAIKU), text, one, { prefix: { chars: units, key: "emoji" } }));
+    await r.gateway.complete(sub(ref("openrouter", OPENROUTER_HAIKU), text, one, { prefix: { chars: 4097, key: "emoji" } })); // between the halves of the 2049th emoji
+    const [exact, inside] = server.requests.map((q) => q.body.messages[0].content as { text: string; cache_control?: unknown }[]);
+    expect(halves(exact!)).toEqual([`${SEG}${SEP}`, ASK]);
+    expect(exact![0]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(halves(inside!)).toEqual([EMOJI.repeat(2048), `${EMOJI.repeat(952)} segment text${SEP}${ASK}`]);
+    expect(halves(inside!).join("")).toBe(text); // nothing lost, nothing doubled
+    expect(inside![0]!.cache_control).toEqual({ type: "ephemeral" });
+    for (const block of halves(inside!)) expect(splitsAPair(block)).toBe(false);
   });
 });
 

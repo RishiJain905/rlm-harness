@@ -74,7 +74,7 @@ def test_request_result() -> None:
         assert await p.peer.recv() == {"jsonrpc": "2.0", "id": 1, "result": {"a": [1, "x"]}}
         p.peer.send({"jsonrpc": "2.0", "id": "s-1", "method": "nothing", "params": {}})
         assert await p.peer.recv() == {"jsonrpc": "2.0", "id": "s-1", "result": None}
-        p.peer.send({"id": 2, "method": "echo"})  # no params means {}; jsonrpc not required
+        p.peer.send({"jsonrpc": "2.0", "id": 2, "method": "echo"})  # no params means {}
         assert await p.peer.recv() == {"jsonrpc": "2.0", "id": 2, "result": {}}
         await finish(p, server)
 
@@ -111,11 +111,135 @@ def test_errors() -> None:
         await expect(b"[1, 2]\n", None, -32600)
         await expect(b'{"id": 4, "method":\n', None, -32700)
         await expect(b'{"id": 5, "method": "echo", "params": {"a": "\xff"}}\n', None, -32700)
-        await expect({"id": 6, "method": "echo", "params": [1]}, 6, -32602, "params must be an object")
-        await expect({"id": 7, "result": 1, "error": {"code": 1, "message": "x"}}, 7, -32600)
-        err = await expect({"id": 8, "method": "bad_input"}, 8, -32012, "missing input")
+        await expect({"jsonrpc": "2.0", "id": 6, "method": "echo", "params": [1]}, 6, -32602, "params must be an object")
+        await expect({"jsonrpc": "2.0", "id": 7, "result": 1, "error": {"code": 1, "message": "x"}}, 7, -32600)
+        err = await expect({"jsonrpc": "2.0", "id": 8, "method": "bad_input"}, 8, -32012, "missing input")
         assert err["data"] == {"field": "inputs"}
-        await expect({"id": 9, "method": "broken"}, 9, -32603, "internal error: ValueError: boom")
+        await expect({"jsonrpc": "2.0", "id": 9, "method": "broken"}, 9, -32603, "internal error: ValueError: boom")
+        await expect({"jsonrpc": "1.0", "id": 10, "method": "echo"}, 10, -32600, "invalid request")
+        await expect({"id": 11, "method": "echo"}, 11, -32600, "invalid request")  # jsonrpc is required
+        await expect({"jsonrpc": "2.0", "id": 12, "method": "echo", "result": 1}, 12, -32600, "invalid request")
+        await expect({"jsonrpc": "2.0", "method": "echo", "error": {"code": 1, "message": "x"}}, None, -32600)
+        await finish(p, server)
+
+    run(main())
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        {"id": 1, "method": "echo", "params": {}},  # no jsonrpc
+        {"jsonrpc": "1.0", "id": 1, "method": "echo", "params": {}},
+        {"jsonrpc": 2.0, "id": 1, "method": "echo", "params": {}},
+        {"jsonrpc": "2.0", "id": 1, "method": "echo", "params": {}, "result": 1},  # a request with a result
+        {"jsonrpc": "2.0", "id": 1, "method": "echo", "params": {}, "error": {"code": 1, "message": "x"}},
+        {"jsonrpc": "2.0", "method": "echo", "params": {}, "result": None},  # a notification with a result
+        {"id": "e1", "result": 1},  # an answer without jsonrpc
+        {"jsonrpc": "2.0.0", "id": "e1", "error": {"code": 1, "message": "x"}},
+    ],
+)
+def test_classify_rejects_bad_shapes(msg: dict) -> None:
+    assert classify(msg) == "invalid"
+
+
+def test_bad_shapes_are_not_dispatched_or_settled() -> None:
+    async def main() -> None:
+        p = pipes()
+        link = Link(p.reader, p.writer)
+        calls: list[dict] = []
+
+        async def record(params: dict) -> str:
+            calls.append(params)
+            return "dispatched"
+
+        link.method("echo", record)
+        server = await serving(link)
+        p.peer.send({"jsonrpc": "1.0", "id": 1, "method": "echo", "params": {}})
+        assert await p.peer.recv() == {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "invalid request"}}
+        p.peer.send({"method": "echo", "params": {}})  # a notification without jsonrpc
+        assert await p.peer.recv() == {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}
+        assert calls == []
+
+        # an answer without jsonrpc does not settle the engine's request
+        call = asyncio.create_task(link.request("m", {}))
+        req = await p.peer.recv()
+        p.peer.send({"id": req["id"], "result": "no version"})
+        assert (await p.peer.recv())["error"]["code"] == -32600
+        assert not call.done()
+        p.peer.send({"jsonrpc": "2.0", "id": req["id"], "result": "ok"})
+        assert await call == "ok"
+        await finish(p, server)
+
+    run(main())
+
+
+def test_oversized_request_fails_its_caller() -> None:
+    async def main() -> None:
+        p = pipes()
+        link = Link(p.reader, p.writer, max_line_bytes=1024)
+        server = await serving(link)
+        with pytest.raises(RpcError) as info:
+            await link.request("model.complete", {"s": "x" * 2000})
+        assert info.value.code == -32600
+        assert info.value.message.startswith("model.complete request is too large: ")
+        data = info.value.data
+        assert (data["kind"], data["method"], data["limit"]) == ("message_too_large", "model.complete", 1024)
+        assert data["bytes"] > 1024
+        assert link._pending == {}
+
+        # nothing went out: the next line the peer sees is the next request
+        call = asyncio.create_task(link.request("m", {"small": True}))
+        req = await p.peer.recv()
+        assert (req["method"], req["params"]) == ("m", {"small": True})
+        p.peer.send({"jsonrpc": "2.0", "id": req["id"], "result": 1})
+        assert await call == 1
+
+        # a request exactly at the limit still goes out (the newline is not counted, as on the read side)
+        rid = f"e{link._next_id + 1}"
+        empty = json.dumps({"jsonrpc": "2.0", "id": rid, "method": "m", "params": {"s": ""}}, separators=(",", ":"))
+        call = asyncio.create_task(link.request("m", {"s": "y" * (1024 - len(empty))}))
+        line = await p.peer.recv_line()
+        assert len(line) == 1024
+        p.peer.send({"jsonrpc": "2.0", "id": rid, "result": 2})
+        assert await call == 2
+        await finish(p, server)
+
+    run(main())
+
+
+def test_oversized_answer_is_an_error_with_the_request_id() -> None:
+    async def main() -> None:
+        p = pipes()
+        link = Link(p.reader, p.writer, max_line_bytes=1024)
+
+        async def big(params: dict) -> str:
+            return "é" * 1000  # 2,000 bytes of UTF-8
+
+        link.method("big", big)
+        server = await serving(link)
+        p.peer.send({"jsonrpc": "2.0", "id": 4, "method": "big", "params": {}})
+        msg = await p.peer.recv()
+        assert msg["id"] == 4 and msg["error"]["code"] == -32603
+        assert msg["error"]["message"].startswith("internal error: the result is too large: ")
+        assert msg["error"]["data"]["kind"] == "message_too_large" and msg["error"]["data"]["limit"] == 1024
+
+        link.notify("run.cell", {"output": "z" * 2000})  # dropped: nobody waits on a notification
+        link.notify("run.budget", {"turns_left": 1})
+        assert await p.peer.recv() == {"jsonrpc": "2.0", "method": "run.budget", "params": {"turns_left": 1}}
+        await finish(p, server)
+
+    run(main())
+
+
+def test_oversized_model_complete_fails_the_run_call() -> None:
+    async def main() -> None:
+        p = pipes()
+        link = Link(p.reader, p.writer, max_line_bytes=1024)
+        port = LinkAppPort(link)
+        server = await serving(link)
+        with pytest.raises(ModelError) as info:
+            await port.complete({"run_id": "r_1", "messages": [{"role": "user", "content": "x" * 2000}]})
+        assert info.value.kind == "other" and "too large" in info.value.message
         await finish(p, server)
 
     run(main())
@@ -278,7 +402,7 @@ def test_line_too_long() -> None:
         link = Link(p.reader, p.writer, max_line_bytes=1024)
         link.method("echo", echo)
         server = await serving(link)
-        p.peer.send(b'{"id": 1, "method": "echo", "params": {"s": "' + b"x" * 2000 + b'"}}\n')
+        p.peer.send(b'{"jsonrpc": "2.0", "id": 1, "method": "echo", "params": {"s": "' + b"x" * 2000 + b'"}}\n')
         msg = await p.peer.recv()
         assert msg == {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "line too long (over 1024 bytes)"}}
         p.peer.send({"jsonrpc": "2.0", "id": 2, "method": "echo", "params": {"ok": True}})
@@ -429,7 +553,7 @@ def test_process_info(tmp_path) -> None:
         engine.send({"jsonrpc": "2.0", "id": 1, "method": "engine.info", "params": {}})
         info = engine.recv()["result"]
         assert set(info) == INFO_KEYS
-        assert (info["version"], info["protocol"], info["contract"]) == ("0.1.0", 1, "v4")
+        assert (info["version"], info["protocol"], info["contract"]) == ("0.1.1", 1, "v4")
         assert info["contract_hash"] == info["training_hash"] == TRAINING_HASH
         assert [(x["name"], x["source"]) for x in info["profiles"]] == [("default", "builtin"), ("training-v4", "builtin")]
         assert info["profiles"][1]["prompt_hash"] == TRAINING_HASH

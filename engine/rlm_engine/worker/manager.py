@@ -6,9 +6,10 @@ KV cache: none
 training's dataclass. The deltas: the worker is a local `python -I -B -X utf8 worker.py` process (D-01, D-42), with
 no supervisor, so a death's reason comes from its exit code; there is no out-of-memory or tamper case; the bridge is
 the `on_request` handler, called for each `request` line the worker writes (architecture §6.1); and a timeout or a
-crash kills the whole process tree (POSIX: the worker's own session; Windows: taskkill /T) before a fresh worker
-starts. Repo mode adds training's edit-sandbox parts: the workspace fingerprint after every cell, and a wall cap of
-`wall_cap_s + cell_timeout_s`.
+crash kills the whole process tree (POSIX: the worker's own session, plus the sessions shell() started, listed in
+<scratch>/shell-groups; Windows: a kill-on-close job object the worker joins before it runs, else taskkill /T)
+before a fresh worker starts. Repo mode adds training's edit-sandbox parts: the workspace fingerprint after every
+cell, and a wall cap of `wall_cap_s + cell_timeout_s`.
 
 The worker's stdout and stderr are read on threads, not asyncio pipes (D-30's reason): every OS and event loop
 behaves alike. `run_cell` raises only InfraError (and CancelledError).
@@ -33,19 +34,29 @@ from typing import Any, Awaitable, Callable
 from .. import contract
 from ..errors import InfraError
 from ..workspace import ShellSpec, fingerprint
-from .tools import TOOLS_VERSION
+from .tools import SHELL_GROUPS, TOOLS_VERSION, Job, popen_owned
 
 WORKER_PATH = Path(__file__).resolve().with_name("worker.py")
 REPO_ALIAS = "/work/repo"  # decision 3a: the tools map it onto the workspace (S-25)
 
 START_ATTEMPTS = 2  # launches before a worker that won't start is an infra error
 STARTUP_TIMEOUT_S = 60
-RESULT_LINE_LIMIT = 4 * 1024 * 1024
+RESULT_LINE_LIMIT = 4 * 1024 * 1024  # any protocol line but a request
+# A request carries a whole llm_batch, as ASCII JSON: up to 12 bytes a character. The worker refuses a longer one
+# itself (worker.REQUEST_MAX_BYTES); one that still arrives gets an error reply, never silence.
+REQUEST_LINE_LIMIT = 64 * 1024 * 1024
+_REQUEST_START = re.compile(rb'\{"type": "request", "id": (\d{1,18})\b')  # how worker._send writes one
+REQUEST_TOO_LARGE = (f"the request is over {REQUEST_LINE_LIMIT:,} bytes, the most one request carries. "
+                     "Send fewer or shorter prompts per call.")
 STDERR_KEEP = 4000
 STDERR_LINES = 50
+STDERR_LINE_CHARS = 500  # a worker diagnostic line is kept to this; the rest of a longer one is skipped unread
+STDERR_READ = 65536
 VARS_TIMEOUT_S = 10
 JOIN_S = 2
-KEY_ENV = re.compile("KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH", re.IGNORECASE)  # D-29: never reaches the worker
+# D-29: never reaches the worker. HEADERS: the SDKs' OPENAI_CUSTOM_HEADERS and ANTHROPIC_CUSTOM_HEADERS can carry a
+# credential, and so can any other name like them.
+KEY_ENV = re.compile("KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|HEADERS", re.IGNORECASE)
 # Git's environment config goes as a whole: KEY_ENV matches its key names, git refuses a partial set, and its values
 # can hold credentials (D-62).
 GIT_ENV_CONFIG = re.compile(r"GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)", re.IGNORECASE)
@@ -83,19 +94,51 @@ def worker_env(scratch: Path) -> dict[str, str]:
     return env
 
 
-def kill_tree(proc: subprocess.Popen) -> None:
-    """Kill a worker and everything it started. POSIX: its session's process group; Windows: taskkill /T."""
+def kill_tree(proc: subprocess.Popen, job: Job | None = None, scratch: Path | None = None) -> None:
+    """Kill a worker and everything it started. POSIX: its session's process group, then the groups shell() started
+    (listed in <scratch>/shell-groups). Windows: its job object, which holds every descendant, even one whose parent
+    is gone; taskkill /T, which follows parent ids, when there is no job."""
     if _WINDOWS:
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if job is not None:
+            job.kill()
+        else:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
+        if scratch is not None:
+            kill_shell_groups(scratch)
     try:
         proc.kill()
+    except OSError:
+        pass
+
+
+def kill_shell_groups(scratch: Path) -> None:
+    """POSIX: kill the process groups shell() listed in <scratch>/shell-groups (each in its own session, so killing the
+    worker's group misses them), then forget them. Never the engine's own group."""
+    path = Path(scratch) / SHELL_GROUPS
+    try:
+        listed = path.read_text("ascii").split()
+    except (OSError, ValueError):
+        return
+    own = os.getpgrp()
+    for item in listed:
+        try:
+            pgid = int(item)
+        except ValueError:
+            continue
+        if pgid > 1 and pgid != own:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    try:
+        path.unlink()
     except OSError:
         pass
 
@@ -105,8 +148,8 @@ SEGMENT_CHARS = 40_000  # a context segment for cache-shaped sub-calls: ~10K tok
 
 def segment_chars(limits: contract.Limits) -> int:
     """The default segment size: SEGMENT_CHARS, or two thirds of a sub-call's limit if that is smaller, so a segment
-    always leaves room for the prompt (D-119)."""
-    return min(SEGMENT_CHARS, limits.subcall_max_chars * 2 // 3)
+    always leaves room for the prompt (D-119). At least 1, which cacheapi uses as given."""
+    return max(1, min(SEGMENT_CHARS, limits.subcall_max_chars * 2 // 3))
 
 
 class Worker:
@@ -148,6 +191,7 @@ class Worker:
         self.python_version: str | None = None
         self.stderr_lines: collections.deque[str] = collections.deque(maxlen=STDERR_LINES)
         self._proc: subprocess.Popen | None = None
+        self._job: Job | None = None  # Windows: the worker's kill-on-close job object
         self._threads: list[threading.Thread] = []
         self._gen = 0  # one per launch: messages from an earlier process are dropped
         self._events: asyncio.Queue = asyncio.Queue()  # ready, result, and None at EOF
@@ -424,11 +468,15 @@ class Worker:
             kwargs["start_new_session"] = True
         self._gen += 1
         self._events = asyncio.Queue()
-        self._proc = None
-        proc = subprocess.Popen([self.python, "-I", "-B", "-X", "utf8", str(WORKER_PATH)], cwd=str(self.workspace),
-                                env=worker_env(self.scratch), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, bufsize=0, **kwargs)
-        self._proc = proc
+        self._proc, self._job = None, None
+        # Windows: in a kill-on-close job before it runs (a venv's python.exe starts the real one as a child at once),
+        # so the worker and everything below it die with the job, and with the engine.
+        proc, job = popen_owned([self.python, "-I", "-B", "-X", "utf8", str(WORKER_PATH)], kill_on_close=True,
+                                cwd=str(self.workspace), env=worker_env(self.scratch), stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, **kwargs)
+        if _WINDOWS and job is None:
+            self._note("no job object for the worker; cleanup falls back to taskkill /T")
+        self._proc, self._job = proc, job
         gen = self._gen
         self._threads = [
             threading.Thread(target=self._read_stdout, args=(proc.stdout, gen), name="rlm-worker-out", daemon=True),
@@ -438,14 +486,16 @@ class Worker:
             thread.start()
 
     async def _kill(self) -> None:
-        proc, threads = self._proc, self._threads
+        proc, threads, job = self._proc, self._threads, self._job
         if proc is None:
             return
-        await asyncio.to_thread(kill_tree, proc)
+        await asyncio.to_thread(kill_tree, proc, job, self.scratch)
         try:
             await asyncio.to_thread(proc.wait, 10)
         except subprocess.TimeoutExpired:
             pass
+        if job is not None:
+            job.close()
         await asyncio.to_thread(_join, threads)
         try:
             proc.stdin.close()
@@ -472,8 +522,10 @@ class Worker:
     # ------------------------------------------------------------------ reader threads and messages
 
     def _read_stdout(self, stream, gen: int) -> None:
-        """Protocol messages, one JSON object per line, then None at EOF. Over-long and unreadable lines are dropped."""
-        buf, dropping = b"", False
+        """Protocol messages, one JSON object per line, then None at EOF. Unreadable lines are dropped, and so are
+        over-long ones (RESULT_LINE_LIMIT, or REQUEST_LINE_LIMIT for a request), but an over-long request is answered
+        with an error so its caller doesn't wait forever."""
+        buf, dropping = bytearray(), False
         try:
             while True:
                 try:
@@ -482,15 +534,21 @@ class Worker:
                     chunk = b""
                 if not chunk:
                     break
-                *lines, buf = (buf + chunk).split(b"\n")
-                for line in lines:
+                start = 0
+                while (end := chunk.find(b"\n", start)) >= 0:
                     if dropping:
                         dropping = False
-                        continue
-                    self._deliver(gen, line)
-                if len(buf) > RESULT_LINE_LIMIT:
-                    self._note("[over-long protocol line dropped]")
-                    buf, dropping = b"", True
+                    else:
+                        buf += chunk[start:end]
+                        self._deliver(gen, bytes(buf))
+                    buf.clear()
+                    start = end + 1
+                if not dropping:
+                    buf += chunk[start:]
+                    if len(buf) > _line_limit(buf):
+                        self._too_long(gen, buf)
+                        buf.clear()
+                        dropping = True
         finally:
             try:
                 stream.close()
@@ -498,9 +556,16 @@ class Worker:
                 pass
             self._post(gen, None)
 
+    def _too_long(self, gen: int, line: bytes | bytearray) -> None:
+        """An over-long line is dropped; a request's id, at its start, still gets an error reply."""
+        self._note("[over-long protocol line dropped]")
+        match = _REQUEST_START.match(line)
+        if match:
+            self._post(gen, {"type": "request-too-large", "id": int(match.group(1))})
+
     def _deliver(self, gen: int, line: bytes) -> None:
-        if len(line) > RESULT_LINE_LIMIT:
-            self._note("[over-long protocol line dropped]")
+        if len(line) > _line_limit(line):
+            self._too_long(gen, line)
             return
         try:
             message = json.loads(line)
@@ -512,20 +577,42 @@ class Worker:
             self._note(f"[unreadable protocol line] {line[:200]!r}")
 
     def _read_stderr(self, stream) -> None:
+        """Worker diagnostics, line by line, read in bounded chunks: a line keeps its first STDERR_LINE_CHARS
+        characters, and the rest of a longer one is skipped without being buffered."""
+        keep = STDERR_LINE_CHARS * 4  # bytes: enough for that many UTF-8 characters
+        buf, skipping = bytearray(), False
         try:
             while True:
                 try:
-                    line = stream.readline()
+                    chunk = stream.read(STDERR_READ)
                 except (OSError, ValueError):
-                    line = b""
-                if not line:
+                    chunk = b""
+                if not chunk:
                     break
-                self._note(line.decode("utf-8", "replace").rstrip("\r\n")[:500])
+                start = 0
+                while (end := chunk.find(b"\n", start)) >= 0:
+                    if not skipping:
+                        buf += chunk[start:end][: keep - len(buf)]
+                        self._note_bytes(buf)
+                    buf.clear()
+                    skipping = False
+                    start = end + 1
+                if not skipping:
+                    buf += chunk[start:][: keep - len(buf)]
+                    if len(buf) >= keep:  # an over-long line: note its start now, skip to its end
+                        self._note_bytes(buf)
+                        buf.clear()
+                        skipping = True
+            if buf:
+                self._note_bytes(buf)
         finally:
             try:
                 stream.close()
             except OSError:
                 pass
+
+    def _note_bytes(self, line: bytes | bytearray) -> None:
+        self._note(bytes(line).decode("utf-8", "replace").rstrip("\r\n")[:STDERR_LINE_CHARS])
 
     def _note(self, text: str) -> None:
         """A worker diagnostic: kept for the start-failure message and copied to the engine's stderr."""
@@ -565,6 +652,11 @@ class Worker:
                 future.set_result(message)
         elif kind in ("ready", "result"):
             self._events.put_nowait(message)
+        elif kind == "request-too-large":  # from _too_long: the request's caller gets an error, not silence
+            task = asyncio.ensure_future(self._write({"type": "reply", "id": message.get("id"),
+                                                      "error": REQUEST_TOO_LARGE}))
+            self._requests.add(task)
+            task.add_done_callback(self._requests.discard)
         else:
             self._note(f"[ignored protocol message] {str(message)[:200]}")
 
@@ -598,6 +690,11 @@ class Worker:
     def _raise_if_infra(self) -> None:
         if self._infra is not None:
             raise self._infra
+
+
+def _line_limit(start: bytes | bytearray) -> int:
+    """The longest line allowed for a protocol line that starts with `start`."""
+    return REQUEST_LINE_LIMIT if start.startswith(b'{"type": "request"') else RESULT_LINE_LIMIT
 
 
 def _join(threads: list[threading.Thread]) -> None:

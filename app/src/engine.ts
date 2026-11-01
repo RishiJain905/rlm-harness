@@ -47,11 +47,17 @@ export class ProtocolMismatch extends Error {
   }
 }
 
-/** Names of variables that could hold a key; neither the engine nor the worker ever sees them (D-29). */
-const KEY_LIKE = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i;
+/**
+ * Names of variables that could hold a key; neither the engine nor the worker ever sees them (D-29).
+ * HEADERS catches OPENAI_CUSTOM_HEADERS and ANTHROPIC_CUSTOM_HEADERS, which the SDKs read and which
+ * carry whole header lines, authorization included.
+ */
+const KEY_LIKE = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|HEADERS/i;
 /** Git's environment config goes as a whole: KEY_LIKE matches its key names, git refuses a partial set, and its values can hold credentials (D-62). */
 const GIT_ENV_CONFIG = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/i;
 const STDERR_RING = 200;
+/** The longest stderr line kept, in characters; the rest of a longer line is dropped (a line is buffered up to this, never more). */
+export const STDERR_LINE_MAX = 16 * 1024;
 const KILL_GRACE_MS = 2000;
 const STDOUT_GRACE_MS = 1000;
 
@@ -153,8 +159,14 @@ export function installedEngine(home: string, env: Record<string, string>): Engi
   return { cmd: [marker.python, "-E", "-s", "-X", "utf8", "-m", "rlm_engine", "serve"], cwd: dir, env };
 }
 
-/** Start the engine with all three stdio piped. Its env is cmd.env merged over process.env, key-like names stripped again. */
-export function startEngine(cmd: EngineCommand, opts: { onStderr?: (line: string) => void } = {}): EngineProcess {
+/**
+ * Start the engine with all three stdio piped. Its env is cmd.env merged over process.env, key-like names stripped again.
+ * On POSIX it starts as the leader of its own session and process group, so a forced stop reaches a launcher's
+ * children too (uv, a wrapper script) and not just the launcher; Windows uses taskkill /T. `killGraceMs` is how
+ * long kill() waits for the engine to leave after closing its stdin.
+ */
+export function startEngine(cmd: EngineCommand, opts: { onStderr?: (line: string) => void; killGraceMs?: number } = {}): EngineProcess {
+  const group = process.platform !== "win32";
   const proc = Bun.spawn({
     cmd: cmd.cmd,
     cwd: cmd.cwd,
@@ -162,6 +174,7 @@ export function startEngine(cmd: EngineCommand, opts: { onStderr?: (line: string
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
+    detached: group, // POSIX: setsid(), so the pid is also the process group id
   });
   const link = new Link(proc.stdout, {
     write: async (chunk) => {
@@ -179,6 +192,7 @@ export function startEngine(cmd: EngineCommand, opts: { onStderr?: (line: string
     // stdout may still hold the engine's last answer: let the link read to EOF first
     await Promise.race([link.closed, Bun.sleep(STDOUT_GRACE_MS)]);
     link.close();
+    if (group) killGroup(proc.pid); // whatever the launcher left in its group
     return code;
   });
   let killing = false;
@@ -194,34 +208,72 @@ export function startEngine(cmd: EngineCommand, opts: { onStderr?: (line: string
       } catch {
         // already closed
       }
-      const timer = setTimeout(() => killTree(proc), KILL_GRACE_MS);
+      const timer = setTimeout(() => killTree(proc, group), opts.killGraceMs ?? KILL_GRACE_MS);
       void exited.then(() => clearTimeout(timer));
     },
   };
 }
 
-function killTree(proc: { pid: number; kill(): void }): void {
+/** Forced stop. POSIX: SIGKILL to the engine's whole process group. Windows: the launcher and its tree (uv.exe, then python.exe). */
+function killTree(proc: { pid: number; kill(): void }, group: boolean): void {
   if (process.platform === "win32") {
-    // uv.exe then python.exe: kill the whole tree
     Bun.spawn(["taskkill", "/PID", String(proc.pid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" });
-  } else {
+    return;
+  }
+  if (group) killGroup(proc.pid);
+  try {
     proc.kill();
+  } catch {
+    // already gone
   }
 }
 
-async function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: string) => void): Promise<void> {
+/** SIGKILL to process group `pgid` (a negative pid). No group left is no error. */
+function killGroup(pgid: number): void {
+  try {
+    process.kill(-pgid, "SIGKILL");
+  } catch {
+    // ESRCH: nothing is left in the group
+  }
+}
+
+/**
+ * Calls `onLine` for each line of `stream` (LF or CRLF). A line is held in memory only up to `maxLine`
+ * characters: a longer one is cut there with a marker and the rest of it is skipped to its newline, so
+ * the engine's stderr can never grow the buffer without bound.
+ */
+export async function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: string) => void, maxLine = STDERR_LINE_MAX): Promise<void> {
   const decoder = new TextDecoder();
   let buf = "";
-  for await (const chunk of stream) {
-    buf += decoder.decode(chunk, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) >= 0) {
-      onLine(buf.slice(0, nl).replace(/\r$/, ""));
-      buf = buf.slice(nl + 1);
+  let skipping = false; // inside the rest of a line that was cut
+  const cut = (): string => {
+    let kept = buf.slice(0, maxLine);
+    if (/[\ud800-\udbff]$/.test(kept)) kept = kept.slice(0, -1); // not half a surrogate pair
+    return `${kept} [line cut at ${maxLine} characters]`;
+  };
+  const feed = (text: string): void => {
+    let start = 0;
+    while (start < text.length) {
+      const nl = text.indexOf("\n", start);
+      const end = nl < 0 ? text.length : nl;
+      if (!skipping) {
+        buf += text.slice(start, end);
+        if (buf.length > maxLine) {
+          onLine(cut());
+          buf = "";
+          skipping = true;
+        }
+      }
+      if (nl < 0) return;
+      if (skipping) skipping = false;
+      else onLine(buf.replace(/\r$/, ""));
+      buf = "";
+      start = nl + 1;
     }
-  }
-  buf += decoder.decode();
-  if (buf) onLine(buf.replace(/\r$/, ""));
+  };
+  for await (const chunk of stream) feed(decoder.decode(chunk, { stream: true }));
+  feed(decoder.decode());
+  if (buf && !skipping) onLine(buf.replace(/\r$/, ""));
 }
 
 /** engine.info, refusing an engine that speaks another protocol (D-36). */

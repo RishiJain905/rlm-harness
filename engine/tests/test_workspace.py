@@ -12,6 +12,8 @@ import re
 import stat
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -298,6 +300,86 @@ def test_diff_survives_autocrlf(git_repo: Path, tmp_path: Path) -> None:
     d = ws.diff(git_repo, tree, scratch)
     assert "-two\n+TWO\n" in d and "\r" not in d
     assert tools_diff(git_repo, tree, scratch) == d
+
+
+# ----------------------------------------------------------------------------- no configured programs (finding 9)
+
+
+def armed_repo(repo: Path) -> Path:
+    """`repo` with drivers that each append a line to .git/ran when git runs them: a required clean filter, a
+    long-running `process` filter (named with `=` and `.`, which `-c` could not carry) and a textconv."""
+    (repo / ".gitattributes").write_bytes(b"*.py filter=evil diff=evil\n*.md filter=p=x.y\n")
+    git(repo, "add", ".gitattributes")
+    git(repo, "commit", "-qm", "attributes")
+    git(repo, "config", "filter.evil.clean", "echo clean >> .git/ran; cat")
+    git(repo, "config", "filter.evil.smudge", "echo smudge >> .git/ran; cat")
+    git(repo, "config", "filter.evil.required", "true")
+    git(repo, "config", "filter.p=x.y.process", "echo process >> .git/ran; cat")
+    git(repo, "config", "diff.evil.textconv", "echo textconv >> .git/ran; cat")
+    return repo / ".git" / "ran"
+
+
+@needs_git
+def test_snapshot_and_diff_run_no_configured_program(git_repo: Path, tmp_path: Path) -> None:
+    ran = armed_repo(git_repo)
+    (git_repo / "a.py").write_bytes(b"x = 2\n")
+    (git_repo / "README.md").write_bytes(b"changed\n")
+    # the control: plain git does run them
+    subprocess.run(["git", "hash-object", "--path=a.py", "a.py"], cwd=git_repo, capture_output=True)
+    subprocess.run(["git", "hash-object", "--path=README.md", "README.md"], cwd=git_repo, capture_output=True)
+    subprocess.run(["git", "diff", "HEAD", "--", "a.py"], cwd=git_repo, capture_output=True)
+    assert {"clean", "process", "textconv"} <= set(ran.read_text().split())
+    ran.unlink()
+
+    scratch = tmp_path / "scratch"
+    tree = ws.snapshot(git_repo, scratch)
+    assert tree is not None
+    (git_repo / "a.py").write_bytes(b"x = 3\n")
+    (git_repo / "new.py").write_bytes(b"n = 1\n")
+    d = ws.diff(git_repo, tree, scratch)
+    assert "-x = 2\n+x = 3" in d and "+n = 1" in d  # the work tree's own bytes, no textconv
+    assert not ran.exists(), ran.read_text()
+
+
+@needs_git
+def test_no_filters_follows_an_existing_config_set(git_repo: Path) -> None:
+    armed_repo(git_repo)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_CONFIG")}
+    env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="filter.env.clean", GIT_CONFIG_VALUE_0="evil",
+               GIT_CONFIG_PARAMETERS="'filter.evil.clean'='evil'")
+    out = ws.no_filters(git_repo, env)
+    assert "GIT_CONFIG_PARAMETERS" not in out
+    pairs = [(out[f"GIT_CONFIG_KEY_{i}"], out[f"GIT_CONFIG_VALUE_{i}"]) for i in range(int(out["GIT_CONFIG_COUNT"]))]
+    assert pairs[0] == ("filter.env.clean", "evil")  # kept, and overridden by a later entry
+    assert ("filter.env.clean", "") in pairs[1:] and ("filter.evil.required", "false") in pairs
+    assert ("filter.p=x.y.process", "") in pairs and ("filter.evil.smudge", "") in pairs
+
+
+# ----------------------------------------------------------------------------- time limit and abort (finding 11)
+
+
+HANG = ["-c", "alias.hang=!sleep 30", "hang"]  # git runs a shell that runs sleep: git with a child, like a filter
+
+
+@needs_git
+def test_a_git_call_over_the_time_limit_is_killed(git_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ws, "GIT_TIMEOUT_S", 0.5)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match=r"timed out after 0.5 s"):
+        ws._git(HANG, git_repo)
+    assert time.monotonic() - started < 10
+
+
+@needs_git
+def test_abort_kills_a_running_git_call_and_refuses_the_next(git_repo: Path) -> None:
+    control = ws.GitControl()
+    threading.Timer(0.5, control.abort).start()
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="cancelled"):
+        ws._git(HANG, git_repo, control=control)
+    assert time.monotonic() - started < 10
+    with pytest.raises(RuntimeError, match="cancelled"):
+        ws.snapshot(git_repo, git_repo.parent / "scratch", control=control)
 
 
 # ----------------------------------------------------------------------------- fingerprint and remove_tree

@@ -135,6 +135,12 @@ export function getSetting(s: Settings, key: string): SettingValue {
   return value === undefined ? defaultFor(def, path) : (value as SettingValue);
 }
 
+/** What `key` is when nothing sets it, the way getSetting finds it: the local provider's base_url has a default of its own. */
+export function defaultSetting(key: string): SettingValue {
+  const { def, path } = lookup(key);
+  return defaultFor(def, path);
+}
+
 /** Pure: returns a new object. A string is coerced to the key's type ("true"/"false", whole numbers). */
 export function setSetting(s: Settings, key: string, value: unknown): Settings {
   const { def, path } = lookup(key);

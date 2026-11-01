@@ -6,9 +6,11 @@ changes, each required by the step 4 spec: configure() takes scratch, shell, ali
 _abs maps the /work/repo alias onto the workspace; the paths the tools show and match use `/` on every OS;
 _git runs quietly (quiet(), read by the worker's audit hook) with no prompt, no fsmonitor and no console
 window; shell() asks approve() first and runs the shell find_shell chose (sh, Git Bash or PowerShell);
-diff() compares against the engine's snapshot tree with a temporary index in the scratch folder; and fetch()
-is new. Everything else, limits, messages and order of operations included, is training's. The text below is
-training's and describes its container.
+diff() compares against the engine's snapshot tree with a temporary index in the scratch folder; fetch()
+is new; and shell()'s processes stay the engine's to kill: on POSIX its process group is listed in
+<scratch>/shell-groups, on Windows it runs in a job object of its own (popen_owned). Everything else,
+limits, messages and order of operations included, is training's. The text below is training's and
+describes its container.
 
 The coding tools the edit REPL gives the root (spec §12.1, code-editing-plan.md §5.6).
 
@@ -175,7 +177,7 @@ def _cut(line: str) -> str:
     return line if len(line) <= LINE_MAX_CHARS else line[:LINE_MAX_CHARS] + f" [... {len(line) - LINE_MAX_CHARS} more characters]"
 
 
-def _git(args: list, cwd: str, env: dict | None = None) -> str:
+def _git(args: list, cwd: str, env: dict | None = None, ok: tuple = (0,)) -> str:
     if shutil.which("git") is None:
         raise RuntimeError("git is not installed in this environment")
     env = {**(os.environ if env is None else env), "GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1"}  # D-63
@@ -183,9 +185,33 @@ def _git(args: list, cwd: str, env: dict | None = None) -> str:
         done = subprocess.run(["git", "-c", "safe.directory=*", "-c", "core.quotepath=off", "-c",
                                "core.fsmonitor=false", "-c", "core.safecrlf=false", *args], cwd=cwd,
                               capture_output=True, env=env, stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
-    if done.returncode != 0:
+    if done.returncode not in ok:
         raise RuntimeError(f"git {args[0]} failed: {done.stderr.decode(errors='replace').strip()[:500]}")
     return done.stdout.decode(errors="replace")
+
+
+_FILTER_OFF = (("clean", ""), ("smudge", ""), ("process", ""), ("required", "false"))
+
+
+def _no_filters(root: str, env: dict) -> dict:
+    """`env` with every configured filter driver switched off, so diff()'s `git add` runs no program the repository's
+    config names: workspace.no_filters, the engine's copy of the recipe (GIT_CONFIG_* carries a driver name holding
+    `=` or `.` exactly; GIT_CONFIG_PARAMETERS, read after it, is dropped)."""
+    env = {k: v for k, v in env.items() if k != "GIT_CONFIG_PARAMETERS"}
+    listed = _git(["config", "-z", "--name-only", "--get-regexp", r"^filter\."], cwd=root, env=env, ok=(0, 1))
+    drivers = sorted({key[len("filter."):key.rindex(".")] for key in listed.split("\0") if key.count(".") >= 2})
+    try:
+        count = max(int(env.get("GIT_CONFIG_COUNT") or 0), 0)
+    except ValueError:
+        count = 0
+    for driver in drivers:
+        for var, value in _FILTER_OFF:
+            env[f"GIT_CONFIG_KEY_{count}"] = f"filter.{driver}.{var}"
+            env[f"GIT_CONFIG_VALUE_{count}"] = value
+            count += 1
+    if drivers:
+        env["GIT_CONFIG_COUNT"] = str(count)
+    return env
 
 
 def _files_under(base: str) -> list[str]:
@@ -239,6 +265,169 @@ def _glob_regex(pattern: str) -> re.Pattern:
             out.append(re.escape(pattern[i]))
             i += 1
     return re.compile("".join(out) + r"\Z")
+
+
+# ----------------------------------------------------------------------------- owning process trees (not training's)
+
+# shell() starts each command in its own session (POSIX) or process group (Windows), so killing the worker's own
+# group misses it. POSIX: each shell() group is listed in <scratch>/shell-groups, which the engine reads to kill them
+# with the worker, after a crash too. Windows: the engine puts the worker in a kill-on-close job object, which every
+# descendant joins, and each shell() command gets a nested job of its own for its timeout, so even the children Git
+# Bash reparents die with it (taskkill /T, which follows parent ids, stays the fallback).
+SHELL_GROUPS = "shell-groups"
+_groups_lock = threading.Lock()
+
+
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except (ProcessLookupError, PermissionError):  # gone, or the id now names someone else's group
+        return False
+    return True
+
+
+def _note_group(pgid: int) -> None:
+    """POSIX: add shell()'s process group to <scratch>/shell-groups, dropping groups that are gone, so an id the OS
+    hands out again is never on the list."""
+    scratch = _config["scratch"]
+    if not scratch:
+        return
+    path = os.path.join(scratch, SHELL_GROUPS)
+    with _groups_lock, _quiet(), contextlib.suppress(OSError, ValueError):
+        try:
+            with open(path, encoding="ascii") as f:
+                known = [int(line) for line in f.read().split()]
+        except FileNotFoundError:
+            known = []
+        live = [g for g in known if g != pgid and _group_alive(g)] + [pgid]
+        with open(path + ".tmp", "w", encoding="ascii") as f:
+            f.write("".join(f"{g}\n" for g in live))
+        os.replace(path + ".tmp", path)
+
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    _CREATE_SUSPENDED = 0x4
+    _KILL_ON_JOB_CLOSE = 0x2000
+    _JOB_EXTENDED_LIMITS = 9  # JobObjectExtendedLimitInformation
+    _THREAD_SUSPEND_RESUME = 0x2
+    _SNAP_THREADS = 0x4  # TH32CS_SNAPTHREAD
+
+    class _BasicLimits(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class _ExtendedLimits(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", _BasicLimits), ("IoInfo", ctypes.c_uint64 * 6),
+                    ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    class _ThreadEntry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ThreadID", wintypes.DWORD),
+                    ("th32OwnerProcessID", wintypes.DWORD), ("tpBasePri", wintypes.LONG),
+                    ("tpDeltaPri", wintypes.LONG), ("dwFlags", wintypes.DWORD)]
+
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    for _name, _restype, _argtypes in (
+            ("CreateJobObjectW", wintypes.HANDLE, [wintypes.LPVOID, wintypes.LPCWSTR]),
+            ("SetInformationJobObject", wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]),
+            ("AssignProcessToJobObject", wintypes.BOOL, [wintypes.HANDLE, wintypes.HANDLE]),
+            ("TerminateJobObject", wintypes.BOOL, [wintypes.HANDLE, wintypes.UINT]),
+            ("CloseHandle", wintypes.BOOL, [wintypes.HANDLE]),
+            ("CreateToolhelp32Snapshot", wintypes.HANDLE, [wintypes.DWORD, wintypes.DWORD]),
+            ("Thread32First", wintypes.BOOL, [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]),
+            ("Thread32Next", wintypes.BOOL, [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]),
+            ("OpenThread", wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
+            ("ResumeThread", wintypes.DWORD, [wintypes.HANDLE])):
+        getattr(_k32, _name).restype, getattr(_k32, _name).argtypes = _restype, _argtypes
+    del _name, _restype, _argtypes
+
+
+class Job:
+    """Windows: a job object. Every process its members start joins it too; kill() ends them all, and so does
+    closing the last handle when kill_on_close is set (the engine's own exit included)."""
+
+    def __init__(self, kill_on_close: bool) -> None:
+        handle = _k32.CreateJobObjectW(None, None)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        self._handle = handle
+        if kill_on_close:
+            info = _ExtendedLimits()
+            info.BasicLimitInformation.LimitFlags = _KILL_ON_JOB_CLOSE
+            if not _k32.SetInformationJobObject(handle, _JOB_EXTENDED_LIMITS, ctypes.byref(info), ctypes.sizeof(info)):
+                error = ctypes.WinError(ctypes.get_last_error())
+                self.close()
+                raise error
+
+    def add(self, proc: subprocess.Popen) -> None:
+        if not _k32.AssignProcessToJobObject(self._handle, int(proc._handle)):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def kill(self) -> None:
+        if self._handle:
+            _k32.TerminateJobObject(self._handle, 1)
+
+    def close(self) -> None:
+        handle, self._handle = self._handle, None
+        if handle:
+            _k32.CloseHandle(handle)
+
+
+def _resume(pid: int) -> None:
+    """Windows: resume the threads of a process started with CREATE_SUSPENDED."""
+    snapshot = _k32.CreateToolhelp32Snapshot(_SNAP_THREADS, 0)
+    if not snapshot or snapshot == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    resumed = 0
+    try:
+        entry = _ThreadEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        more = _k32.Thread32First(snapshot, ctypes.byref(entry))
+        while more:
+            if entry.th32OwnerProcessID == pid:
+                thread = _k32.OpenThread(_THREAD_SUSPEND_RESUME, False, entry.th32ThreadID)
+                if thread:
+                    if _k32.ResumeThread(thread) != 0xFFFFFFFF:
+                        resumed += 1
+                    _k32.CloseHandle(thread)
+            more = _k32.Thread32Next(snapshot, ctypes.byref(entry))
+    finally:
+        _k32.CloseHandle(snapshot)
+    if not resumed:
+        raise OSError(f"could not resume process {pid}")
+
+
+def popen_owned(args, *, kill_on_close: bool = False, **kwargs):
+    """subprocess.Popen, and on Windows a Job holding the process before it runs a single instruction, so nothing it
+    starts can leave the job: (proc, job), or (proc, None) on POSIX or when the job can't be made (taskkill /T then)."""
+    if sys.platform != "win32":
+        return subprocess.Popen(args, **kwargs), None
+    kwargs["creationflags"] = kwargs.get("creationflags", 0) | _CREATE_SUSPENDED
+    proc = subprocess.Popen(args, **kwargs)
+    job = None
+    try:
+        try:
+            job = Job(kill_on_close)
+            job.add(proc)
+        except OSError:
+            if job is not None:
+                job.close()
+            job = None
+        _resume(proc.pid)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            proc.kill()
+        proc.wait()
+        if job is not None:
+            job.close()
+        raise
+    return proc, job
 
 
 # ----------------------------------------------------------------------------- the tools
@@ -391,8 +580,10 @@ def shell(cmd: str, timeout: float = SHELL_TIMEOUT_S) -> ShellResult:
     if spec["kind"] == "powershell":
         cmd = PS_UTF8 + cmd
     with _quiet():  # approved above, so the audit hook does not ask again
-        proc = subprocess.Popen([*spec["argv"], cmd], cwd=_config["root"], stdin=subprocess.DEVNULL,
+        proc, job = popen_owned([*spec["argv"], cmd], cwd=_config["root"], stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **_NEW_GROUP)
+        if sys.platform != "win32":
+            _note_group(proc.pid)
     kept, size = [], [0]
 
     def drain():
@@ -410,9 +601,12 @@ def shell(cmd: str, timeout: float = SHELL_TIMEOUT_S) -> ShellResult:
     except subprocess.TimeoutExpired:
         timed_out = True
         if sys.platform == "win32":
-            with _quiet(), contextlib.suppress(OSError):  # the whole tree, as killpg does below
-                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+            if job is not None:  # the whole tree, as killpg does below; children Git Bash reparented too
+                job.kill()
+            else:
+                with _quiet(), contextlib.suppress(OSError):
+                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW)
             with contextlib.suppress(OSError):
                 proc.kill()
         else:
@@ -421,6 +615,8 @@ def shell(cmd: str, timeout: float = SHELL_TIMEOUT_S) -> ShellResult:
             except ProcessLookupError:
                 pass
         proc.wait()
+    if job is not None:  # what the command left running keeps running, inside the worker's job (manager.py)
+        job.close()
     reader.join(timeout=5)  # a process that left the group can hold the pipe open; don't wait on it
     if not reader.is_alive():
         proc.stdout.close()
@@ -453,9 +649,10 @@ def diff() -> str:
             env = {k: v for k, v in os.environ.items() if k not in _GIT_STORE_VARS}
             env.update(GIT_INDEX_FILE=index, GIT_OBJECT_DIRECTORY=store,
                        GIT_ALTERNATE_OBJECT_DIRECTORIES=os.path.normpath(os.path.join(root, objects)))
+            env = _no_filters(root, env)
             _git(["add", "-A", "--", "."], cwd=root, env=env)
-            return _git(["diff", "--cached", "--relative", "--no-color", "--no-ext-diff", base, "--", "."], cwd=root,
-                        env=env)
+            return _git(["diff", "--cached", "--relative", "--no-color", "--no-ext-diff", "--no-textconv", base, "--",
+                         "."], cwd=root, env=env)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

@@ -14,6 +14,7 @@ import inspect
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -439,10 +440,10 @@ def test_shell_timeout_kills_the_group_and_keeps_output(root: Path, shell_spec: 
     assert r.code == rt.SHELL_TIMEOUT_CODE
     assert "started" in r.out
     assert f"timed out after {timeout} s" in r.out
-    # A child left alive would hold the pipe open, and shell() would wait out its 5 s join first. On Windows,
-    # taskkill /T can't reach the background `sleep` Git Bash forked, so there it does wait the join out.
-    slack = 4.5 + (5.5 if WINDOWS and shell_spec["kind"] == "bash" else 0)
-    assert elapsed < timeout + slack, elapsed
+    # A child left alive would hold the pipe open, and shell() would wait out its 5 s join first. On Windows the
+    # command runs in a job object of its own, so the background `sleep` Git Bash forked (and reparented, out of
+    # taskkill /T's reach) dies with it too.
+    assert elapsed < timeout + 4.5, elapsed
 
 
 def test_shell_cell_time_left_caps_the_timeout(root: Path, shell_spec: dict) -> None:
@@ -524,6 +525,28 @@ def repo(git_repo: Path, tmp_path: Path) -> tuple[Path, Path]:
 
 def git_files(repo: Path) -> set[str]:
     return {str(p.relative_to(repo / ".git")) for p in (repo / ".git").rglob("*")}
+
+
+def test_diff_runs_no_configured_program_and_matches_the_engine(git_repo: Path, tmp_path: Path) -> None:
+    """diff()'s `git add` and `git diff` run no filter driver or textconv the repository's config names, as
+    workspace.diff doesn't (review #9), and the two give the same diff."""
+    (git_repo / ".gitattributes").write_bytes(b"*.py filter=evil diff=evil\n*.md filter=p=x.y\n")
+    git(git_repo, "add", ".gitattributes")
+    git(git_repo, "commit", "-qm", "attributes")
+    for key, value in (("filter.evil.clean", "echo clean >> .git/ran; cat"), ("filter.evil.required", "true"),
+                       ("filter.p=x.y.process", "echo process >> .git/ran; cat"),
+                       ("diff.evil.textconv", "echo textconv >> .git/ran; cat")):
+        git(git_repo, "config", key, value)
+    scratch = tmp_path / "scratch"
+    base = workspace.snapshot(git_repo, scratch)
+    assert base is not None
+    rt.configure(root=str(git_repo), base=base, scratch=str(scratch), shell=DEFAULT_SHELL)
+    (git_repo / "a.py").write_bytes(b"x = 3\n")
+    (git_repo / "README.md").write_bytes(b"changed\n")
+    d = rt.diff()
+    assert "-x = 1\n+x = 3" in d and "+changed" in d
+    assert not (git_repo / ".git" / "ran").exists()
+    assert d == workspace.diff(git_repo, base, scratch)
 
 
 def test_diff_shows_edits_and_new_files_without_touching_the_index(repo: tuple[Path, Path]) -> None:
@@ -667,6 +690,49 @@ def test_quiet_counts_per_thread() -> None:
     with pytest.raises(KeyError), rt._quiet():
         raise KeyError("x")
     assert not rt.quiet()
+
+
+def test_shell_groups_are_listed_and_pruned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """POSIX bookkeeping, run on every OS with a stand-in killpg: shell()'s group joins <scratch>/shell-groups, and a
+    group that is gone (or now someone else's) leaves it, so the engine never kills a recycled id."""
+    from rlm_engine.worker import manager
+
+    groups = {222: "ours", 444: "someone else's"}
+    killed: list[tuple[int, int]] = []
+
+    def killpg(pgid: int, sig: int) -> None:
+        if sig != 0:
+            killed.append((pgid, sig))
+        elif pgid not in groups:
+            raise ProcessLookupError(pgid)
+        elif groups[pgid] != "ours":
+            raise PermissionError(pgid)
+
+    monkeypatch.setattr(os, "killpg", killpg, raising=False)
+    monkeypatch.setattr(os, "getpgrp", lambda: 555, raising=False)
+    monkeypatch.setattr(signal, "SIGKILL", 9, raising=False)
+    rt.configure(root=str(tmp_path), scratch=str(tmp_path))
+    listed = tmp_path / rt.SHELL_GROUPS
+    listed.write_text("111\n222\n444\n", encoding="ascii")
+    rt._note_group(333)
+    assert listed.read_text(encoding="ascii") == "222\n333\n"
+    rt._note_group(333)  # listed once
+    assert listed.read_text(encoding="ascii") == "222\n333\n"
+    listed.write_text("222\n333\n555\n1\njunk\n", encoding="ascii")
+    manager.kill_shell_groups(tmp_path)
+    assert [pgid for pgid, _ in killed] == [222, 333]  # never the engine's own group (555) or init's
+    assert not listed.exists()
+    manager.kill_shell_groups(tmp_path)  # nothing listed: nothing to do
+    assert len(killed) == 2
+
+
+def test_shell_runs_in_its_own_session(root: Path) -> None:
+    """shell() starts its command in a new session (POSIX) or a job object of its own (Windows)."""
+    code, out = rt.shell(py("import os, sys; print(os.getsid(0) if hasattr(os, 'getsid') else 0)",
+                            DEFAULT_SHELL["kind"]))
+    assert code == 0
+    if not WINDOWS:
+        assert int(out) != os.getsid(0)
 
 
 @needs_git

@@ -88,11 +88,17 @@ def test_profile_hash(tmp_path: Path) -> None:
     copy = user_profile(tmp_path, "copy", toml, {"guidance.md": guidance})
     mine = p.load_profile("copy", tmp_path)
     assert mine.profile_hash() == default.profile_hash()  # names and folders are not hashed, only bytes
+    # A loaded profile keeps the hash of the bytes it was loaded from: an edit or a deletion during a run doesn't
+    # change it; loading again sees the new bytes.
     (copy / "guidance.md").write_bytes(guidance + b"x")
-    assert mine.profile_hash() != default.profile_hash()
+    assert mine.profile_hash() == default.profile_hash()
+    assert p.load_profile("copy", tmp_path).profile_hash() != default.profile_hash()
     (copy / "guidance.md").write_bytes(guidance)
     (copy / "profile.toml").write_bytes(toml.replace(b"max_turns = 20", b"max_turns = 21"))
-    assert mine.profile_hash() != default.profile_hash()
+    assert p.load_profile("copy", tmp_path).profile_hash() != default.profile_hash()
+    (copy / "profile.toml").unlink()
+    (copy / "guidance.md").unlink()
+    assert mine.profile_hash() == default.profile_hash()
 
     user_profile(tmp_path, "crlf", toml.replace(b"\n", b"\r\n"), {"guidance.md": guidance.replace(b"\n", b"\r\n")})
     windows = p.load_profile("crlf", tmp_path)
@@ -136,6 +142,7 @@ def test_user_profile(tmp_path: Path) -> None:
         (VALID + '[repo]\nsubcall_oversize = "cut"\n', {}, "subcall_oversize"),
         (VALID + '[repo]\nsubcall_thinking = "none"\n', {}, "subcall_thinking"),
         (VALID + "[read]\ncpus = 0\n", {}, "cpus"),
+        (VALID + "[repo]\noutput_max_chars = 8001\n", {}, "at most 8,000"),  # the REPL keeps no more
         (VALID + "[sub]\ntemperature = 2.5\n", {}, "temperature"),
         (VALID + "[sub]\ntop_p = 0.9\n", {}, "top_p"),
         (VALID + "root = 1\n", {}, "root"),

@@ -70,6 +70,24 @@ def test_cut_is_line_aligned_complete_and_deterministic() -> None:
 def test_default_segment_size_leaves_room_for_the_prompt() -> None:
     assert segment_chars(READ) == SEGMENT_CHARS == 40_000  # 60,000-character sub-calls
     assert segment_chars(dataclasses.replace(READ, subcall_max_chars=24_000)) == 16_000
+    assert segment_chars(dataclasses.replace(READ, subcall_max_chars=1_000)) == 666
+    assert segment_chars(dataclasses.replace(READ, subcall_max_chars=1)) == 1
+
+
+def test_a_small_default_segment_size_is_used_as_given() -> None:
+    """A profile with small sub-calls gets segments that fit them, not 40,000-character ones (review #34)."""
+    sent: list[tuple] = []
+    space = cacheapi.namespace(CONTEXT, 666, lambda op, prompts, prefixes: sent.append((prompts, prefixes)) or ["ok"],
+                               {"max_chars": 1_000, "oversize": "error"})
+    segs = space["segments"]()
+    assert segs == cacheapi.cut(CONTEXT, 666) and max(len(s) for s in segs) <= 666
+    assert space["llm"]("q" * 300, over=segs[0]) == "ok"  # 666 + 2 + 300 fits 1,000
+    assert space["segments"](700) == cacheapi.cut(CONTEXT, 700)  # a size of your own may go down to the default
+    with pytest.raises(ValueError, match="at least 666"):
+        space["segments"](665)
+    for broken in (None, 0, -5, True, "40000"):
+        assert cacheapi.namespace("x\n" * 50_000, broken, None, {})["segments"]()[0].end <= 40_000
+        assert len(cacheapi.namespace("x\n" * 50_000, broken, None, {})["segments"]()) == 3  # 100,000 / 40,000
 
 
 # ---------------------------------------------------------------------------------------------- in a real worker

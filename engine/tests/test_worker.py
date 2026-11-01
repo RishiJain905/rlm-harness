@@ -12,6 +12,7 @@ import ast
 import asyncio
 import contextlib
 import dataclasses
+import json
 import os
 import re
 import sys
@@ -247,6 +248,7 @@ def test_utf8_open(tmp_path: Path) -> None:
 
 def test_env_strips_keys_and_temp_is_scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("RLMH_TEST_API_KEY", "my_token", "Db_Password", "SOME_SECRET", "GH_AUTH_X", "CREDENTIALS_FILE",
+                 "OPENAI_CUSTOM_HEADERS", "ANTHROPIC_CUSTOM_HEADERS", "rlmh_test_headers",
                  "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_VALUE_7"):
         monkeypatch.setenv(name, "FAKE-value")  # git's env config goes as a whole (D-62)
     monkeypatch.setenv("RLMH_TEST_PLAIN", "kept")
@@ -310,6 +312,64 @@ t.start(); t.join()
     go(main())
 
 
+def test_an_over_long_request_is_an_error_not_silence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch whose request line is over the engine's limit gets an error reply, raised in the cell, instead of being
+    dropped while the cell waits out its time (review #7)."""
+    seen: list[int] = []
+
+    async def record(request: dict) -> dict:
+        seen.append(len(request["prompts"]))
+        return {"outputs": ["ok"] * len(request["prompts"])}
+
+    monkeypatch.setattr(manager, "REQUEST_LINE_LIMIT", 512 * 1024)  # the engine's side only: the worker sends it
+
+    async def main() -> None:
+        async with started(tmp_path, on_request=record, limits=short(30)) as w:
+            start = time.monotonic()
+            r = await w.run_cell("llm_batch(['é' * 50_000] * 4)")  # ~1.2 MB as ASCII JSON
+            assert time.monotonic() - start < 10
+            assert r.error.splitlines()[-1] == f"RuntimeError: {manager.REQUEST_TOO_LARGE}"
+            assert not r.restarted and seen == []
+            assert (await w.run_cell("print(llm_batch(['a', 'b']))")).stdout == "['ok', 'ok']\n"
+            # The worker refuses one over its own limit before sending it.
+            r = await w.run_cell("import sys\nsys.modules['__main__'].REQUEST_MAX_BYTES = 1000\nllm('x' * 2000)")
+            assert re.fullmatch(r"RuntimeError: the request is [\d,]+ bytes; one request carries at most 1,000\. "
+                                r"Send fewer or shorter prompts per call\.", r.error.splitlines()[-1])
+            assert seen == [2]
+
+    go(main())
+
+
+def test_request_limits_agree() -> None:
+    from rlm_engine.worker import worker
+
+    assert worker.REQUEST_MAX_BYTES == manager.REQUEST_LINE_LIMIT
+    assert manager._REQUEST_START.match(json.dumps({"type": "request", "id": 42, "op": "llm"}).encode()).group(1) == b"42"
+
+
+class Chunks:
+    """A stream that hands out the given chunks, then EOF."""
+
+    def __init__(self, *chunks: bytes) -> None:
+        self.chunks = list(chunks)
+
+    def read(self, n: int) -> bytes:
+        assert n <= manager.STDERR_READ
+        return self.chunks.pop(0) if self.chunks else b""
+
+    def close(self) -> None:
+        pass
+
+
+def test_stderr_is_read_in_bounded_pieces(tmp_path: Path) -> None:
+    """A huge diagnostic line without a newline is never buffered whole: its start is kept, the rest skipped (#26)."""
+    w = make_worker(tmp_path)
+    huge = [b"x" * manager.STDERR_READ] * 200  # 13 MB, no newline
+    w._read_stderr(Chunks(b"first\r\npartial ", b"line\n", *huge, b"xx\nafter\n", "é".encode() * 600, b"\nend"))
+    assert list(w.stderr_lines) == ["first", "partial line", "x" * manager.STDERR_LINE_CHARS, "after",
+                                    "é" * manager.STDERR_LINE_CHARS, "end"]
+
+
 def test_vars_mid_cell(tmp_path: Path) -> None:
     async def main() -> None:
         async with started(tmp_path) as w:
@@ -324,6 +384,59 @@ def test_vars_mid_cell(tmp_path: Path) -> None:
             assert listed["time"]["type"] == "module" and listed["time"]["len"] is None
             assert not {"context", "llm", "llm_batch", "submit", "fetch", "_hidden", "_", "__builtins__"} & set(listed)
         assert await w.vars() == []  # closed
+
+    go(main())
+
+
+SNEAKY = """
+class Sneaky(type):
+    @property
+    def __name__(cls):
+        open('ran.txt', 'a').write('metaclass name\\n')
+        return 'x'
+
+class Loud(metaclass=Sneaky):
+    def __repr__(self):
+        open('ran.txt', 'a').write('repr\\n')
+        return llm('deadlock?')
+    def __len__(self):
+        open('ran.txt', 'a').write('len\\n')
+        return 1
+
+class Text(str):
+    def __len__(self):
+        open('ran.txt', 'a').write('str len\\n')
+        return 1
+
+obj = Loud()
+inside = [1, Loud(), 'x']
+text = Text('abc')
+loop = [1]
+loop.append(loop)
+big = 'x' * 2_000_000
+many = list(range(400_000))
+nested = {'a': [1, (2,)], 'b': frozenset()}
+"""
+
+
+def test_vars_runs_no_model_code(tmp_path: Path) -> None:
+    """`vars` answers on the reader thread, which the audit hook never asks on and which delivers replies: it must not
+    call the model's __repr__, __len__ or metaclass __name__, nor build a huge repr (review #4)."""
+    async def main() -> None:
+        async with started(tmp_path) as w:
+            r = await w.run_cell(SNEAKY)
+            assert r.error is None, r.error
+            listed = {v["name"]: v for v in await w.vars()}
+            assert not (tmp_path / "scratch" / "ran.txt").exists()
+            assert listed["obj"] == {"name": "obj", "type": "Loud", "len": None, "chars": 0}
+            assert listed["inside"] == {"name": "inside", "type": "list", "len": 3, "chars": 0}
+            assert listed["text"] == {"name": "text", "type": "Text", "len": None, "chars": 0}
+            assert listed["loop"] == {"name": "loop", "type": "list", "len": 2, "chars": len("[1, [...]]")}
+            assert listed["big"] == {"name": "big", "type": "str", "len": 2_000_000, "chars": 10**6}
+            assert listed["many"] == {"name": "many", "type": "list", "len": 400_000, "chars": 10**6}
+            assert listed["nested"]["chars"] == len(repr({'a': [1, (2,)], 'b': frozenset()}))
+            assert listed["Loud"]["type"] == "Sneaky" and listed["Loud"]["chars"] == 0
+            assert not (tmp_path / "scratch" / "ran.txt").exists()
 
     go(main())
 
@@ -387,6 +500,72 @@ while True:
             child = int((tmp_path / "scratch" / "child.txt").read_text())
             grandchild = int(pids_file.read_text())
             assert wait_dead(child) and wait_dead(grandchild)
+
+    go(main())
+
+
+SLEEPER = """
+import subprocess, sys, time
+quiet = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], **quiet)
+open(sys.argv[1], 'w').write(str(child.pid))
+if sys.argv[2] == 'stay':
+    time.sleep(120)
+"""
+
+
+def shell_command(script: Path, *args: str) -> str:
+    """Run `script` with this Python in find_shell()'s shell."""
+    kind = find_shell().kind
+    parts = [sys.executable, str(script), *args]
+    if kind == "bash":
+        parts = [p.replace("\\", "/") for p in parts]
+    quoted = " ".join(f'"{p}"' for p in parts)
+    return f"& {quoted}" if kind == "powershell" else quoted
+
+
+def test_shell_processes_die_with_the_worker(tmp_path: Path, git_repo: Path) -> None:
+    """shell() starts its own session (POSIX) or process group (Windows), out of reach of a kill aimed at the worker's
+    group: what it left running, and a shell() still running on a thread, die when the worker closes (review #3, #5)."""
+    script = tmp_path / "sleeper.py"
+    script.write_text(SLEEPER, encoding="utf-8")
+    left, running = tmp_path / "left.txt", tmp_path / "running.txt"
+    code = f"""import os, threading, time
+print(shell({shell_command(script, str(left), 'go')!r}).code)
+threading.Thread(target=shell, args=({shell_command(script, str(running), 'stay')!r},), daemon=True).start()
+while not os.path.exists({str(running)!r}) or not open({str(running)!r}).read():
+    time.sleep(0.02)
+"""
+
+    async def main() -> None:
+        async with started(tmp_path, mode="repo", workspace=git_repo, limits=contract.EDIT_LIMITS_V4) as w:
+            r = await w.run_cell(code)
+            assert (r.error, r.stdout) == (None, "0\n")
+            pids = [int(left.read_text()), int(running.read_text())]
+            assert all(alive(pid) for pid in pids)
+            if POSIX:
+                assert (tmp_path / "scratch" / "shell-groups").read_text().split()
+        assert [wait_dead(pid) for pid in pids] == [True, True]
+        assert not (tmp_path / "scratch" / "shell-groups").exists()
+
+    go(main())
+
+
+def test_a_dead_workers_children_die_on_recovery(tmp_path: Path) -> None:
+    """A worker that exits leaves its child to the cleanup, which must still reach it: on Windows taskkill /T can't
+    find children of a dead parent, the job object can (review #5)."""
+    pid_file = tmp_path / "scratch" / "child.txt"
+    code = f"""import os, subprocess, sys
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])
+open({str(pid_file)!r}, 'w').write(str(child.pid))
+os._exit(3)
+"""
+
+    async def main() -> None:
+        async with started(tmp_path) as w:
+            r = await w.run_cell(code)
+            assert r.restarted and r.crash == "exit code 3"
+            assert wait_dead(int(pid_file.read_text()))
 
     go(main())
 

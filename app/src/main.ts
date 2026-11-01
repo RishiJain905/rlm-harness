@@ -3,10 +3,12 @@
 // rlmh: argv dispatch (architecture §10). Exit 0 is success, 1 a runtime failure, 2 a usage error,
 // 130 Ctrl-C (D-40, D-50).
 
-import { batchCommand } from "./cli/batch.ts";
+import { parseArgs } from "node:util";
+import { batchCommand, preflightBatch } from "./cli/batch.ts";
 import { configCommand } from "./cli/config.ts";
-import { runCommand, type CliIO } from "./cli/run.ts";
+import { preflightRun, runCommand, type CliIO } from "./cli/run.ts";
 import { ensureEngine, runSetup } from "./cli/setup.ts";
+import { isCompiledBinary, runUpdate, sweepOldBinaries, type UpdateOptions } from "./cli/update.ts";
 import { EngineNotFound, fetchInfo, findEngine, startEngine, type EngineProcess } from "./engine.ts";
 import { RpcError } from "./link.ts";
 import { home } from "./paths.ts";
@@ -26,6 +28,7 @@ Commands:
   rlmh config      list, get KEY, or set KEY VALUE in settings.toml
   rlmh info        start the engine and print its info as JSON
   rlmh setup       install Python 3.12 (through uv, after asking) and the engine: [--yes|-y] [--force]
+  rlmh update      replace an installed rlmh with the latest release: [--check] [--version X] [--yes|-y]
   rlmh --version   print the version
   rlmh --help      show this help
 
@@ -78,6 +81,28 @@ async function engineReady(): Promise<number | null> {
   }
 }
 
+const UPDATE_OPTIONS = { version: { type: "string" }, yes: { type: "boolean", short: "y" }, check: { type: "boolean" } } as const;
+
+async function update(args: string[], io: CliIO, seams: Partial<UpdateOptions> = {}): Promise<number> {
+  let values;
+  try {
+    ({ values } = parseArgs({ args, options: UPDATE_OPTIONS, strict: true, allowPositionals: false }));
+  } catch (e) {
+    io.stderr.write(`rlmh update: ${e instanceof Error ? e.message : String(e)}\nUsage: rlmh update [--check] [--version X] [--yes|-y]\n`);
+    return 2;
+  }
+  return runUpdate({
+    home: io.home,
+    ...(values.version !== undefined ? { version: values.version } : {}),
+    yes: values.yes === true,
+    check: values.check === true,
+    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    out: (line) => void io.stdout.write(`${line}\n`),
+    err: (line) => void io.stderr.write(`${line}\n`),
+    ...seams,
+  });
+}
+
 async function setup(args: string[]): Promise<number> {
   const unknown = args.find((a) => !["--yes", "-y", "--force"].includes(a));
   if (unknown !== undefined) {
@@ -103,7 +128,19 @@ function processIO(): CliIO {
   };
 }
 
-export async function main(argv: string[]): Promise<number> {
+/** Replaceable parts of main, for tests. */
+export interface MainDeps {
+  /** The engine check that may offer to install Python; run and batch call it only after their arguments and inputs check out. */
+  engineReady?: () => Promise<number | null>;
+  /** The streams and home of run, batch, config and update. */
+  io?: CliIO;
+  /** Seams of `rlmh update` (network, installer, platform), for tests. */
+  update?: Partial<UpdateOptions>;
+}
+
+export async function main(argv: string[], deps: MainDeps = {}): Promise<number> {
+  // an installed Windows rlmh: what the last update left beside the running binary (rlmh.exe.old) goes now, if nothing holds it
+  if (process.platform === "win32" && isCompiledBinary()) sweepOldBinaries(process.execPath);
   const verbose = argv.includes("--verbose");
   const args = argv.filter((a) => a !== "--verbose");
   if (args.length === 0) return interactive();
@@ -111,13 +148,18 @@ export async function main(argv: string[]): Promise<number> {
   // run, batch and config parse their own flags, --verbose included, so a value like `--question --verbose` survives
   const at = argv.indexOf(command!);
   const own = [...(argv.slice(0, at).includes("--verbose") ? ["--verbose"] : []), ...argv.slice(at + 1)];
+  const io = deps.io ?? processIO();
   if (command === "run" || command === "batch") {
-    const stop = await engineReady();
+    // everything that can be wrong with the arguments or the inputs is said before setup offers to download anything
+    const refused = command === "run" ? preflightRun(own, io) : preflightBatch(own, io);
+    if (refused !== null) return refused;
+    const stop = await (deps.engineReady ?? engineReady)();
     if (stop !== null) return stop;
-    return command === "run" ? runCommand(own, processIO()) : batchCommand(own, processIO());
+    return command === "run" ? runCommand(own, io) : batchCommand(own, io);
   }
-  if (command === "config") return configCommand(own, processIO());
+  if (command === "config") return configCommand(own, io);
   if (command === "setup") return setup(own.filter((a) => a !== "--verbose"));
+  if (command === "update") return update(own.filter((a) => a !== "--verbose"), io, deps.update);
   if (command === "--version" && rest.length === 0) {
     await out(`rlmh ${APP_VERSION}\n`);
     return 0;

@@ -12,6 +12,40 @@ export interface StreamHooks {
   onContent(): void;
   onText(text: string): void;
   onReasoning(text: string): void;
+  /** Most bytes of text, reasoning and tool-call arguments one attempt may gather (LIMITS.MAX_RESPONSE_BYTES, read per attempt). */
+  maxBytes: number;
+}
+
+/**
+ * The bytes one attempt has gathered so far. `max_tokens` only asks the provider to stop; a faulty or hostile server
+ * can stream on, so the readers count every delta and fail the attempt with a bad_stream (not retried) past the limit.
+ * Throwing inside the SDK's iteration also aborts the request.
+ */
+export class ByteBudget {
+  private readonly limit: number;
+  private used = 0;
+
+  constructor(limit: number) {
+    this.limit = limit;
+  }
+
+  /** `piece` is a string (its UTF-8 size is counted) or a byte count already known. */
+  add(piece: string | number): void {
+    this.used += typeof piece === "number" ? piece : Buffer.byteLength(piece, "utf8");
+    if (this.used > this.limit) {
+      throw new AttemptError({ kind: "bad_stream", status: null, detail: `the reply grew past the limit of ${formatBytes(this.limit)} and was cut off` });
+    }
+  }
+}
+
+export function formatBytes(n: number): string {
+  return n >= 1024 * 1024 && n % (1024 * 1024) === 0 ? `${n / (1024 * 1024)} MiB` : `${n} bytes`;
+}
+
+/** What a reader checks when its iterator ends: a timeout or a cancel makes the SDK end iteration quietly, so a normal end proves nothing. */
+export function assertFinished(signal: AbortSignal, terminal: boolean): void {
+  if (signal.aborted) throw new AttemptError({ kind: "aborted", status: null, detail: "aborted" });
+  if (!terminal) throw new AttemptError({ kind: "network", status: null, detail: "the stream ended before the provider sent its finish event" });
 }
 
 export interface StreamToolCall {

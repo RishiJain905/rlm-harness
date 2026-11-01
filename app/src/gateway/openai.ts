@@ -6,7 +6,7 @@ import type { Message, ModelCompleteParams } from "../protocol.ts";
 import { routeKey, splitPrefix } from "./cache.ts";
 import type { ModelInfo } from "./catalog.ts";
 import { openRouterEndpoint, type ProviderDef } from "./providers.ts";
-import { isObject, sdkAttemptError, type Replay, type SdkErrors, type StreamHooks, type StreamResult, type StreamToolCall } from "./stream.ts";
+import { assertFinished, ByteBudget, isObject, sdkAttemptError, type Replay, type SdkErrors, type StreamHooks, type StreamResult, type StreamToolCall } from "./stream.ts";
 
 const ERRORS: SdkErrors = { APIError, APIConnectionError, APIConnectionTimeoutError, APIUserAbortError };
 
@@ -124,9 +124,11 @@ function toMessage(m: Message, providerId: string, hasTools: boolean, ctx: OpenA
   }
 }
 
-/** Streams one attempt. Throws AttemptError for every failure, the abort included. */
+/** Streams one attempt. Throws AttemptError for every failure, the abort included, and for a stream that ended with no
+ *  finish_reason: the SDK ends iteration quietly on an abort or a clean close, and neither is an answer. */
 export async function streamOpenAI(client: OpenAI, body: Record<string, unknown>, hooks: StreamHooks, signal: AbortSignal): Promise<StreamResult> {
   const out: StreamResult = { text: "", reasoning: "", toolCall: null, finish: null, served: null, provider: null, usage: null, replay: {} };
+  const budget = new ByteBudget(hooks.maxBytes);
   const calls = new Map<number, StreamToolCall & { extra?: unknown }>();
   let firstIndex: number | null = null;
   let reasoningContent = "";
@@ -151,14 +153,21 @@ export async function streamOpenAI(client: OpenAI, body: Record<string, unknown>
       if (typeof choice.finish_reason === "string") out.finish = finishOf(choice.finish_reason);
       const delta = isObject(choice.delta) ? choice.delta : {};
       if (typeof delta.content === "string" && delta.content !== "") {
+        budget.add(delta.content);
         touch();
         out.text += delta.content;
         hooks.onText(delta.content);
       }
       const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : typeof delta.reasoning === "string" ? delta.reasoning : "";
-      if (typeof delta.reasoning_content === "string") reasoningContent += delta.reasoning_content;
+      if (typeof delta.reasoning_content === "string") {
+        budget.add(delta.reasoning_content);
+        reasoningContent += delta.reasoning_content;
+      } else if (typeof delta.reasoning === "string") {
+        budget.add(delta.reasoning);
+      }
       let shown = reasoning;
       if (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0) {
+        budget.add(JSON.stringify(delta.reasoning_details));
         details.push(...delta.reasoning_details);
         if (shown === "") shown = delta.reasoning_details.map(detailText).join("");
       }
@@ -177,18 +186,32 @@ export async function streamOpenAI(client: OpenAI, body: Record<string, unknown>
             call = { id: null, name: "", arguments: "" };
             calls.set(index, call);
             firstIndex ??= index;
+            budget.add(64); // an entry costs something even when its fields are empty
           }
-          if (typeof tc.id === "string" && tc.id !== "") call.id ??= tc.id;
+          if (typeof tc.id === "string" && tc.id !== "") {
+            if (call.id === null) budget.add(tc.id);
+            call.id ??= tc.id;
+          }
           const fn = isObject(tc.function) ? tc.function : {};
-          if (typeof fn.name === "string") call.name += fn.name;
-          if (typeof fn.arguments === "string") call.arguments += fn.arguments;
-          if (tc.extra_content !== undefined && call.extra === undefined) call.extra = tc.extra_content;
+          if (typeof fn.name === "string") {
+            budget.add(fn.name);
+            call.name += fn.name;
+          }
+          if (typeof fn.arguments === "string") {
+            budget.add(fn.arguments);
+            call.arguments += fn.arguments;
+          }
+          if (tc.extra_content !== undefined && call.extra === undefined) {
+            budget.add(JSON.stringify(tc.extra_content));
+            call.extra = tc.extra_content;
+          }
         }
       }
     }
   } catch (err) {
     throw sdkAttemptError(err, ERRORS);
   }
+  assertFinished(signal, out.finish !== null);
   if (firstIndex !== null) {
     const { extra, ...call } = calls.get(firstIndex)!; // D-04: the first call only
     out.toolCall = call;

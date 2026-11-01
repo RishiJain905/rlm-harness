@@ -11,7 +11,7 @@ import { settingRows } from "../../src/interface/commands/settings.tsx";
 import { contextBreakdown, viewFromRecord } from "../../src/interface/store.ts";
 import { runsDir, settingsPath } from "../../src/paths.ts";
 import { PROVIDERS } from "../../src/gateway/providers.ts";
-import { loadSettings, SCHEMA } from "../../src/settings.ts";
+import { getSetting, loadSettings, SCHEMA } from "../../src/settings.ts";
 import { createFakeApp, FAKE_VARS, runRecord, type FakeApp, type FakeAppOptions } from "../fakes/engine.ts";
 import { KEYS, mount, type Mounted } from "./helpers.ts";
 
@@ -59,6 +59,7 @@ describe("slash commands", () => {
     }
     const help = await command(m, "help");
     for (const c of COMMANDS) expect(help).toContain(`/${c.name}`);
+    expect(help).toContain("/clear");
     expect(help).toContain("/quit");
     expect(help).toContain("Ctrl+C");
   });
@@ -142,6 +143,26 @@ describe("slash commands", () => {
     await m.press(KEYS.esc); // leaves the edit
     await m.press(KEYS.esc); // closes the screen
     await m.waitFor(() => !m.screen().includes("── /settings"));
+  });
+
+  test("(3b) /settings: d on the local provider's base_url resets to its default server, not to an empty URL", async () => {
+    const { app, m } = await open({ size: { columns: 100, rows: 40 } });
+    const rows = settingRows();
+    const key = "providers.local.base_url";
+    await command(m, "settings");
+    await downs(m, rows.findIndex((r) => r.key === key));
+    expect(await m.waitForText('d resets to "http://localhost:8000/v1"')).toContain(key);
+    await m.press(KEYS.enter); // edit: the field starts with the current value
+    for (let i = 0; i < "http://localhost:8000/v1".length; i++) await m.press(KEYS.backspace);
+    await m.type("http://other.test:9000/v1");
+    await m.press(KEYS.enter);
+    await m.waitFor(() => loadSettings(app.deps.home).providers.local?.base_url === "http://other.test:9000/v1");
+    await m.press("d");
+    await m.waitFor(() => loadSettings(app.deps.home).providers.local?.base_url === "http://localhost:8000/v1");
+    expect(getSetting(app.session.settings, key)).toBe("http://localhost:8000/v1");
+    // a key whose default is empty still resets to empty
+    await downs(m, rows.findIndex((r) => r.key === "providers.custom.base_url") - rows.findIndex((r) => r.key === key));
+    await m.waitForText('d resets to ""');
   });
 
   test("(4) /permissions: default is carried to the next run and never saved; bypass warns", async () => {

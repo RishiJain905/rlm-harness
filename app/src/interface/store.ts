@@ -33,6 +33,8 @@ export const TICK_MS = 100;
 /** The run clock's tick while a run is active but nothing streams. */
 const CLOCK_MS = 1000;
 const STDERR_LINES = 12;
+/** Most engine events kept while start() is unresolved; a start answers within a few. */
+const EARLY_MAX = 256;
 
 /** What the interface needs of a Session; the fake engine in the tests builds one over in-memory links. */
 export type SessionLike = Pick<Session, "bus" | "gateway" | "settings" | "info" | "start" | "cancel" | "vars" | "close">;
@@ -173,7 +175,9 @@ export function isActive(phase: Phase): boolean {
 /**
  * Listens to engine.event, call.start, call.delta, call.end and engine.exit, and drops events for
  * other run ids. beginRun() runs before session.start(): the first run.started while starting fixes
- * the run id, because it can arrive before start() resolves (same pipe, §5.4).
+ * the run id, because it can arrive before start() resolves (same pipe, §5.4). A run that fails to
+ * start sends the start result and run.finished with no run.started, often in one read, so the
+ * events that arrive while the id is unknown are kept and handled once startResolved() names it.
  */
 export class RunStore {
   private readonly deps: AppDeps;
@@ -185,6 +189,8 @@ export class RunStore {
   private readonly calls = new Map<string, { role: "root" } | { role: "sub"; key: string }>();
   private lastReply: Usage | null = null;
   private rejected = 0;
+  /** Engine events that came while starting with no run id yet, for startResolved() to replay. */
+  private early: { method: string; params: any }[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private lastFlush = 0;
   private tick: { timer: ReturnType<typeof setInterval>; ms: number } | undefined;
@@ -207,14 +213,34 @@ export class RunStore {
     this.v = { ...emptyView(), phase: "starting", startedAt: Date.now(), engineExit: exit };
     if (question) this.v.entries.push({ kind: "question", text: question.text, detail: question.detail });
     this.calls.clear();
+    this.early = [];
     this.lastReply = null;
     this.rejected = 0;
     this.changed();
   }
 
-  /** start() resolved. run.started has usually fixed the id already. */
+  /**
+   * /clear: back to an empty idle view, as at launch. Only the engine's exit survives it (the transcript
+   * shows it again), because that is still true. The caller checks that no run is active.
+   */
+  clear(): void {
+    const exit = this.v.engineExit;
+    this.v = { ...emptyView(), engineExit: exit };
+    if (exit) this.v.entries.push({ kind: "error", text: engineStoppedMessage(exit.code), lines: exit.stderr });
+    this.calls.clear();
+    this.early = [];
+    this.lastReply = null;
+    this.rejected = 0;
+    this.changed();
+  }
+
+  /** start() resolved. run.started has usually fixed the id already; if not, the events kept so far are handled now. */
   startResolved(runId: string): void {
-    if (this.v.runId === null && this.awaitingId()) this.v.runId = runId;
+    if (this.v.runId !== null || !this.awaitingId()) return;
+    this.v.runId = runId;
+    const early = this.early;
+    this.early = [];
+    for (const e of early) this.dispatch(e.method, e.params);
   }
 
   /** Starting, or cancelled while starting: the first run.started or start() fixes the id. */
@@ -224,6 +250,7 @@ export class RunStore {
 
   /** start() rejected (-32011, -32012, a usage error): the message, and back to idle. */
   startFailed(message: string): void {
+    this.early = [];
     this.v.entries.push({ kind: "error", text: message, lines: [] });
     this.v.phase = "idle";
     this.v.startedAt = null;
@@ -271,7 +298,19 @@ export class RunStore {
 
   private onEngine(method: string, params: any): void {
     if (typeof params?.run_id !== "string") return;
-    if (method === "run.started" && this.v.runId === null && this.awaitingId()) this.v.runId = params.run_id;
+    if (this.v.runId === null && this.awaitingId()) {
+      if (method !== "run.started") {
+        if (this.early.length < EARLY_MAX) this.early.push({ method, params });
+        return;
+      }
+      this.v.runId = params.run_id;
+      this.early = [];
+    }
+    this.dispatch(method, params);
+  }
+
+  /** One engine event of this run; another run's, or any before a run id is known, is dropped. */
+  private dispatch(method: string, params: any): void {
     if (params.run_id !== this.v.runId || this.v.runId === null) return;
     switch (method) {
       case "run.started":

@@ -4,7 +4,7 @@
 import { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError, type Anthropic } from "@anthropic-ai/sdk";
 import type { Message, ModelCompleteParams, Thinking } from "../protocol.ts";
 import { anthropicBreakpoints, splitPrefix } from "./cache.ts";
-import { isObject, sdkAttemptError, type Replay, type SdkErrors, type StreamHooks, type StreamResult } from "./stream.ts";
+import { assertFinished, ByteBudget, isObject, sdkAttemptError, type Replay, type SdkErrors, type StreamHooks, type StreamResult } from "./stream.ts";
 
 const ERRORS: SdkErrors = { APIError, APIConnectionError, APIConnectionTimeoutError, APIUserAbortError };
 
@@ -112,9 +112,12 @@ export function buildAnthropicRequest(p: ModelCompleteParams, ctx: AnthropicCont
   return ctx.markers ? anthropicBreakpoints(body as { system?: Block[]; messages: typeof messages }) : body;
 }
 
-/** Streams one attempt as raw events, keeping thinking blocks and signatures as received. Throws AttemptError. */
+/** Streams one attempt as raw events, keeping thinking blocks and signatures as received. Throws AttemptError, also for a
+ *  stream that ended with neither a stop_reason nor message_stop: the SDK ends iteration quietly on an abort or a clean close. */
 export async function streamAnthropic(client: Anthropic, body: Record<string, unknown>, hooks: StreamHooks, signal: AbortSignal): Promise<StreamResult> {
   const out: StreamResult = { text: "", reasoning: "", toolCall: null, finish: null, served: null, provider: null, usage: null, replay: {} };
+  const budget = new ByteBudget(hooks.maxBytes);
+  let stopped = false;
   const blocks = new Map<number, Block>();
   const order: number[] = [];
   let usage: Record<string, unknown> | null = null;
@@ -133,6 +136,7 @@ export async function streamAnthropic(client: Anthropic, body: Record<string, un
         case "content_block_start": {
           hooks.onContent();
           const block = isObject(event.content_block) ? { ...event.content_block } : {};
+          budget.add(Math.max(16, JSON.stringify(block).length)); // a redacted_thinking block arrives whole
           if (block.type === "tool_use") block.input_json = "";
           blocks.set(event.index, block);
           order.push(event.index);
@@ -147,18 +151,22 @@ export async function streamAnthropic(client: Anthropic, body: Record<string, un
           const d = isObject(event.delta) ? event.delta : {};
           if (!block) break;
           if (d.type === "text_delta" && typeof d.text === "string") {
+            budget.add(d.text);
             block.text = `${block.text ?? ""}${d.text}`;
             out.text += d.text;
             hooks.onContent();
             hooks.onText(d.text);
           } else if (d.type === "thinking_delta" && typeof d.thinking === "string") {
+            budget.add(d.thinking);
             block.thinking = `${block.thinking ?? ""}${d.thinking}`;
             out.reasoning += d.thinking;
             hooks.onContent();
             hooks.onReasoning(d.thinking);
           } else if (d.type === "signature_delta" && typeof d.signature === "string") {
+            budget.add(d.signature);
             block.signature = `${block.signature ?? ""}${d.signature}`;
           } else if (d.type === "input_json_delta" && typeof d.partial_json === "string") {
+            budget.add(d.partial_json);
             block.input_json = `${block.input_json}${d.partial_json}`;
             hooks.onContent();
           }
@@ -173,6 +181,9 @@ export async function streamAnthropic(client: Anthropic, body: Record<string, un
           }
           break;
         }
+        case "message_stop":
+          stopped = true;
+          break;
         case "error":
           throw new APIError(undefined, event, undefined, undefined); // an error event inside the stream
       }
@@ -180,6 +191,7 @@ export async function streamAnthropic(client: Anthropic, body: Record<string, un
   } catch (err) {
     throw sdkAttemptError(err, ERRORS);
   }
+  assertFinished(signal, stopped || out.finish !== null);
   out.usage = usage;
   const thinking: Block[] = [];
   for (const index of order) {

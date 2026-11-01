@@ -1,8 +1,8 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
 // The interactive app: the transcript of the current run, the sub-call panel, the approval prompt,
 // the prompt box and the status line, in a frame one row shorter than the terminal. App owns focus,
-// the screens, the submit flow and the Esc order: deny the approval, close the screen or view,
-// cancel the run, clear the prompt. Each question is a new run (S-11).
+// the screens, the submit flow (with /clear and /quit, which have no screen) and the Esc order: deny
+// the approval, close the screen or view, cancel the run, clear the prompt. Each question is a new run (S-11).
 
 import { Box, render, Text, useApp, useInput, useWindowSize } from "ink";
 import { existsSync } from "node:fs";
@@ -29,7 +29,7 @@ import { bannerLines, Transcript, transcriptLines } from "./Transcript.tsx";
 export const MIN_COLUMNS = 50;
 export const MIN_ROWS = 12;
 const QUIT_WINDOW_MS = 2000;
-const MENU_MAX = 8;
+const MENU_MAX = 9; // every command fits: the eight with screens or not, /clear and /quit
 const DENY = { allow: false, remember_for_run: false };
 const HINT = "Ask a question. @file reads files; / for commands";
 const WELCOME_PROVIDERS = "Welcome to rlmh. Connect a provider: pick one, a adds a key; Esc when done.";
@@ -185,12 +185,34 @@ export function App(props: { deps: AppDeps }) {
     );
   };
 
+  /** /clear: a new session without a new engine. Nothing is cancelled for it, and it is not kept in the history it empties. */
+  const clear = () => {
+    if (isActive(store.live().phase) || deps.approvals.head() || confirm) {
+      return store.note("A run is active. Esc cancels it, then /clear.", "warn");
+    }
+    history.current = [];
+    ctrlCAt.current = 0;
+    cancelWhenStarted.current = false;
+    setText("");
+    setHint(null);
+    setScreen(null);
+    setSubview(null);
+    setFocus("prompt");
+    setPanel({ selected: 0, open: {} });
+    setScroll(0);
+    setFull(false);
+    setModeOverride(null);
+    store.clear();
+    store.note("New session.", "info");
+  };
+
   const submit = async (value: string) => {
     const typed = value.trim();
     if (!typed || busy.current) return;
     if (typed.startsWith("/")) {
       const name = typed.slice(1).split(/\s/)[0]!.toLowerCase();
       if (name === "quit") return void quit();
+      if (name === "clear") return clear();
       if (!COMMANDS.some((c) => c.name === name)) return store.note(`Unknown command /${name}. /help lists the commands.`, "warn");
       history.current = [...history.current, typed].slice(-HISTORY_MAX);
       setText("");

@@ -1,6 +1,6 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
-// The slash commands. Each has one screen that replaces the transcript and panel area; /quit has
-// none and is handled in App.tsx.
+// The slash commands. Each has one screen that replaces the transcript and panel area; /clear and
+// /quit have none and are handled in App.tsx.
 
 import type { ReactElement } from "react";
 import type { AppDeps, RunStore, RunView } from "../store.ts";
@@ -43,13 +43,15 @@ export const COMMANDS: readonly SlashCommand[] = [
   { name: "help", summary: "Commands and keys", Screen: HelpScreen },
 ];
 
+export const CLEAR = { name: "clear", summary: "Start a new session: clear the transcript, history and mode override" };
+
 export const QUIT = { name: "quit", summary: "Deny approvals, cancel the run, and quit" };
 
 /** The slash menu's matches for what is typed: `/` then a name prefix, no space yet. */
 export function slashMatches(value: string): { name: string; summary: string }[] {
   if (!value.startsWith("/") || /\s/.test(value)) return [];
   const typed = value.slice(1).toLowerCase();
-  return [...COMMANDS, QUIT].filter((c) => c.name.startsWith(typed)).map(({ name, summary }) => ({ name, summary }));
+  return [...COMMANDS, CLEAR, QUIT].filter((c) => c.name.startsWith(typed)).map(({ name, summary }) => ({ name, summary }));
 }
 
 export const KEYS: readonly [string, string][] = [

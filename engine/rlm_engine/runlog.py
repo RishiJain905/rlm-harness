@@ -5,8 +5,9 @@ The run log: one JSON line per finished run, appended to `runs.jsonl` (architect
 at RLM commit 0b9af69): an append-only file, each line flushed and fsynced as it is written, so a crash loses at
 most the line being written, and the reader counts and skips a torn line.
 
-What differs from training: the line goes out in one `os.write` on a descriptor opened O_APPEND, so two runs in
-one engine (or two processes) never interleave inside a line; O_BINARY keeps Windows from turning `\\n` into
+What differs from training: the line goes out in one `os.write` on a descriptor opened O_APPEND, under a thread
+lock and an OS file lock held from the torn-tail check through the fsync, so two runs in one engine or in two
+processes never interleave inside a line; O_BINARY keeps Windows from turning `\\n` into
 `\\r\\n`; a file whose last line is torn gets a fresh line before the next record; and NaN and infinities are
 written as the strings "nan", "inf" and "-inf", because `json.dumps` would write bare `NaN`, which the app's
 `JSON.parse` rejects.
@@ -14,13 +15,22 @@ written as the strings "nan", "inf" and "-inf", because `json.dumps` would write
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
 import re
 import threading
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
 
 FORMAT_VERSION = 1
 
@@ -35,8 +45,11 @@ RECORD_KEYS: tuple[str, ...] = (
 )
 
 _BATCH_RE = re.compile(r"[A-Za-z0-9._-]+")
-_LOCK = threading.Lock()  # one writer at a time inside this process; O_APPEND covers other processes
+_LOCK = threading.Lock()  # one writer at a time inside this process; _file_lock covers other processes
 _BINARY = getattr(os, "O_BINARY", 0)  # Windows: without it the CRT writes "\n" as "\r\n"
+LOCK_OFFSET = 1 << 62  # Windows: the byte _file_lock locks, past any real file's end
+LOCK_TIMEOUT_S = 30.0  # Windows: how long an append waits for another process's lock
+LOCK_POLL_S = 0.01
 
 
 def log_path(home: Path, batch: str, log_dir: Path | None) -> Path:
@@ -67,6 +80,44 @@ def _finite(value: Any) -> Any:
     return value
 
 
+def _ends_torn(fd: int) -> bool:
+    """Whether the file has bytes and the last one is not a newline (a crash cut the last line short)."""
+    if os.lseek(fd, 0, os.SEEK_END) == 0:
+        return False
+    os.lseek(fd, -1, os.SEEK_END)
+    return os.read(fd, 1) != b"\n"
+
+
+@contextlib.contextmanager
+def _file_lock(fd: int) -> Iterator[None]:
+    """An exclusive lock on the run log against other processes, which wait for it. POSIX: `flock` (advisory).
+    Windows: a one-byte byte-range lock at LOCK_OFFSET, far past any real end of file, because Windows locks are
+    mandatory and a lock on the data would stop the app reading the log; writes go to the end (O_APPEND), so they
+    never touch the locked byte."""
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    deadline = time.monotonic() + LOCK_TIMEOUT_S
+    while True:
+        os.lseek(fd, LOCK_OFFSET, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            break
+        except OSError:  # held by another process (LK_LOCK would poll only once a second)
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(LOCK_POLL_S)
+    try:
+        yield
+    finally:
+        os.lseek(fd, LOCK_OFFSET, os.SEEK_SET)  # locking() works at the file position, which the write moved
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
 class RunLog:
     """An append-only JSONL file of run records. `torn_lines` is the number of unreadable lines the last `records()`
     call skipped."""
@@ -82,28 +133,17 @@ class RunLog:
         data = line.encode("utf-8", "replace")
         with _LOCK:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            if self._ends_torn():
-                data = b"\n" + data  # in the same write, so the fresh line and the record stay together
-            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | _BINARY, 0o666)
+            fd = os.open(self.path, os.O_RDWR | os.O_APPEND | os.O_CREAT | _BINARY, 0o666)
             try:
-                view = memoryview(data)
-                while view:  # one write in practice; a partial write would continue, not restart
-                    view = view[os.write(fd, view) :]
-                os.fsync(fd)
+                with _file_lock(fd):  # other processes: held from the tail check to the fsync
+                    if _ends_torn(fd):
+                        data = b"\n" + data  # in the same write, so the fresh line and the record stay together
+                    view = memoryview(data)
+                    while view:  # one write in practice; a partial write would continue, not restart
+                        view = view[os.write(fd, view) :]
+                    os.fsync(fd)
             finally:
                 os.close(fd)
-
-    def _ends_torn(self) -> bool:
-        """Whether the file has bytes and the last one is not a newline (a crash cut the last line short)."""
-        try:
-            with open(self.path, "rb") as f:
-                f.seek(0, os.SEEK_END)
-                if f.tell() == 0:
-                    return False
-                f.seek(-1, os.SEEK_END)
-                return f.read(1) != b"\n"
-        except FileNotFoundError:
-            return False
 
     def records(self) -> list[dict]:
         """Every readable record, in the order written. A line that is not valid UTF-8 JSON is skipped and counted

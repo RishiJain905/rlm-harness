@@ -23,15 +23,21 @@ if ($cmd) { $Bun = $cmd.Source } elseif (Test-Path "$Root\.bun\bin\bun.exe") { $
 
 # 1. secrets: this repo is public. No key-shaped strings and no key, run-log or .env files
 #    in anything tracked or about to be (untracked and not ignored). Fake keys in tests must
-#    contain FAKE (e.g. sk-ant-FAKE...), which this stage ignores.
+#    contain FAKE (e.g. sk-ant-FAKE...), which this stage ignores. Hits print as path:line
+#    only, never the matching text, and a git failure fails the stage instead of passing it.
 Stage "secrets"
 $KeyRe = '(^|[^A-Za-z0-9_-])(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9]{36}|hf_[A-Za-z0-9]{30,})|-----BEGIN [A-Z ]*PRIVATE KEY-----'
-$hits = @(git grep --untracked -nIE -e $KeyRe -- . ':!scripts/verify.sh' ':!scripts/verify.ps1' | Where-Object { $_ -notmatch 'FAKE' })
-$files = @(git ls-files --cached --others --exclude-standard | Where-Object {
-    $_ -match '(^|/)(\.env(\.[^/]*)?|keys\.json|key-index\.json|runs\.jsonl)$' -and $_ -notmatch '(^|/)\.env\.example$' })
+$scanOk = $true
+$grepOut = @(git grep --untracked -nIE -e $KeyRe -- . ':!scripts/verify.sh' ':!scripts/verify.ps1')
+if ($LASTEXITCODE -gt 1) { $scanOk = $false; Fail "secrets" "git grep failed (exit $LASTEXITCODE)" }
+$hits = @($grepOut | Where-Object { $_ -and $_ -notmatch 'FAKE' } | ForEach-Object { ($_ -split ':', 3)[0..1] -join ':' })
+$listed = @(git ls-files --cached --others --exclude-standard)
+if ($LASTEXITCODE -ne 0) { $scanOk = $false; Fail "secrets" "git ls-files failed (exit $LASTEXITCODE)" }
+$files = @($listed | Where-Object {
+    $_ -match '(^|/)(\.env[^/]*|keys\.json|key-index\.json|runs\.jsonl)$' -and $_ -notmatch '(^|/)\.env\.example$' })
 if ($hits.Count -gt 0) { $hits | ForEach-Object { "  $_" }; Fail "secrets" "key-shaped strings found (fake keys must contain FAKE)" }
 if ($files.Count -gt 0) { $files | ForEach-Object { "  $_" }; Fail "secrets" "files that must never be committed" }
-if ($hits.Count -eq 0 -and $files.Count -eq 0) { Write-Output "ok" }
+if ($scanOk -and $hits.Count -eq 0 -and $files.Count -eq 0) { Write-Output "ok" }
 
 # 2. engine-tests
 Stage "engine-tests"

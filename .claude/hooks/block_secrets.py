@@ -13,9 +13,11 @@ ALLOWED_ENV_FILES = {".env.example"}
 # Any ".env"-style filename: .env, .env.local, .env.production, ...
 ENV_FILE = re.compile(r"\.env[\w.\-]*", re.IGNORECASE)
 
-# Other credential stores.
+# Other credential stores, including rlmh's own fallback key file (keys.json; key-index.json
+# holds no key and stays readable).
 CREDENTIAL_FILES = re.compile(
-    r"_netrc|\.netrc|kaggle\.json|\.docker[\\/]+config\.json", re.IGNORECASE
+    r"_netrc|\.netrc|kaggle\.json|\.docker[\\/]+config\.json|(?<![\w-])keys\.json",
+    re.IGNORECASE,
 )
 
 # Commands that dump environment variables, load the env file, or unwrap secrets.
@@ -35,10 +37,13 @@ ENV_DUMP = re.compile(
     re.IGNORECASE,
 )
 
-# Direct references to secret variables in shell syntax ($X, ${X}, $env:X).
+# Direct references to secret variables in shell syntax ($X, ${X}, $env:X): any name with a
+# credential-like part, the same words rlmh strips from child processes (OPENAI_API_KEY,
+# ANTHROPIC_API_KEY, NEO4J_AUTH, OPENAI_CUSTOM_HEADERS, ...).
 SECRET_VARS = re.compile(
-    r"(?:\$env:|\$\{|\$)(?:WANDB_API_KEY|NEO4J_PASSWORD|NEO4J_AUTH|LLM_API_KEY"
-    r"|OPENROUTER_API_KEY|ODDS_API_KEY\d*|KAGGLE_KEY|SMTP_PASSWORD)\b",
+    r"(?:\$env:|\$\{|\$)(?:[A-Za-z0-9]+_)*"
+    r"(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|AUTH|HEADERS)"
+    r"(?:_[A-Za-z0-9]+)*\d*\b",
     re.IGNORECASE,
 )
 

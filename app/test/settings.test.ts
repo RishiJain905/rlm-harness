@@ -9,6 +9,7 @@ import * as paths from "../src/paths.ts";
 import {
   SCHEMA,
   SettingsError,
+  defaultSetting,
   defaultSettings,
   getSetting,
   listSettings,
@@ -91,6 +92,26 @@ describe("settings", () => {
     for (const [key, value] of Object.entries(DEFAULTS)) expect(getSetting(s, key)).toBe(value);
     expect(s.providers).toEqual({});
     expect(listSettings(s).map(([k]) => k)).toEqual(SCHEMA.filter((d) => !d.key.includes("<id>")).map((d) => d.key));
+  });
+
+  test("default_setting: the value a key has when nothing sets it, provider-aware like getSetting", () => {
+    // the schema's own default for base_url is "", but the local provider has a default server
+    expect(defaultSetting("providers.local.base_url")).toBe("http://localhost:8000/v1");
+    expect(defaultSetting("providers.custom.base_url")).toBe("");
+    expect(defaultSetting("providers.openai.base_url")).toBe("");
+    // and it is exactly what getSetting gives for an untouched key, for every key in the listing
+    const s = defaultSettings();
+    for (const [key, value] of Object.entries(DEFAULTS)) expect(defaultSetting(key)).toBe(value);
+    for (const [key] of listSettings(setSetting(s, "providers.local.max_in_flight", "32"))) expect(defaultSetting(key)).toBe(getSetting(s, key));
+    expect(defaultSetting("providers.local.max_in_flight")).toBe(16);
+    expect(defaultSetting("permissions.mode")).toBe("accept-edits");
+    expectSettingsError(() => defaultSetting("nope"), "nope");
+    expectSettingsError(() => defaultSetting("providers.nosuch.base_url"), "nosuch");
+    // a reset through setSetting brings the local server back instead of "no base URL"
+    let custom = setSetting(s, "providers.local.base_url", "http://other.test:9000/v1");
+    expect(getSetting(custom, "providers.local.base_url")).toBe("http://other.test:9000/v1");
+    custom = setSetting(custom, "providers.local.base_url", defaultSetting("providers.local.base_url"));
+    expect(getSetting(custom, "providers.local.base_url")).toBe("http://localhost:8000/v1");
   });
 
   test("save_load", () => {

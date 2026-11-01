@@ -45,7 +45,11 @@ def cut(context: str, size: int) -> list[Segment]:
 def namespace(context: str, segment_chars, bridge, limits: dict) -> dict:
     """The cell globals that replace `llm` and `llm_batch` and add `segments`. `bridge(op, prompts, prefixes)` sends
     one request to the engine; `limits` is the worker's live sub-call limits (`max_chars`, `oversize`)."""
-    default_size = segment_chars if isinstance(segment_chars, int) and segment_chars >= MIN_SEGMENT_CHARS else 40_000
+    # The engine's size (manager.segment_chars) always fits a sub-call, even under a small subcall_max_chars, so it is
+    # used as given; only a missing or broken value falls back. A size of your own can go as low as the default.
+    usable = isinstance(segment_chars, int) and not isinstance(segment_chars, bool) and segment_chars > 0
+    default_size = segment_chars if usable else 40_000
+    least = min(MIN_SEGMENT_CHARS, default_size)
     cache: dict[int, list[Segment]] = {}
 
     def segments(size: int | None = None) -> list[Segment]:
@@ -53,8 +57,8 @@ def namespace(context: str, segment_chars, bridge, limits: dict) -> dict:
         llm(..., over=) or llm_batch(..., over=): the harness sends a segment's text before your prompt, byte for byte,
         so asking about the same segment again costs the cache price."""
         size = default_size if size is None else size
-        if not isinstance(size, int) or isinstance(size, bool) or size < MIN_SEGMENT_CHARS:
-            raise ValueError(f"segments(size) takes a whole number of characters, at least {MIN_SEGMENT_CHARS:,}")
+        if not isinstance(size, int) or isinstance(size, bool) or size < least:
+            raise ValueError(f"segments(size) takes a whole number of characters, at least {least:,}")
         if size not in cache:
             cache[size] = cut(context, size)
         return list(cache[size])

@@ -6,6 +6,12 @@ One UTF-8 JSON object per line, with requests both ways. A daemon thread reads t
 and hands each line to the asyncio loop, because asyncio pipe reads are unreliable on
 Windows (D-30). A writer thread drains a queue, so `notify` is safe from any thread and a
 stalled app never blocks the loop. A bad line is answered with an error, never a crash.
+
+Every message must carry `"jsonrpc": "2.0"`, and a request or notification must not carry
+`result` or `error`. The line limit holds both ways: a message this side would send over it is
+never written, because the peer could only answer it with `id: null`. An oversized request fails
+its caller at once (-32600), an oversized answer goes out as an error with the request's id
+(-32603), and an oversized notification is dropped with a log line.
 """
 
 from __future__ import annotations
@@ -33,6 +39,8 @@ UNKNOWN_RUN = -32010
 UNKNOWN_PROFILE = -32011
 BAD_INPUT = -32012
 CANCELLED = -32800
+
+MESSAGE_TOO_LARGE = "message_too_large"  # data.kind of the error for a message this side would not send
 
 Handler = Callable[[dict], Awaitable[Any]]
 
@@ -64,10 +72,10 @@ def _is_id(value: Any) -> bool:
 
 def classify(msg: Any) -> str:
     """Return "request", "notification", "result", "error" or "invalid" (link rule 3)."""
-    if not isinstance(msg, dict):
+    if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
         return "invalid"
     if "method" in msg:
-        if not isinstance(msg["method"], str):
+        if not isinstance(msg["method"], str) or "result" in msg or "error" in msg:
             return "invalid"
         if "id" not in msg:
             return "notification"
@@ -126,10 +134,16 @@ class Link:
             raise RpcError(CANCELLED, "link closed")
         self._next_id += 1
         rid = f"e{self._next_id}"
+        data = _encode({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+        if self._too_long(data):  # the peer could only answer with id null, and this call would wait forever
+            size = len(data) - 1
+            raise RpcError(INVALID_REQUEST,
+                           f"{method} request is too large: {size} bytes, the link carries at most {self._max}",
+                           {"kind": MESSAGE_TOO_LARGE, "method": method, "bytes": size, "limit": self._max})
         fut = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
         try:
-            self._put(_encode({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
+            self._put(data)
             return await fut
         finally:
             self._pending.pop(rid, None)
@@ -137,7 +151,12 @@ class Link:
     def notify(self, method: str, params: dict) -> None:
         """Safe from any thread. Dropped once the link is closed."""
         if not self._closing:
-            self._put(_encode({"jsonrpc": "2.0", "method": method, "params": params}))
+            data = _encode({"jsonrpc": "2.0", "method": method, "params": params})
+            if self._too_long(data):
+                log.error("notification %s dropped: %d bytes, the link carries at most %d", method, len(data) - 1,
+                          self._max)
+                return
+            self._put(data)
 
     async def serve(self) -> None:
         """Run until the input ends (or the output breaks), then close in order and return."""
@@ -239,6 +258,10 @@ class Link:
         if not self._closing:
             self._out.put(data)
 
+    def _too_long(self, data: bytes) -> bool:
+        """Whether an encoded message, less its newline, is over the line limit the peer enforces."""
+        return len(data) - 1 > self._max
+
     # -- incoming messages (on the loop) --
 
     def _on_line(self, item: object) -> None:
@@ -337,6 +360,18 @@ class Link:
                     "jsonrpc": "2.0",
                     "id": mid,
                     "error": {"code": INTERNAL_ERROR, "message": f"internal error: {type(exc).__name__}: {exc}"},
+                }
+            )
+        if self._too_long(data):  # the peer would answer with id null; the caller still gets its answer
+            size = len(data) - 1
+            log.error("answer to %r dropped: %d bytes, the link carries at most %d", mid, size, self._max)
+            message = f"internal error: the {key} is too large: {size} bytes, the link carries at most {self._max}"
+            data = _encode(
+                {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "error": {"code": INTERNAL_ERROR, "message": message,
+                              "data": {"kind": MESSAGE_TOO_LARGE, "bytes": size, "limit": self._max}},
                 }
             )
         self._put(data)

@@ -26,10 +26,10 @@ import { buildAnthropicRequest, streamAnthropic, type ThinkingShape } from "./an
 import { ANTHROPIC_SPLIT_PREFIX, BatchGate, prefixWorthMarking, routeKey, type BatchTicket } from "./cache.ts";
 import type { Catalog, ModelInfo } from "./catalog.ts";
 import { FakeError, FakeProvider, newFakeRunState, type FakeRunState } from "./fake.ts";
-import { KeyReadError, type KeyStore, type ResolvedKey } from "./keys.ts";
+import { KeyReadError, last4Of, type KeyStore, type ResolvedKey } from "./keys.ts";
 import { buildOpenAIRequest, DROPPABLE_FIELDS, streamOpenAI } from "./openai.ts";
 import { openRouterEndpoint, provider, providerName, type ProviderDef } from "./providers.ts";
-import { AttemptError, causeText, type Failure, type Replay, type StreamHooks, type StreamResult } from "./stream.ts";
+import { AttemptError, causeText, formatBytes, type Failure, type Replay, type StreamHooks, type StreamResult } from "./stream.ts";
 import { billedCost, emptyUsage, replyChars, requestChars, RunTotals, toUsage } from "./usage.ts";
 
 export type AppEvents = {
@@ -54,8 +54,17 @@ export const LIMITS = {
   TOTAL_TIMEOUT_MS: 900_000,
   REFRESH_TIMEOUT_MS: 30_000,
   REFRESH_MAX_PAGES: 5,
+  /** Finished runs whose totals and last root request stay readable; a run that has not finished is never dropped. */
   RUNS_KEPT: 20,
   DETAIL_CHARS: 300,
+  /**
+   * Most bytes of text, reasoning and tool-call arguments one attempt may gather before it is cut off with an error.
+   * A reply of a million tokens is about 4 MB of English (reasoning counts inside max_tokens), so 16 MiB is a wide margin
+   * for a real model, and half the 32 MiB line of the link to the engine, which has to carry the reply back.
+   */
+  MAX_RESPONSE_BYTES: 16 * 1024 * 1024,
+  /** Most bytes of model-list bodies one "Refresh models" may read, all pages together. The bundled catalog of 391 models is 149 KB; a live list has more fields per model, and is still far under this. */
+  MAX_MODEL_LIST_BYTES: 16 * 1024 * 1024,
 };
 
 /** D-23. Tests replace `sleep` with a recorder and `random` with a constant. */
@@ -95,6 +104,8 @@ interface RunState {
   replay: Map<string, Replay>;
   fake: FakeRunState;
   calls: Set<AbortController>;
+  /** The engine said run.finished (or exited): only a finished run with no call left may be dropped from the history. */
+  finished: boolean;
 }
 
 /** What one call needs once its provider is known. */
@@ -149,8 +160,14 @@ export class Gateway {
     this.gate = new BatchGate(LIMITS);
     this.bus.on("engine.event", (e) => {
       if (e.method !== "run.finished" || typeof e.params?.run_id !== "string") return;
-      this.runs.get(e.params.run_id)?.replay.clear();
+      this.finishRun(this.runs.get(e.params.run_id));
       this.gate.dropRun(e.params.run_id);
+      this.prune();
+    });
+    // an engine that exited took every run with it
+    this.bus.on("engine.exit", () => {
+      for (const run of this.runs.values()) this.finishRun(run);
+      this.prune();
     });
   }
 
@@ -233,15 +250,22 @@ export class Gateway {
     } else if (key) {
       headers.authorization = `Bearer ${key.key}`;
     }
+    let bytesLeft = LIMITS.MAX_MODEL_LIST_BYTES; // all pages of one refresh share it
     const get = async (url: string): Promise<Record<string, any>> => {
       let res: Response;
+      let body: { text: string; bytes: number } | null;
       try {
         res = await this.fetchFn(url, { headers, signal: AbortSignal.timeout(LIMITS.REFRESH_TIMEOUT_MS) });
+        body = await readBounded(res, bytesLeft); // the same signal covers the body, so a trickle ends at the timeout
       } catch (err) {
         const timedOut = err instanceof Error && err.name === "TimeoutError";
         throw this.failureError({ kind: timedOut ? "timeout" : "network", status: null, detail: causeText(err) }, def, ref, key, baseUrl, 1);
       }
-      const text = await res.text();
+      if (body === null) {
+        throw this.failureError({ kind: "bad_stream", status: res.status, detail: `the model list is larger than ${formatBytes(LIMITS.MAX_MODEL_LIST_BYTES)}, so it was not read` }, def, ref, key, baseUrl, 1);
+      }
+      bytesLeft -= body.bytes;
+      const text = body.text;
       let data: unknown;
       try {
         data = JSON.parse(text);
@@ -325,6 +349,7 @@ export class Gateway {
     let fallbacks = 0;
     let unpinned = false;
     const hooks: StreamHooks = {
+      maxBytes: LIMITS.MAX_RESPONSE_BYTES,
       onEvent: () => {},
       onContent: () => ticket?.content(),
       onText: (text) => {
@@ -437,10 +462,14 @@ export class Gateway {
         clearTimeout(idle);
         idle = setTimeout(fire, idleMs);
       },
+      maxBytes: LIMITS.MAX_RESPONSE_BYTES,
     };
     try {
-      if (c.def.client === "anthropic") return await streamAnthropic(this.client(c) as Anthropic, body, timed, ac.signal);
-      return await streamOpenAI(this.client(c) as OpenAI, body, timed, ac.signal);
+      const out = c.def.client === "anthropic" ? await streamAnthropic(this.client(c) as Anthropic, body, timed, ac.signal) : await streamOpenAI(this.client(c) as OpenAI, body, timed, ac.signal);
+      // The SDKs end iteration quietly when the signal aborts, so a result proves nothing about how the stream ended:
+      // an idle or total timeout, or a cancel after content began, must not pass as an answer.
+      if (ac.signal.aborted) throw new AttemptError({ kind: "aborted", status: null, detail: "aborted" });
+      return out;
     } catch (err) {
       if (timedOut && !c.signal.aborted) throw new AttemptError({ kind: "timeout", status: null, detail: "no answer in time" });
       throw err;
@@ -551,17 +580,18 @@ export class Gateway {
     );
   }
 
-  /** Cached per provider, base URL and key. Both SDKs: no retries of their own, our fetch, and a pinned wire. */
+  /** Cached per provider, base URL and key. Both SDKs: no retries of their own, our fetch, a pinned wire, and no ambient headers. */
   private client(c: Call): OpenAI | Anthropic {
     const apiKey = c.key?.key ?? "none"; // the SDKs need a non-empty key
     const id = `${c.def.id}\0${c.baseUrl}\0${apiKey}`;
     let client = this.clients.get(id);
     if (!client) {
       const common = { apiKey, baseURL: c.baseUrl, maxRetries: 0, timeout: SDK_TIMEOUT_MS, fetch: this.fetchFn, logLevel: "off" as const };
-      client =
+      client = withoutAmbientHeaders(() =>
         c.def.client === "anthropic"
           ? new Anthropic({ ...common, defaultHeaders: { "anthropic-version": ANTHROPIC_VERSION } })
-          : new OpenAI({ ...common, organization: null, project: null }); // never send OPENAI_ORG_ID to another provider
+          : new OpenAI({ ...common, organization: null, project: null }), // never send OPENAI_ORG_ID to another provider
+      );
       this.clients.set(id, client);
     }
     return client;
@@ -576,14 +606,34 @@ export class Gateway {
     return s;
   }
 
-  /** The run's state, made the newest; the gateway keeps LIMITS.RUNS_KEPT runs. */
+  /** The run's state, made the newest. A run lives from its first call until run.finished, however many overlap: its
+   *  cancel handles, replay table, scripted position and totals are needed to the end. Only finished runs are history. */
   private run(runId: string): RunState {
     let run = this.runs.get(runId);
     if (run) this.runs.delete(runId);
-    else run = { totals: new RunTotals(), replay: new Map(), fake: newFakeRunState(), calls: new Set() };
+    else run = { totals: new RunTotals(), replay: new Map(), fake: newFakeRunState(), calls: new Set(), finished: false };
     this.runs.set(runId, run);
-    while (this.runs.size > LIMITS.RUNS_KEPT) this.runs.delete(this.runs.keys().next().value!);
+    this.prune();
     return run;
+  }
+
+  private finishRun(run: RunState | undefined): void {
+    if (!run) return;
+    run.finished = true;
+    run.replay.clear();
+  }
+
+  /** The oldest finished runs go once more than LIMITS.RUNS_KEPT are kept; an unfinished run, or one with a call still
+   *  open, is never dropped. `runs` is in order of last use, oldest first. */
+  private prune(): void {
+    let excess = -LIMITS.RUNS_KEPT;
+    for (const run of this.runs.values()) if (run.finished) excess += 1;
+    for (const [id, run] of this.runs) {
+      if (excess <= 0) break;
+      if (!run.finished || run.calls.size > 0) continue;
+      this.runs.delete(id);
+      excess -= 1;
+    }
   }
 
   // -- errors --
@@ -622,9 +672,10 @@ export class Gateway {
     }
     if (s === 401 || s === 403) {
       if (!key) return this.error("auth", p, s, `${P} rejected the request (HTTP ${s}) and no key is saved. Add one in /providers.`);
-      const tail = key.key.slice(-4);
-      if (key.source === "env") return this.error("auth", p, s, `${P} rejected the key "$${key.envVar ?? def.envVar}" (ends in ${tail}). Fix that variable, or save a key in /providers.`);
-      return this.error("auth", p, s, `${P} rejected the key "${key.info?.label ?? "?"}" (ends in ${tail}). Re-enter or delete it in /providers.`);
+      const last4 = last4Of(key.key); // "" for a short key, which shows no part of itself
+      const tail = last4 === "" ? "" : ` (ends in ${last4})`;
+      if (key.source === "env") return this.error("auth", p, s, `${P} rejected the key "$${key.envVar ?? def.envVar}"${tail}. Fix that variable, or save a key in /providers.`);
+      return this.error("auth", p, s, `${P} rejected the key "${key.info?.label ?? "?"}"${tail}. Re-enter or delete it in /providers.`);
     }
     if (s === 400 || s === 413 || s === 422) return this.error("bad_request", p, s, `${P} refused the request (HTTP ${s}): ${detail}`);
     if (s === 404) return this.error("unknown_model", p, s, `${P} has no model "${p.model.model}" (HTTP 404). Pick another in /model, or use Refresh models in /providers.`);
@@ -633,6 +684,24 @@ export class Gateway {
     if (s === 408) return this.error("timeout", p, s, `${P} did not answer in time${after}.`);
     if (s !== null && s >= 500) return this.error("server", p, s, `${P} failed with HTTP ${s}${after}: ${detail}`);
     return this.error("other", p, s, `${P} returned HTTP ${s}: ${detail}`);
+  }
+}
+
+/**
+ * The variables both SDKs merge into the headers of every request they send (`OPENAI_CUSTOM_HEADERS`,
+ * `ANTHROPIC_CUSTOM_HEADERS`: "Name: value" lines, read once in the constructor; no constructor option switches that
+ * off). They often carry a corporate gateway's credential, which would go to whichever provider the next call names,
+ * so a client is built with them removed from the environment, and they are put back after (D-76).
+ */
+const AMBIENT_HEADER_VARS = ["OPENAI_CUSTOM_HEADERS", "ANTHROPIC_CUSTOM_HEADERS"] as const;
+
+function withoutAmbientHeaders<T>(build: () => T): T {
+  const saved = AMBIENT_HEADER_VARS.map((name) => [name, process.env[name]] as const);
+  for (const [name] of saved) delete process.env[name];
+  try {
+    return build(); // synchronous: nothing else runs while the variables are away
+  } finally {
+    for (const [name, value] of saved) if (value !== undefined) process.env[name] = value;
   }
 }
 
@@ -706,6 +775,30 @@ function redact(detail: string, key?: string): string {
   if (key && key !== "none") text = text.split(key).join("[key]");
   text = text.replace(/Bearer\s+[^\s"',;]+/gi, "Bearer [key]").replace(/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]+/g, "[key]");
   return text.length > LIMITS.DETAIL_CHARS ? text.slice(0, LIMITS.DETAIL_CHARS) : text;
+}
+
+/** The body as text, read in chunks and given up on as soon as it passes `limit` bytes (the rest is never read): null then. */
+async function readBounded(res: Response, limit: number): Promise<{ text: string; bytes: number } | null> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) {
+    await res.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!res.body) return { text: "", bytes: 0 };
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return { text: new TextDecoder().decode(Buffer.concat(chunks)), bytes };
 }
 
 function hostOf(url: string): string {

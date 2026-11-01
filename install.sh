@@ -163,6 +163,11 @@ fish_escape() {
   printf '%s' "$1" | sed 's/[\\"$]/\\&/g'
 }
 
+# sh_quote TEXT: TEXT as one single-quoted sh word, safe to paste into a command line.
+sh_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 main() {
   detect_platform
   asset="rlmh-$OS-$ARCH"
@@ -279,7 +284,7 @@ main() {
       fish_bin=$(fish_escape "$bin")
     fi
     path_now="fish_add_path \"$fish_bin\""
-    uninstall_rc="rm -f $rc"
+    uninstall_rc="rm -f -- $(sh_quote "$rc")"
   else
     path_now="export PATH=\"$(rc_escape "$bin"):\$PATH\""
     uninstall_rc="delete the \"# rlm-harness\" lines from $rc"
@@ -340,9 +345,9 @@ main() {
   fi
   say 'Next: run "rlmh". It asks before it downloads Python 3.12.'
   if [ -n "$uninstall_rc" ]; then
-    say "Uninstall: rm -rf $home, and $uninstall_rc. Saved keys: delete them in /providers first."
+    say "Uninstall: rm -rf -- $(sh_quote "$home"), and $uninstall_rc. Saved keys: delete them in /providers first."
   else
-    say "Uninstall: rm -rf $home. Saved keys: delete them in /providers first."
+    say "Uninstall: rm -rf -- $(sh_quote "$home"). Saved keys: delete them in /providers first."
   fi
 }
 

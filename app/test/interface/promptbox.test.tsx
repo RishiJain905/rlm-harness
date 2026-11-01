@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from
 import { isAbsolute, join, resolve } from "node:path";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { graphemeSpans, nextGrapheme, prevGrapheme, snapToGrapheme } from "../../src/interface/format.ts";
 import { completePath, parseQuestion, type FileProbe } from "../../src/interface/mentions.ts";
 import { createFakeApp, type FakeApp } from "../fakes/engine.ts";
 import { KEYS, mount, type Mounted } from "./helpers.ts";
@@ -319,6 +320,37 @@ describe("completePath", () => {
   });
 });
 
+describe("grapheme cursor helpers", () => {
+  const FAMILY = `👨${String.fromCharCode(0x200d)}👩${String.fromCharCode(0x200d)}👧`; // 8 UTF-16 units, one character
+  const ACCENT = `e${String.fromCharCode(0x301)}`; // 2 units, one character
+
+  test("prev, next and snap move between whole characters", () => {
+    const text = `a😀${FAMILY}${ACCENT}b`;
+    const starts = graphemeSpans(text).map((s) => s.start);
+    expect(graphemeSpans(text).map((s) => s.text)).toEqual(["a", "😀", FAMILY, ACCENT, "b"]);
+    expect(starts).toEqual([0, 1, 3, 11, 13]);
+    // forwards through every boundary, then the end
+    let at = 0;
+    const seen = [at];
+    while (at < text.length) seen.push((at = nextGrapheme(text, at)));
+    expect(seen).toEqual([...starts, text.length]);
+    // and backwards
+    const back = [at];
+    while (at > 0) back.push((at = prevGrapheme(text, at)));
+    expect(back).toEqual([...seen].reverse());
+    // an offset inside a character: snap goes to its start, prev too, next goes past its end
+    expect(snapToGrapheme(text, 2)).toBe(1);
+    expect(snapToGrapheme(text, 7)).toBe(3);
+    expect(prevGrapheme(text, 2)).toBe(1);
+    expect(nextGrapheme(text, 2)).toBe(3);
+    expect(snapToGrapheme(text, 99)).toBe(text.length);
+    expect(prevGrapheme(text, 0)).toBe(0);
+    expect(nextGrapheme(text, text.length)).toBe(text.length);
+    expect(prevGrapheme("", 0)).toBe(0);
+    expect(nextGrapheme("", 0)).toBe(0);
+  });
+});
+
 // ---- screen tests: the PromptBox component (typing, history, slash menu, Tab) are appended below this line ----
 
 describe("PromptBox", () => {
@@ -357,6 +389,45 @@ describe("PromptBox", () => {
     await m.waitFor(() => promptLine(m.screen()).includes("Ask a question"));
   });
 
+  test("Left, Right and Backspace move by whole characters: an emoji, a ZWJ family, a letter and its accent", async () => {
+    const m = await open();
+    await m.type("hi😀");
+    await m.waitFor(() => promptLine(m.screen()) === "hi😀");
+    await m.press(KEYS.backspace);
+    await m.waitFor(() => promptLine(m.screen()) === "hi"); // not half of a surrogate pair left behind
+    await m.press(KEYS.ctrlU);
+    await m.waitFor(() => promptLine(m.screen()).includes("Ask a question"));
+
+    await m.type("a😀b");
+    await m.press(KEYS.left);
+    await m.press(KEYS.left); // over the emoji in one step
+    await m.type("X");
+    await m.waitFor(() => promptLine(m.screen()) === "aX😀b");
+    await m.press(KEYS.right); // and back over it in one step
+    await m.type("Y");
+    await m.waitFor(() => promptLine(m.screen()) === "aX😀Yb");
+    await m.press(KEYS.backspace);
+    await m.press(KEYS.backspace);
+    await m.waitFor(() => promptLine(m.screen()) === "aXb");
+    await m.press(String.fromCharCode(5)); // Ctrl+E: to the end, so Ctrl+U takes everything
+    await m.press(KEYS.ctrlU);
+    await m.waitFor(() => promptLine(m.screen()).includes("Ask a question"));
+
+    // a family is five code points typed one at a time, and one character to delete
+    await m.type("x👨‍👩‍👧");
+    await m.waitFor(() => promptLine(m.screen()).startsWith("x👨"));
+    await m.press(KEYS.backspace);
+    await m.waitFor(() => promptLine(m.screen()) === "x");
+    // a letter and its combining accent likewise
+    await m.type(`e${String.fromCharCode(0x301)}`);
+    await m.press(KEYS.left);
+    await m.type("-");
+    await m.waitFor(() => promptLine(m.screen()) === `x-e${String.fromCharCode(0x301)}`);
+    await m.press(KEYS.right);
+    await m.press(KEYS.backspace);
+    await m.waitFor(() => promptLine(m.screen()) === "x-");
+  });
+
   test("control characters are ignored, and a pasted chunk with a newline does not submit", async () => {
     const m = await open();
     await m.press(KEYS.ctrlV);
@@ -392,7 +463,7 @@ describe("PromptBox", () => {
     const m = await open();
     await m.type("/");
     const all = await m.waitForText("/providers");
-    for (const name of ["/model", "/settings", "/permissions", "/context", "/runs", "/help", "/quit"]) expect(all).toContain(name);
+    for (const name of ["/model", "/settings", "/permissions", "/context", "/runs", "/help", "/clear", "/quit"]) expect(all).toContain(name);
     await m.type("pe");
     await m.waitFor(() => !m.screen().includes("/providers") && m.screen().includes("/permissions"));
     await m.press(KEYS.tab);

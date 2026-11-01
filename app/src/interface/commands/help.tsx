@@ -1,17 +1,17 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
-// /help: the commands from COMMANDS, /quit, and the key table.
+// /help: the commands from COMMANDS, /clear and /quit, and the key table.
 
 import { useInput } from "ink";
 import { useState } from "react";
 import { wrapText } from "../format.ts";
 import { span, type Line } from "../theme.ts";
 import { Frame } from "./common.tsx";
-import { COMMANDS, KEYS, QUIT, type ScreenProps } from "./index.ts";
+import { CLEAR, COMMANDS, KEYS, QUIT, type ScreenProps } from "./index.ts";
 
 export function HelpScreen(props: ScreenProps) {
   const [top, setTop] = useState(0);
   const body: Line[] = [[span("Commands", { bold: true })]];
-  for (const c of [...COMMANDS, QUIT]) body.push([span(`  /${c.name}`.padEnd(16), { bold: true }), span(c.summary)]);
+  for (const c of [...COMMANDS, CLEAR, QUIT]) body.push([span(`  /${c.name}`.padEnd(16), { bold: true }), span(c.summary)]);
   body.push([], [span("Keys", { bold: true })]);
   for (const [k, what] of KEYS) {
     const lines = wrapText(what, Math.max(10, props.width - 22));

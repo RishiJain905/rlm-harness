@@ -5,7 +5,7 @@
 
 import { describe, expect, spyOn, test } from "bun:test";
 import { Bus } from "../src/bus.ts";
-import { Link, RpcError } from "../src/link.ts";
+import { classify, Link, MAX_LINE_BYTES, MESSAGE_TOO_LARGE, RpcError } from "../src/link.ts";
 
 const encoder = new TextEncoder();
 
@@ -51,7 +51,7 @@ class Peer {
     },
   };
 
-  link(opts: { idPrefix?: string; maxLineBytes?: number } = {}): Link {
+  link(opts: { idPrefix?: string; maxLineBytes?: number; maxSendBytes?: number } = {}): Link {
     return new Link(this.toLink.readable, this.output, opts);
   }
 
@@ -119,7 +119,7 @@ describe("link", () => {
     expect(await peer.recv()).toEqual({ jsonrpc: "2.0", id: 1, result: { a: [1, "x"] } });
     peer.send({ jsonrpc: "2.0", id: "s-1", method: "nothing", params: {} });
     expect(await peer.recv()).toEqual({ jsonrpc: "2.0", id: "s-1", result: null });
-    peer.send({ id: 2, method: "echo" }); // no params means {}; jsonrpc not required
+    peer.send({ jsonrpc: "2.0", id: 2, method: "echo" }); // no params means {}
     expect(await peer.recv()).toEqual({ jsonrpc: "2.0", id: 2, result: {} });
 
     const { app, engine, close } = linkedPair();
@@ -153,11 +153,112 @@ describe("link", () => {
     await expectError("[1, 2]\n", null, -32600);
     await expectError('{"id": 4, "method":\n', null, -32700);
     await expectError(new Uint8Array([...encoder.encode('{"id": 5, "method": "echo", "params": {"a": "'), 0xff, ...encoder.encode('"}}\n')]), null, -32700);
-    await expectError({ id: 6, method: "echo", params: [1] }, 6, -32602, "params must be an object");
-    await expectError({ id: 7, result: 1, error: { code: 1, message: "x" } }, 7, -32600);
-    const err = await expectError({ id: 8, method: "bad_input" }, 8, -32012, "missing input");
+    await expectError({ jsonrpc: "2.0", id: 6, method: "echo", params: [1] }, 6, -32602, "params must be an object");
+    await expectError({ jsonrpc: "2.0", id: 7, result: 1, error: { code: 1, message: "x" } }, 7, -32600);
+    const err = await expectError({ jsonrpc: "2.0", id: 8, method: "bad_input" }, 8, -32012, "missing input");
     expect(err.data).toEqual({ field: "inputs" });
-    await expectError({ id: 9, method: "broken" }, 9, -32603, "internal error: Error: boom");
+    await expectError({ jsonrpc: "2.0", id: 9, method: "broken" }, 9, -32603, "internal error: Error: boom");
+  });
+
+  test("envelope_must_be_jsonrpc_2", async () => {
+    const note = { jsonrpc: "2.0", method: "m" };
+    expect(classify({ jsonrpc: "2.0", id: 1, method: "m" })).toBe("request");
+    expect(classify(note)).toBe("notification");
+    expect(classify({ jsonrpc: "2.0", id: 1, result: null })).toBe("result");
+    expect(classify({ jsonrpc: "2.0", id: null, error: { code: -1, message: "x" } })).toBe("error");
+    for (const bad of [
+      { id: 1, method: "m" }, // jsonrpc missing
+      { jsonrpc: "1.0", id: 1, method: "m" },
+      { jsonrpc: 2, id: 1, method: "m" },
+      { jsonrpc: "2.0 ", id: 1, method: "m" },
+      { method: "m" },
+      { id: 1, result: null },
+      { id: 1, error: { code: -1, message: "x" } },
+      { jsonrpc: "2.0", id: 1, method: "m", result: null }, // method mixed with a response field
+      { jsonrpc: "2.0", id: 1, method: "m", error: { code: -1, message: "x" } },
+      { ...note, result: 1 },
+      { ...note, error: null },
+      { jsonrpc: "2.0", id: 1, result: null, error: { code: -1, message: "x" } },
+    ]) {
+      expect(classify(bad)).toBe("invalid");
+    }
+
+    // on the wire: answered with -32600 (the id when it has one), never dispatched, and the link keeps serving
+    const peer = new Peer();
+    const link = peer.link();
+    const seen: string[] = [];
+    link.handle("echo", async (p) => (seen.push("echo"), p));
+    link.onNotification("note", () => seen.push("note"));
+    const call = link.request("m", {});
+    const req = await peer.recv();
+    for (const [msg, id] of [
+      [{ id: 11, method: "echo", params: {} }, 11],
+      [{ jsonrpc: "1.0", id: 12, method: "echo", params: {} }, 12],
+      [{ jsonrpc: "2.0", id: 13, method: "echo", params: {}, result: 1 }, 13],
+      [{ jsonrpc: "2.0", method: "note", params: {}, error: { code: -1, message: "x" } }, null],
+      [{ id: req.id, result: "no jsonrpc" }, req.id],
+    ] as const) {
+      peer.send(msg);
+      const reply = await peer.recv();
+      expect([reply.id, reply.error?.code]).toEqual([id, -32600]);
+    }
+    expect(seen).toEqual([]);
+    peer.send({ jsonrpc: "2.0", id: req.id, result: "good" }); // the pending request was not answered by the bad one
+    expect(await call).toBe("good");
+  });
+
+  test("oversized_messages_fail_locally", async () => {
+    const peer = new Peer();
+    const link = peer.link({ maxSendBytes: 1024 });
+    link.handle("big", async () => "x".repeat(2000));
+    link.handle("bigerror", async () => {
+      throw new RpcError(-32001, "too big", { blob: "x".repeat(2000) });
+    });
+    link.handle("echo", echo);
+
+    // a request: rejected here, with a structured error, and nothing is written. Bytes count, not UTF-16 units.
+    const err = await rejection(link.request("m", { s: "😀".repeat(300) })); // about 620 units, 1200 bytes
+    expect(err).toBeInstanceOf(RpcError);
+    expect(err.code).toBe(-32600);
+    expect(err.data).toMatchObject({ kind: MESSAGE_TOO_LARGE, method: "m", limit: 1024 });
+    expect((err.data as { bytes: number }).bytes).toBeGreaterThan(1200);
+    expect(await peer.silent()).toBe(true);
+    const small = link.request("m", { s: "😀".repeat(100) }); // 400 bytes: fits, and takes id 1: the refusal used none
+    const req = await peer.recv();
+    expect(req.id).toBe(1);
+    peer.send({ jsonrpc: "2.0", id: req.id, result: "ok" });
+    expect(await small).toBe("ok");
+
+    // a reply: the peer's request gets a small error with its id, not silence
+    peer.send({ jsonrpc: "2.0", id: 5, method: "big", params: {} });
+    const reply = await peer.recv();
+    expect(reply).toMatchObject({ jsonrpc: "2.0", id: 5, error: { code: -32603, data: { kind: MESSAGE_TOO_LARGE, limit: 1024 } } });
+    expect(reply.error.data.bytes).toBeGreaterThan(2000);
+    expect(JSON.stringify(reply).length).toBeLessThan(1024);
+    peer.send({ jsonrpc: "2.0", id: 6, method: "bigerror", params: {} });
+    expect(await peer.recv()).toMatchObject({ id: 6, error: { code: -32603, data: { kind: MESSAGE_TOO_LARGE } } });
+    peer.send({ jsonrpc: "2.0", id: 7, method: "echo", params: { still: "serving" } });
+    expect((await peer.recv()).result).toEqual({ still: "serving" });
+
+    // a notification: dropped and logged, nobody waits for it
+    const stderr = captureStderr();
+    try {
+      link.notify("note", { s: "x".repeat(2000) });
+    } finally {
+      stderr.restore();
+    }
+    expect(stderr.lines.join("")).toContain("notification note dropped");
+    expect(await peer.silent()).toBe(true);
+    link.notify("note", { s: "short" });
+    expect(await peer.recv()).toEqual({ jsonrpc: "2.0", method: "note", params: { s: "short" } });
+  });
+
+  test("the_send_limit_defaults_to_the_read_limit", async () => {
+    const peer = new Peer();
+    const link = peer.link();
+    const err = await rejection(link.request("m", { s: "x".repeat(MAX_LINE_BYTES) }));
+    expect([err.code, (err.data as { limit: number }).limit]).toEqual([-32600, MAX_LINE_BYTES]);
+    expect(await peer.silent()).toBe(true);
   });
 
   test("notification_no_reply", async () => {
@@ -262,7 +363,7 @@ describe("link", () => {
     const peer = new Peer();
     const link = peer.link({ maxLineBytes: 1024 });
     link.handle("echo", echo);
-    peer.send(`{"id": 1, "method": "echo", "params": {"s": "${"x".repeat(2000)}"}}\n`);
+    peer.send(`{"jsonrpc": "2.0", "id": 1, "method": "echo", "params": {"s": "${"x".repeat(2000)}"}}\n`);
     expect(await peer.recv()).toEqual({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "line too long (over 1024 bytes)" } });
     peer.send({ jsonrpc: "2.0", id: 2, method: "echo", params: { ok: true } });
     expect(await peer.recv()).toEqual({ jsonrpc: "2.0", id: 2, result: { ok: true } });
@@ -310,7 +411,7 @@ describe("link", () => {
     await Bun.sleep(5);
     peer.send(bytes.slice(cut));
     expect(await peer.recv()).toEqual({ jsonrpc: "2.0", id: 1, result: { s: "é😀" } });
-    peer.send(`${JSON.stringify({ id: 2, method: "echo", params: { n: 2 } })}\n${JSON.stringify({ id: 3, method: "echo", params: { n: 3 } })}\n`);
+    peer.send(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "echo", params: { n: 2 } })}\n${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "echo", params: { n: 3 } })}\n`);
     expect((await peer.recv()).id).toBe(2);
     expect((await peer.recv()).id).toBe(3);
   });

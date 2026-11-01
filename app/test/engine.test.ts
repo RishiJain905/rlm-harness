@@ -3,10 +3,21 @@
 // because a first `uv run` may fetch Python). RLMH_HOME is a temp folder throughout.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { EngineNotFound, ProtocolMismatch, fetchInfo, findEngine, splitCommand, startEngine, type EngineProcess } from "../src/engine.ts";
+import {
+  EngineNotFound,
+  ProtocolMismatch,
+  STDERR_LINE_MAX,
+  fetchInfo,
+  findEngine,
+  readLines,
+  splitCommand,
+  startEngine,
+  stripKeys,
+  type EngineProcess,
+} from "../src/engine.ts";
 import { RpcError } from "../src/link.ts";
 import type { ModelCompleteParams, ModelCompleteResult } from "../src/protocol.ts";
 import { APP_VERSION } from "../src/version.ts";
@@ -130,6 +141,9 @@ test("child_env", () => {
       OPENAI_API_KEY: "sk-FAKE",
       github_token: "FAKE",
       MY_SECRET: "FAKE",
+      OPENAI_CUSTOM_HEADERS: "Authorization: Bearer FAKE",
+      ANTHROPIC_CUSTOM_HEADERS: "x-api-key: FAKE",
+      x_extra_headers: "FAKE",
       RLMH_HOME: "/elsewhere",
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "http.extraHeader",
@@ -138,13 +152,180 @@ test("child_env", () => {
     },
   });
   // git's env config goes as a whole (D-62): a partial set makes git refuse to run
-  for (const name of ["OPENAI_API_KEY", "github_token", "MY_SECRET", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"])
+  for (const name of [
+    "OPENAI_API_KEY",
+    "github_token",
+    "MY_SECRET",
+    "OPENAI_CUSTOM_HEADERS", // the SDKs merge these into every request, so they can hold an authorization line
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "x_extra_headers",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_VALUE_0",
+  ])
     expect(cmd.env[name]).toBeUndefined();
   expect(cmd.env.GIT_CONFIG_GLOBAL).toBe("/etc/gitconfig-test");
   expect(cmd.env.PATH).toBe("/usr/bin");
   expect(cmd.env.RLMH_HOME).toBe(home);
   expect(cmd.env.PYTHONUTF8).toBe("1");
   expect(cmd.env.PYTHONUNBUFFERED).toBe("1");
+});
+
+test("strip_keys_header_variables", () => {
+  const out = stripKeys({ OPENAI_CUSTOM_HEADERS: "a", ANTHROPIC_CUSTOM_HEADERS: "b", custom_headers: "c", HEADER: "kept", PATH: "/bin", UNSET: undefined });
+  expect(out).toEqual({ HEADER: "kept", PATH: "/bin" });
+});
+
+/** A fake engine that answers every request with the names of the variables in its environment. */
+function envEngine(): string {
+  return [
+    "const NL = String.fromCharCode(10); const decoder = new TextDecoder(); let buf = '';",
+    "for await (const chunk of Bun.stdin.stream()) {",
+    "  buf += decoder.decode(chunk, { stream: true }); let nl;",
+    "  while ((nl = buf.indexOf(NL)) >= 0) {",
+    "    const msg = JSON.parse(buf.slice(0, nl)); buf = buf.slice(nl + 1);",
+    "    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: Object.keys(process.env) }) + NL);",
+    "  }",
+    "}",
+  ].join(" ");
+}
+
+test(
+  "start_engine_strips_header_variables_from_the_process_env",
+  async () => {
+    // the second hop: startEngine merges process.env under cmd.env and strips again, so nothing a caller forgot gets through
+    const planted = { OPENAI_CUSTOM_HEADERS: "Authorization: Bearer FAKE", ANTHROPIC_CUSTOM_HEADERS: "x-api-key: FAKE", RLMH_TEST_PLAIN: "kept" };
+    Object.assign(process.env, planted);
+    try {
+      const engine = startEngine({ cmd: [process.execPath, "-e", envEngine()], cwd: process.cwd(), env: { RLMH_TEST_EXTRA_HEADERS: "FAKE" } });
+      const names = await engine.link.request<string[]>("env", {});
+      engine.kill();
+      await within(engine.exited, 10_000);
+      expect(names).toContain("RLMH_TEST_PLAIN");
+      for (const name of ["OPENAI_CUSTOM_HEADERS", "ANTHROPIC_CUSTOM_HEADERS", "RLMH_TEST_EXTRA_HEADERS"]) expect(names).not.toContain(name);
+    } finally {
+      for (const name of Object.keys(planted)) delete process.env[name];
+    }
+  },
+  REAL,
+);
+
+describe("readLines", () => {
+  const encoder = new TextEncoder();
+  const streamOf = (...chunks: (string | Uint8Array)[]) =>
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (const chunk of chunks) c.enqueue(typeof chunk === "string" ? encoder.encode(chunk) : chunk);
+        c.close();
+      },
+    });
+  async function linesOf(...chunks: (string | Uint8Array)[]): Promise<string[]> {
+    const out: string[] = [];
+    await readLines(streamOf(...chunks), (l) => out.push(l));
+    return out;
+  }
+
+  test("lines_split_across_chunks_and_crlf", async () => {
+    expect(await linesOf("one\r\ntw", "o\nthr", "ee")).toEqual(["one", "two", "three"]);
+    expect(await linesOf("a\n\nb\n")).toEqual(["a", "", "b"]);
+    expect(await linesOf("")).toEqual([]);
+    const bytes = encoder.encode("café 😀\n");
+    const cut = bytes.indexOf(0xf0) + 2; // inside the emoji
+    expect(await linesOf(bytes.slice(0, cut), bytes.slice(cut))).toEqual(["café 😀"]);
+  });
+
+  test("a_line_is_held_to_its_cap", async () => {
+    // 20 MiB with no newline, in 64 KiB chunks, then a normal line: only the cap is ever kept
+    const out: string[] = [];
+    const chunk = encoder.encode("x".repeat(64 * 1024));
+    let pulled = 0;
+    const source = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulled += 1;
+        if (pulled <= 320) c.enqueue(chunk);
+        else {
+          c.enqueue(encoder.encode("\nnext line\n"));
+          c.close();
+        }
+      },
+    });
+    await readLines(source, (l) => out.push(l));
+    expect(out).toHaveLength(2);
+    expect(out[0]!.length).toBeLessThan(STDERR_LINE_MAX + 100);
+    expect(out[0]!.startsWith("x".repeat(STDERR_LINE_MAX))).toBe(true);
+    expect(out[0]).toContain(`[line cut at ${STDERR_LINE_MAX} characters]`);
+    expect(out[1]).toBe("next line");
+  });
+
+  test("a_cut_line_skips_to_its_newline_even_across_chunks", async () => {
+    const out: string[] = [];
+    await readLines(streamOf("a".repeat(30), "b".repeat(30), "tail of the long line\nkept\n"), (l) => out.push(l), 40);
+    expect(out).toEqual([`${"a".repeat(30)}${"b".repeat(10)} [line cut at 40 characters]`, "kept"]);
+    // an unterminated oversized line at EOF is cut once and not repeated
+    const eof: string[] = [];
+    await readLines(streamOf("c".repeat(100)), (l) => eof.push(l), 40);
+    expect(eof).toEqual([`${"c".repeat(40)} [line cut at 40 characters]`]);
+  });
+
+  test("a_cut_never_leaves_half_a_surrogate_pair", async () => {
+    const out: string[] = [];
+    await readLines(streamOf("😀".repeat(10)), (l) => out.push(l), 5); // 5 units: two emoji and half of a third
+    expect(out).toEqual([`${"😀".repeat(2)} [line cut at 5 characters]`]);
+  });
+
+  test("a_line_of_exactly_the_cap_is_kept_whole", async () => {
+    expect(await linesOf("y".repeat(STDERR_LINE_MAX), "\n")).toEqual(["y".repeat(STDERR_LINE_MAX)]);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("forced cleanup on POSIX (process groups)", () => {
+  const alive = (pid: number): boolean => {
+    // a killed process can stay a zombie until its parent reaps it: that is dead too
+    const stat = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)]).stdout.toString().trim();
+    return stat !== "" && !stat.startsWith("Z");
+  };
+  const waitFor = async (fn: () => boolean, ms = 5000): Promise<boolean> => {
+    for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(20)) if (fn()) return true;
+    return fn();
+  };
+  async function childPid(file: string): Promise<number> {
+    expect(await waitFor(() => existsSync(file) && readFileSync(file, "utf8").endsWith("\n"))).toBe(true);
+    return Number(readFileSync(file, "utf8").trim());
+  }
+
+  test("an unresponsive launcher's child dies with it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rlmh-group-"));
+    const pidFile = join(dir, "child.pid");
+    // a launcher that ignores TERM and a closed stdin, and a child it never forwards anything to
+    const script = `trap '' TERM HUP INT; sleep 600 & echo $! > '${pidFile}'; wait`;
+    const engine = startEngine({ cmd: ["sh", "-c", script], cwd: dir, env: { PATH: process.env.PATH ?? "" } }, { killGraceMs: 200 });
+    let pid = 0;
+    try {
+      pid = await childPid(pidFile);
+      expect(alive(pid)).toBe(true);
+      engine.kill();
+      await within(engine.exited, 10_000);
+      expect(await waitFor(() => !alive(pid))).toBe(true);
+    } finally {
+      if (pid > 0 && alive(pid)) process.kill(pid, "SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("what a launcher that already exited left behind is swept", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rlmh-group-"));
+    const pidFile = join(dir, "child.pid");
+    const engine = startEngine({ cmd: ["sh", "-c", `sleep 600 & echo $! > '${pidFile}'`], cwd: dir, env: { PATH: process.env.PATH ?? "" } });
+    let pid = 0;
+    try {
+      pid = await childPid(pidFile);
+      expect(await within(engine.exited, 10_000)).toBe(0); // the launcher left at once
+      expect(await waitFor(() => !alive(pid))).toBe(true);
+    } finally {
+      if (pid > 0 && alive(pid)) process.kill(pid, "SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 /** Writes <home>/engine/<APP_VERSION>/ with a marker naming `python`, and __main__.py unless `main` is false. */

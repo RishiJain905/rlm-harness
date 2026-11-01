@@ -3,6 +3,8 @@
 // stderr and only the answer on stdout; `--json` puts the event lines on stdout and everything else
 // on stderr. Exit 0, 1 (infra_error, or the engine died), 2 (usage) or 130 (Ctrl-C) (D-50).
 
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
 import type { Bus } from "../bus.ts";
@@ -217,10 +219,23 @@ function usage(io: CliIO, text: string): number {
   return 2;
 }
 
-export async function runCommand(argv: string[], io: CliIO): Promise<number> {
+function exists(path: string, kind: "file" | "dir"): boolean {
+  try {
+    const st = statSync(path);
+    return kind === "file" ? st.isFile() : st.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+const parseRun = (argv: string[]) => parseArgs({ args: argv, options: RUN_OPTIONS, strict: true, allowPositionals: false });
+type RunValues = ReturnType<typeof parseRun>["values"];
+
+/** Everything `rlmh run` can check before an engine exists: flags, the input files or repo folder, settings and models. */
+function prepareRun(argv: string[], io: CliIO): { values: RunValues; request: StartRun; settings: Settings } | number {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, options: RUN_OPTIONS, strict: true, allowPositionals: false });
+    parsed = parseRun(argv);
   } catch (err) {
     return usage(io, message(err));
   }
@@ -233,6 +248,11 @@ export async function runCommand(argv: string[], io: CliIO): Promise<number> {
   if (read && (values.input ?? []).length === 0) return usage(io, "--question needs at least one --input FILE");
   if (repo && values.task === undefined) return usage(io, "--repo needs --task");
   if (repo && values.repo === undefined) return usage(io, "--task needs --repo DIR");
+  // the engine checks these too (-32012); said here, they come before any setup or engine start
+  for (const input of values.input ?? []) {
+    if (!exists(resolve(input), "file")) return usage(io, `no such input file: ${resolve(input)}`);
+  }
+  if (values.repo !== undefined && !exists(resolve(values.repo), "dir")) return usage(io, `the repo path is not a folder: ${resolve(values.repo)}`);
 
   let settings: Settings;
   try {
@@ -260,6 +280,19 @@ export async function runCommand(argv: string[], io: CliIO): Promise<number> {
     if (err instanceof UsageError) return usage(io, err.message);
     throw err;
   }
+  return { values, request, settings };
+}
+
+/** The exit code when `rlmh run` would be refused before it starts an engine, else null. Prints why. */
+export function preflightRun(argv: string[], io: CliIO): number | null {
+  const prepared = prepareRun(argv, io);
+  return typeof prepared === "number" ? prepared : null;
+}
+
+export async function runCommand(argv: string[], io: CliIO): Promise<number> {
+  const prepared = prepareRun(argv, io);
+  if (typeof prepared === "number") return prepared;
+  const { values, request } = prepared;
 
   const approvals = createTtyApprover(io);
   let session: Session;

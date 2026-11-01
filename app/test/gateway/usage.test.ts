@@ -407,18 +407,100 @@ describe("through the gateway", () => {
     expect(r.gateway.lastRootRequest("r_neverseen000")).toBeUndefined();
   });
 
-  test("the gateway keeps 20 runs: the 21st evicts the oldest", async () => {
+  const runId = (n: number): string => `r_${String(n).padStart(12, "0")}`;
+  const finish = (rg: Rig, id: string) => rg.bus.emit("engine.event", { method: "run.finished", params: { run_id: id } });
+  const gone = { root: emptyUsage(), sub: emptyUsage(), cost_usd: 0, cache_hit_rate: null };
+  const untilCount = async (cond: () => boolean): Promise<void> => {
+    const deadline = Date.now() + 3000;
+    while (!cond()) {
+      if (Date.now() > deadline) throw new Error("timed out waiting");
+      await Bun.sleep(2);
+    }
+  };
+
+  test("the gateway keeps 20 finished runs: the 21st to finish evicts the oldest", async () => {
     expect(LIMITS.RUNS_KEPT).toBe(20);
     r = await rig({ server, keys: ["openai"] });
     server.script(() => openaiStream({ text: "ok", usage: { prompt_tokens: 100, completion_tokens: 10 } }));
-    const runId = (n: number): string => `r_${String(n).padStart(12, "0")}`;
-    for (let n = 1; n <= 20; n++) await r.gateway.complete(params(ref("openai", "gpt-5"), { run_id: runId(n) }));
+    for (let n = 1; n <= 20; n++) {
+      await r.gateway.complete(params(ref("openai", "gpt-5"), { run_id: runId(n) }));
+      finish(r, runId(n));
+    }
     for (let n = 1; n <= 20; n++) expect(r.gateway.totals(runId(n)).root.input_tokens, `run ${n} with 20 runs`).toBe(100);
 
     await r.gateway.complete(params(ref("openai", "gpt-5"), { run_id: runId(21) }));
-    expect(r.gateway.totals(runId(1))).toEqual({ root: emptyUsage(), sub: emptyUsage(), cost_usd: 0, cache_hit_rate: null });
+    for (let n = 1; n <= 21; n++) expect(r.gateway.totals(runId(n)).root.input_tokens, `run ${n} while run 21 is unfinished`).toBe(100); // history counts finished runs only
+    finish(r, runId(21));
+    expect(r.gateway.totals(runId(1))).toEqual(gone);
     expect(r.gateway.lastRootRequest(runId(1))).toBeUndefined();
     for (let n = 2; n <= 21; n++) expect(r.gateway.totals(runId(n)).root.input_tokens, `run ${n} after 21 runs`).toBe(100);
     expect(r.gateway.lastRootRequest(runId(21))).toBeDefined();
+  });
+
+  test("21 or more overlapping runs: none is dropped, so each can still be cancelled and counted", async () => {
+    r = await rig({ server, keys: ["openai"], settings: { "providers.openai.max_in_flight": 40 } });
+    const model = ref("openai", "gpt-5");
+    // a run that is between turns (no call in flight, run.finished not yet sent) is as active as one mid-call
+    server.script(() => openaiStream({ text: "ok", usage: { prompt_tokens: 100, completion_tokens: 10 } }));
+    await r.gateway.complete(params(model, { run_id: "r_waiting" }));
+
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    server.requests.length = 0;
+    server.script(async () => {
+      await gate;
+      return openaiStream({ text: "ok", usage: { prompt_tokens: 100, completion_tokens: 10 } });
+    });
+    const N = 25;
+    const calls = Array.from({ length: N }, (_, i) => r!.gateway.complete(params(model, { run_id: runId(i + 1) })).then((res) => res, (err) => err));
+    await untilCount(() => server.requests.length === N); // all 25 are open at once
+    r.gateway.cancelRun(runId(1)); // the oldest: the first a count-only history would have dropped
+    release();
+    const results = await Promise.all(calls);
+
+    expect(results[0].data).toMatchObject({ kind: "cancelled" });
+    for (const res of results.slice(1)) expect(res.text).toBe("ok");
+    for (let n = 2; n <= N; n++) {
+      expect(r.gateway.totals(runId(n)).root.input_tokens, `run ${n}`).toBe(100);
+      expect(r.gateway.lastRootRequest(runId(n)), `run ${n}`).toBeDefined();
+    }
+    expect(r.gateway.totals("r_waiting").root.input_tokens).toBe(100);
+    expect(r.gateway.lastRootRequest("r_waiting")).toBeDefined();
+
+    // once they finish they are history, and the limit applies: the 20 newest by last use stay
+    for (const id of ["r_waiting", ...Array.from({ length: N }, (_, i) => runId(i + 1))]) finish(r, id);
+    for (const id of ["r_waiting", ...Array.from({ length: 5 }, (_, i) => runId(i + 1))]) expect(r.gateway.totals(id), id).toEqual(gone);
+    for (let n = 6; n <= N; n++) expect(r.gateway.totals(runId(n)).root.input_tokens, `run ${n}`).toBe(100);
+  });
+
+  test("a finished run with a call still open is kept until that call ends", async () => {
+    r = await rig({ server, keys: ["openai"] });
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    server.script(async () => {
+      await gate;
+      return openaiStream({ text: "ok", usage: { prompt_tokens: 100, completion_tokens: 10 } });
+    });
+    const open = r.gateway.complete(params(ref("openai", "gpt-5"), { run_id: runId(1) }));
+    await untilCount(() => server.requests.length === 1);
+    server.script(() => openaiStream({ text: "ok", usage: { prompt_tokens: 100, completion_tokens: 10 } }));
+    finish(r, runId(1));
+    for (let n = 2; n <= 22; n++) {
+      await r.gateway.complete(params(ref("openai", "gpt-5"), { run_id: runId(n) }));
+      finish(r, runId(n));
+    }
+    r.gateway.cancelRun(runId(1)); // still reachable: 21 later runs finished, and its call was open throughout
+    expect(await caught(open)).toMatchObject({ data: { kind: "cancelled" } });
+    release();
+  });
+
+  test("an engine that exited ends every run: they become history", async () => {
+    r = await rig({ server, keys: ["openai"] });
+    server.script(() => openaiStream({ text: "ok", usage: { prompt_tokens: 100, completion_tokens: 10 } }));
+    for (let n = 1; n <= 21; n++) await r.gateway.complete(params(ref("openai", "gpt-5"), { run_id: runId(n) }));
+    expect(r.gateway.totals(runId(1)).root.input_tokens).toBe(100); // none has finished
+    r.bus.emit("engine.exit", { code: 1, stderr: [] });
+    expect(r.gateway.totals(runId(1))).toEqual(gone);
+    for (let n = 2; n <= 21; n++) expect(r.gateway.totals(runId(n)).root.input_tokens, `run ${n}`).toBe(100);
   });
 });

@@ -847,3 +847,118 @@ def test_fetch_records_accumulate_in_order(tmp_path: Path, server: FetchServer) 
         (server.url("/missing"), 404, False),
         ("ftp://x/", None, False),
     ]
+
+
+# ---------------------------------------------------------------------------------------------- a fatal failure stops the batch (finding 27)
+
+
+def test_a_fatal_failure_cancels_the_rest_of_the_batch(tmp_path: Path) -> None:
+    table = {"slow": (30, "never"), "boom": (0.05, ModelError("overloaded", kind="server")), "fast": "quick"}
+    bridge, app = make(tmp_path, complete=by_prompt(table))
+    started = time.monotonic()
+    with pytest.raises(InfraError) as caught:
+        handle(bridge, batch_request(["slow", "fast", "boom", "slow"]))
+    assert time.monotonic() - started < 5  # not the 30 s the slow calls would take
+    assert caught.value.kind == "server" and (bridge.infra_kind, bridge.infra_error) == ("server", "sub-call failed: overloaded")
+    assert app.cancelled == [RUN_ID]  # the app drops the run's queued and in-flight calls at once
+    by_id = {r.subcall_id: r for r in bridge.records}
+    assert sorted(by_id) == [1, 2, 3, 4]  # every call ended with a record
+    assert (by_id[1].error, by_id[2].output, by_id[3].error, by_id[4].error) == ("cancelled", "quick", "overloaded", "cancelled")
+    assert [e["status"] for e in subcall_events(app)].count("error") == 3
+    assert app.sent("run.budget")  # the batch is over
+    assert handle(bridge, batch_request(["fast"])) == {"error": INFRA_REPLY}
+
+
+def test_a_bad_request_does_not_stop_the_batch(tmp_path: Path) -> None:
+    table = {"bad": (0.0, ModelError("too long", kind="bad_request")), "late": (0.1, "done")}
+    bridge, app = make(tmp_path, complete=by_prompt(table))
+    assert handle(bridge, batch_request(["bad", "late"])) == {"error": "sub-call failed: too long"}
+    assert app.cancelled == [] and [r.output for r in sorted(bridge.records, key=lambda r: r.subcall_id)] == [None, "done"]
+
+
+# ---------------------------------------------------------------------------------------------- prefix units (finding 33)
+
+
+def test_prefix_chars_count_utf16_code_units(tmp_path: Path) -> None:
+    """The app slices JavaScript strings: an emoji (outside the BMP) is two units there, one code point here."""
+    bridge, app = make(tmp_path)
+    seg = "\U0001f600 café \U0001d11e" * 100  # two supplementary characters per repeat
+    handle(bridge, {**batch_request(["q"]), "prefixes": [seg]})
+    (params,) = app.completes
+    content = params["messages"][0]["content"]
+    units = content.encode("utf-16-le")
+    chars = params["prefix"]["chars"]
+    assert chars == len(seg) + 200 + 2  # each supplementary character counts twice, plus the "\n\n"
+    assert units[: chars * 2].decode("utf-16-le") == seg + "\n\n"  # the JS slice ends exactly after the separator
+
+
+# ---------------------------------------------------------------------------------------------- fetch deadline and cancel (finding 12)
+
+
+class StallServer:
+    """A raw TCP server: waits `header_delay` s, sends headers and part of a body, then sends nothing more. `closed`
+    is set once the client closes or drops the connection."""
+
+    def __init__(self, header_delay: float) -> None:
+        self.header_delay = header_delay
+        self.closed = threading.Event()
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen()
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        conn, _ = self.sock.accept()
+        with conn:
+            conn.recv(65536)
+            time.sleep(self.header_delay)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 1000\r\n\r\npart")
+            conn.settimeout(30)
+            try:
+                while conn.recv(65536):
+                    pass
+            except OSError:
+                pass
+            self.closed.set()
+
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}/"
+
+    def close(self) -> None:
+        self.sock.close()
+
+
+def test_fetch_deadline_holds_after_late_headers(tmp_path: Path, server: FetchServer,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """Headers use most of the allowance, then the body stalls: the fetch ends at the deadline, not a full socket
+    timeout later."""
+    monkeypatch.setattr(bridge_module, "FETCH_TIMEOUT_S", 1.5)
+    stall = StallServer(header_delay=1.1)
+    try:
+        bridge, _ = make(tmp_path)
+        started = time.monotonic()
+        assert fetch(bridge, stall.url()) == {"error": "fetch failed: timed out after 1.5 s"}
+        assert time.monotonic() - started < 2.2  # the old per-read timeout would end it near 2.6 s
+        assert stall.closed.wait(5)
+    finally:
+        stall.close()
+
+
+def test_cancelling_a_fetch_closes_its_connection(tmp_path: Path, server: FetchServer) -> None:
+    stall = StallServer(header_delay=0.0)
+
+    async def scenario() -> None:
+        bridge, _ = make(tmp_path)
+        task = asyncio.create_task(bridge.handle({"type": "request", "id": 3, "op": "fetch", "line": 1,
+                                                 "url": stall.url()}))
+        await asyncio.sleep(0.5)  # the body is stalled now
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await asyncio.to_thread(stall.closed.wait, 3), "the server never saw the connection close"
+
+    try:
+        run(scenario(), 15)
+    finally:
+        stall.close()

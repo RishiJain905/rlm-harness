@@ -74,8 +74,17 @@ def _bridge_seconds() -> float:
         return _waiting["total"] + (time.monotonic() - _waiting["since"] if _waiting["calls"] else 0.0)
 
 
-def _send(message: dict) -> None:
+# The longest `request` line the engine reads (manager.REQUEST_LINE_LIMIT; tests/test_worker.py checks). A longer one
+# is refused here, as an error in the cell, rather than sent and dropped.
+REQUEST_MAX_BYTES = 64 * 1024 * 1024
+REQUEST_TOO_LARGE = ("the request is {size:,} bytes; one request carries at most {limit:,}. "
+                     "Send fewer or shorter prompts per call.")
+
+
+def _send(message: dict, limit: int | None = None) -> None:
     data = (json.dumps(message) + "\n").encode()
+    if limit is not None and len(data) > limit:
+        raise ValueError(REQUEST_TOO_LARGE.format(size=len(data), limit=limit))
     with hooks.ignored(), _send_lock:
         while data:
             data = data[os.write(_link["out"], data):]
@@ -112,8 +121,10 @@ def _request(op: str, **fields) -> dict:
                 _waiting["since"] = time.monotonic()
             _waiting["calls"] += 1
         try:
-            _send(message)
+            _send(message, REQUEST_MAX_BYTES)
             slot[0].wait()
+        except ValueError as exc:  # too large to send
+            slot[1] = {"error": str(exc)}
         except OSError:  # the engine is gone; the reader thread is about to end the process
             slot[1] = {"error": "the engine closed the connection"}
         finally:
@@ -377,18 +388,88 @@ def run_cell(code: str, namespace: dict) -> dict:
 # ----------------------------------------------------------------------------- the link
 
 
-def _var_info(name: str, value) -> dict:
-    try:
-        length = len(value)
-    except Exception:
-        length = None
-    try:
-        chars = min(len(repr(value)), VARS_REPR_MAX)
-    except Exception:
-        chars = 0
-    return {"name": name, "type": type(value).__name__, "len": length if isinstance(length, int) else None,
-            "chars": chars}
+# `vars` runs on the reader thread, which the audit hook never asks on and which must stay free to deliver replies,
+# so it never runs the model's code: no user __len__ or __repr__, no metaclass __name__. It measures only exact
+# built-in types and works out the repr's length piece by piece instead of building it, over at most VARS_REPR_MAX
+# items (each adds at least one character, so running out means the repr is over the cap too). Anything else shows
+# its type, with `len` null and `chars` 0 (not measured).
+_sized_types = (str, bytes, bytearray, list, tuple, dict, set, frozenset)
+_leaf_types = (type(None), bool, float, complex, type(_diag), type(len))  # their repr runs no user code
+_INT_REPR_BITS = 13_000  # repr(int) refuses over 4,300 digits; past this the length is estimated
+_type_name = type.__dict__["__name__"].__get__  # the class's own name, never a metaclass property
 
+
+class _Unmeasured(Exception):
+    """A value whose repr would run the model's code."""
+
+
+class _OverCap(Exception):
+    """A repr surely longer than VARS_REPR_MAX."""
+
+
+def _repr_chars(value, budget: list, path: set) -> int:
+    """len(repr(value)) for exact built-in types. `budget` is [items left, characters left], and each value takes
+    its own characters from it (a container: its brackets and separators); `path` holds the ids of the containers
+    being walked, which repr shows as [...]."""
+    budget[0] -= 1
+    if budget[0] < 0:
+        raise _OverCap
+    kind = type(value)
+    if kind is str or kind is bytes or kind is bytearray:
+        if len(value) >= budget[1]:  # the repr adds quotes at least
+            raise _OverCap
+        n = len(repr(value))
+    elif kind is int:
+        bits = value.bit_length()
+        n = len(repr(value)) if bits <= _INT_REPR_BITS else int(bits * 0.30103) + 1 + (value < 0)
+    elif kind in _leaf_types:
+        n = len(repr(value))
+    elif kind in (list, tuple, dict, set, frozenset):
+        if id(value) in path:
+            n = 5  # [...], (...) or {...}
+        else:
+            items = list(value.items()) if kind is dict else list(value)  # one C-level copy: no user code
+            own = 2 * max(len(items) - 1, 0) + 2  # ", " between items, and the brackets
+            if kind is dict:
+                own += 2 * len(items)  # ": "
+            elif kind is tuple:
+                own += len(items) == 1  # (x,)
+            elif kind is set:
+                own += 0 if items else 3  # set()
+            elif kind is frozenset:
+                own += 11 if items else 9  # frozenset({...}), frozenset()
+            budget[1] -= own  # the items take their own share below
+            if budget[1] < 0:
+                raise _OverCap
+            n = own
+            path.add(id(value))
+            try:
+                for item in items:
+                    if kind is dict:
+                        n += _repr_chars(item[0], budget, path) + _repr_chars(item[1], budget, path)
+                    else:
+                        n += _repr_chars(item, budget, path)
+            finally:
+                path.discard(id(value))
+            return n
+    else:
+        raise _Unmeasured
+    budget[1] -= n
+    if budget[1] < 0:
+        raise _OverCap
+    return n
+
+
+def _var_info(name: str, value) -> dict:
+    kind = type(value)
+    length = len(value) if kind in _sized_types else None  # exact built-ins: len runs no user code
+    try:
+        chars = _repr_chars(value, [VARS_REPR_MAX, VARS_REPR_MAX], set())
+    except _OverCap:
+        chars = VARS_REPR_MAX
+    except (_Unmeasured, RecursionError, RuntimeError):  # RuntimeError: the cell changed a container mid-walk
+        chars = 0
+    return {"name": name, "type": _type_name(kind), "len": length, "chars": min(chars, VARS_REPR_MAX)}
 
 def _vars() -> list:
     """The user's globals: not the API, the tools, or names starting with an underscore."""
@@ -400,8 +481,8 @@ def _vars() -> list:
             continue
     else:
         return []
-    return [_var_info(name, value) for name, value in items
-            if isinstance(name, str) and not name.startswith("_") and name not in HIDDEN_NAMES]
+    return [_var_info(name, value) for name, value in items  # exact str names: no user __eq__ or startswith
+            if type(name) is str and not name.startswith("_") and name not in HIDDEN_NAMES]
 
 
 def _read_engine(proto_in) -> None:

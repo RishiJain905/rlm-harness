@@ -1,10 +1,12 @@
 // KV cache: none
 // `rlmh batch TASKS.jsonl` (architecture §7.8, D-26, D-28, D-40): every task is checked before the
 // engine starts, then a pool of `--jobs` workers shares one Session. Nobody is asked anything
-// (interactive: false, D-15). Exit 0 (no infra_error), 1 (some run had one), 2 (usage), 130 (Ctrl-C).
+// (interactive: false, D-15). Repo tasks edit the folder itself, so two that name the same folder (or
+// one inside the other) never run at once; the pool runs something else meanwhile.
+// Exit 0 (no infra_error), 1 (some run had one), 2 (usage), 130 (Ctrl-C).
 
-import { mkdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, extname, resolve } from "node:path";
+import { mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, extname, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { buildRunParams, Session, UsageError, type StartRun } from "../session.ts";
 import { loadSettings, type Settings } from "../settings.ts";
@@ -31,6 +33,8 @@ export const BATCH_USAGE = `Usage: rlmh batch TASKS.jsonl [--jobs N] [--out DIR]
 interface Task {
   id: string;
   run: Pick<StartRun, "mode" | "question" | "inputs" | "task" | "repoPath" | "testHint">;
+  /** Repo tasks: the folder the run edits, canonical (see canonicalRoot). */
+  root?: string;
 }
 
 interface Outcome {
@@ -54,6 +58,24 @@ function isFile(p: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** A folder in one spelling: symlinks followed and, where the system knows it, the on-disk case. */
+export function canonicalRoot(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/** True when two canonical folders are the same, or one holds the other: runs in them would see each other's edits. */
+export function rootsOverlap(a: string, b: string): boolean {
+  const fold = (p: string) => (process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p);
+  const within = (p: string, dir: string) => p.startsWith(dir.endsWith(sep) ? dir : dir + sep);
+  const x = fold(a);
+  const y = fold(b);
+  return x === y || within(x, y) || within(y, x);
 }
 
 function isDir(p: string): boolean {
@@ -116,7 +138,11 @@ export function checkTasks(text: string, file: string): { tasks: Task[]; problem
       if (o.test_hint !== undefined && typeof o.test_hint !== "string") return void bad('"test_hint" must be a string');
       const repoPath = resolve(base, o.repo);
       if (!isDir(repoPath)) return void bad(`repo folder not found: ${repoPath}`);
-      tasks.push({ id, run: { mode: "repo", task: o.task, repoPath, ...(typeof o.test_hint === "string" ? { testHint: o.test_hint } : {}) } });
+      tasks.push({
+        id,
+        run: { mode: "repo", task: o.task, repoPath, ...(typeof o.test_hint === "string" ? { testHint: o.test_hint } : {}) },
+        root: canonicalRoot(repoPath),
+      });
     }
   });
   if (tasks.length === 0 && problems.length === 0) problems.push(`${file}: no tasks`);
@@ -136,10 +162,23 @@ function outcomeLine(o: Outcome): string {
   return `${o.id}  ${o.status}  ${o.turns}  ${o.subcalls}  $${o.cost.toFixed(4)}  ${o.seconds.toFixed(1)}\n`;
 }
 
-export async function batchCommand(argv: string[], io: CliIO): Promise<number> {
+const parseBatch = (argv: string[]) => parseArgs({ args: argv, options: BATCH_OPTIONS, strict: true, allowPositionals: true });
+type BatchValues = ReturnType<typeof parseBatch>["values"];
+
+interface Prepared {
+  values: BatchValues;
+  tasks: Task[];
+  jobs: number;
+  shared: Omit<StartRun, "mode">;
+  logDir: string | undefined;
+  warnings: string[];
+}
+
+/** Everything `rlmh batch` can check before an engine exists: the flags, the tasks file and every task in it, settings and models. Writes only errors. */
+function prepareBatch(argv: string[], io: CliIO): Prepared | number {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, options: BATCH_OPTIONS, strict: true, allowPositionals: true });
+    parsed = parseBatch(argv);
   } catch (err) {
     return usage(io, message(err));
   }
@@ -187,12 +226,27 @@ export async function batchCommand(argv: string[], io: CliIO): Promise<number> {
     if (err instanceof UsageError) return usage(io, err.message);
     throw err;
   }
+  const warnings: string[] = [];
   if ((shared.permissionMode ?? settings.permissions.mode) === "default" && tasks.some((t) => t.run.mode === "repo")) {
-    io.stderr.write(
+    warnings.push(
       "rlmh batch: warning: the permission mode is default and no one can answer a prompt, so every edit will be denied; " +
         "pass --permission-mode accept-edits to let workspace edits through\n",
     );
   }
+  return { values, tasks, jobs, shared, logDir, warnings };
+}
+
+/** The exit code when `rlmh batch` would be refused before it starts an engine, else null. Prints why. */
+export function preflightBatch(argv: string[], io: CliIO): number | null {
+  const prepared = prepareBatch(argv, io);
+  return typeof prepared === "number" ? prepared : null;
+}
+
+export async function batchCommand(argv: string[], io: CliIO): Promise<number> {
+  const prepared = prepareBatch(argv, io);
+  if (typeof prepared === "number") return prepared;
+  const { values, tasks, jobs, shared, logDir, warnings } = prepared;
+  for (const w of warnings) io.stderr.write(w);
   if (logDir !== undefined) mkdirSync(logDir, { recursive: true });
 
   // -- the runs --
@@ -206,7 +260,6 @@ export async function batchCommand(argv: string[], io: CliIO): Promise<number> {
   const detach = values.json ? attachJson(session.bus, io.stdout) : attachPlain(session.bus, io.stderr);
   const running = new Set<string>();
   const outcomes: Outcome[] = [];
-  let next = 0;
   let stopping = false;
   let interrupts = 0;
   let abort!: () => void;
@@ -250,8 +303,33 @@ export async function batchCommand(argv: string[], io: CliIO): Promise<number> {
     const status = f.infra_error !== null ? `infra:${f.infra_kind ?? "error"}` : f.submitted ? "submitted" : "no-answer";
     record({ id: task.id, status, turns: f.turns, subcalls: f.subcalls, cost: f.cost_usd, seconds: f.wall_s, failed: f.infra_error !== null });
   };
+  // the queue, in file order; a repo task waits while another one holds an overlapping folder, and the pool takes the next that can go
+  const queue = [...tasks];
+  const held: string[] = [];
+  const release: (() => void)[] = [];
+  const takeNext = (): Task | undefined => {
+    const at = queue.findIndex((t) => t.root === undefined || !held.some((h) => rootsOverlap(h, t.root!)));
+    if (at < 0) return undefined;
+    const [task] = queue.splice(at, 1);
+    if (task!.root !== undefined) held.push(task!.root);
+    return task;
+  };
   const worker = async (): Promise<void> => {
-    while (!stopping && next < tasks.length) await runOne(tasks[next++]!);
+    while (!stopping && queue.length > 0) {
+      const task = takeNext();
+      if (task === undefined) {
+        // every waiting task is behind a running one: sleep until a run ends
+        await new Promise<void>((resolve) => release.push(resolve));
+        continue;
+      }
+      try {
+        await runOne(task);
+      } finally {
+        if (task.root !== undefined) held.splice(held.indexOf(task.root), 1);
+        for (const wake of release.splice(0)) wake();
+      }
+    }
+    for (const wake of release.splice(0)) wake(); // leaving (stopped, or nothing left): let a sleeping worker see that too
   };
 
   try {

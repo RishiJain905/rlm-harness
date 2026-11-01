@@ -43,7 +43,7 @@ flowchart LR
 - **One engine process per app.** It is a child of the app, and it holds every run the app starts: one interactive run at a time, or N with `rlmh batch --jobs N`. Its stdout carries only protocol, and its logs go to stderr. When its stdin closes, it cancels every run, kills the workers and exits.
 - **One worker process per run.** It is a child of the engine, started fresh for each run and again after each timeout or crash. It is launched as `python -I -B -X utf8 <engine dir>/rlm_engine/worker/worker.py` (D-01, D-42). It speaks JSON lines on its own stdin and stdout, and puts its diagnostics on stderr, which the engine copies to its own stderr.
 - **Environment.**
-  - The app starts the engine with its own environment, minus key-like variables (names matching `KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH`, any case) and git's whole `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (D-62), plus `RLMH_HOME=<home>`, `PYTHONUTF8=1` and `PYTHONUNBUFFERED=1`. Variables such as `SYSTEMROOT` stay, because Python on Windows needs them.
+  - The app starts the engine with its own environment, minus key-like variables (names matching `KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|HEADERS`, any case; `HEADERS` since D-133) and git's whole `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (D-62), plus `RLMH_HOME=<home>`, `PYTHONUTF8=1` and `PYTHONUNBUFFERED=1`. Variables such as `SYSTEMROOT` stay, because Python on Windows needs them.
   - The engine learns its home only from `RLMH_HOME` (D-49).
   - It strips key-like variables and git's env config again for the worker, and sets `TMPDIR`, `TEMP` and `TMP` to the run's scratch folder (D-29, D-62).
 
@@ -137,7 +137,8 @@ rlm-harness/
 - **Concurrency.** Both sides handle requests concurrently. A slow `model.complete` never blocks a `run.cancel`.
 - **Engine stdin** is read on a thread that hands each line to the asyncio loop, because asyncio pipe reading isn't reliable on Windows (D-30).
 
-- **Line limit.** A line over `MAX_LINE_BYTES` (32 MiB) is answered with -32600, `id: null`, and the link stays open.
+- **Line limit.** A line over `MAX_LINE_BYTES` (32 MiB) is answered with -32600, `id: null`, and the link stays open. The limit binds the sender too (D-136): a request too long to send fails its caller locally with -32600 and `data.kind: "message_too_large"` and is never written, an answer too long becomes a -32603 error with the request's id, and a notification too long is dropped and logged.
+- **Shape.** Every message carries `jsonrpc: "2.0"`; one without it, or with `method` and also `result` or `error`, is invalid and never dispatched or settled (D-136).
 
 **Error codes.** `link.py` exports these names as constants, and `protocol.ts` as the `ErrorCode` object:
 
@@ -174,7 +175,7 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 | `engine.info` | `{}` | `{version, protocol, python, contract, contract_hash, training_hash, profiles: [{name, source: "builtin"\|"user", prompt_hash, profile_hash}]}`. `contract*` and `profiles` were `null` and `[]` in step 2; since step 3 `contract` is `"v4"` and `profiles` lists the built-ins, then user profiles, each sorted by name | |
 | `run.start` | the run.start table below | `{run_id, log_path}`, returned once the worker is ready and before the first root call. `run_id` is `"r_"` plus 12 lowercase hex characters (D-38) | -32011, -32012 |
 | `run.cancel` | `{run_id}` | `{}`. The run finishes with `infra_error = "cancelled"` and `infra_kind = "cancelled"` | -32010 |
-| `run.vars` | `{run_id}` | `{vars: [{name, type, len: int\|null, chars: int}]}`: user-made globals only, with `chars = len(repr(v))` capped at 10⁶ | -32010 |
+| `run.vars` | `{run_id}` | `{vars: [{name, type, len: int\|null, chars: int}]}`: user-made globals only, with `chars = len(repr(v))` capped at 10⁶, measured only for exact built-in types without calling any of the model's code; anything else is `len: null, chars: 0` (D-140) | -32010 |
 | `debug.roundtrip` | `{count}` | `{texts: string[]}`. The engine sends `count` concurrent `model.complete` requests (`run_id: "debug"`, `role: "root"`, messages `[{role: "user", content: "ping <i>"}]`) and returns the answers in order. Registered only when `RLMH_DEBUG=1`; it exists for the link tests (step 2) | |
 
 **`run.start` params:**
@@ -204,7 +205,7 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 | `approval.request` | `{run_id, kind: "write"\|"shell"\|"network", detail, turn, inside_workspace}` | `{allow: bool, remember_for_run: bool}` |
 
 - **`thinking` is resolved by the engine:** the ref's value, else the profile's `subcall_thinking` for sub-calls, else `"off"` (D-08).
-- **A sub-call's `messages`** is exactly `[{role: "user", content: prompt}]`, with `tools: []`, as in training (`client.subcaller`). Under a profile with `cache_api` (the default profile, D-119) a sub-call may carry a stable prefix: `content` is `prefix + "\n\n" + prompt`, still one string (D-04), and the params gain `prefix: {chars, key}`, where `chars` is the prefix's length with the separator and `key` the first 16 hex characters of its sha256, the same in every run. The gateway marks it on marker-based providers and routes by it (§7.3).
+- **A sub-call's `messages`** is exactly `[{role: "user", content: prompt}]`, with `tools: []`, as in training (`client.subcaller`). Under a profile with `cache_api` (the default profile, D-119) a sub-call may carry a stable prefix: `content` is `prefix + "\n\n" + prompt`, still one string (D-04), and the params gain `prefix: {chars, key}`, where `chars` is the prefix's length with the separator in UTF-16 code units (what JavaScript slices; the bridge converts from Python's code points, D-135) and `key` the first 16 hex characters of its sha256, the same in every run. The gateway marks it on marker-based providers and routes by it (§7.3).
 - **A root call's `tools`** is `[PYTHON_TOOL]` in native format and `[]` in fenced format.
 
 ### 5.3 Events: engine → app notifications
@@ -219,7 +220,7 @@ Every event carries `run_id`. Turns are numbered from 1. `tag` is `null` when `r
 | `run.subcall` | `subcall_id, origin, batch, prompt_chars, status: "sent"\|"done"\|"error"\|"rejected", error, seconds` | sent by the bridge at `sent` and again at the end. A budget or oversize refusal is one `rejected` event, with `subcall_id: null` and `prompt_chars` set to the longest prompt |
 | `run.permission` | `turn, kind, detail, allowed, asked, remembered` | sent by `Permissions` for each decision on a guarded action, except writes inside the scratch folder; at most 200 per run |
 | `run.budget` | `turns_left, subcalls_left` | sent by the loop after each turn and by the bridge after each batch |
-| `run.finished` | `tag, answer, submitted, answer_valid, turns, subcalls, usage: {root: Usage, sub: Usage}, cost_usd, infra_error, infra_kind, wall_s, log_path` | once, after the run-log line is written |
+| `run.finished` | `tag, answer, submitted, answer_valid, turns, subcalls, usage: {root: Usage, sub: Usage}, cost_usd, infra_error, infra_kind, wall_s, log_path` | once, after the run-log line is written; when that write fails it is still sent, with `infra_kind` `runlog` (D-137) |
 | `model.cancel` | (only `run_id`) | at the end of every run, before `run.finished` (D-84); the gateway aborts any calls still in flight |
 
 ### 5.4 One run, in order
@@ -293,6 +294,8 @@ One JSON object per line. The worker keeps private dups of its original stdin an
 - **Ids.** Cell ids and request ids are separate counters, and each side keys them by `type`.
 - **`line`** is the line of the innermost `<repl>` frame on the calling thread.
 - **Time.** Time spent waiting on a `request` counts as blocked, not compute.
+- **Line limits (D-141).** A `request` line may be up to 64 MiB (`REQUEST_LINE_LIMIT`), every other line 4 MiB. The worker refuses a request over 64 MiB itself (the cell gets a `RuntimeError`); an over-long one that still arrives gets a `reply` with `error`, never silence.
+- **Ownership of processes (D-142).** On Windows the worker runs in a job object that kills everything in it when it closes or `kill_tree()` ends it; each process is started suspended and put in the job before it runs, and `taskkill /T` is the fallback when no job can be made. On POSIX each `shell()` process group is listed in `<scratch>/shell-groups`, and `kill_tree()` kills every group listed there too, after a timeout, a crash or a close.
 
 ### 6.2 The python tool (`callformat.PYTHON_TOOL`)
 
@@ -594,8 +597,8 @@ class Permissions:
 # engine/rlm_engine/workspace.py
 @dataclass(frozen=True) class ShellSpec: kind: str; name: str; argv: list[str]   # ("sh", "sh", ["sh","-c"]) …
 def find_shell() -> ShellSpec            # POSIX: sh. Windows: Git Bash if found, else PowerShell (4a)
-def snapshot(repo: Path, scratch: Path) -> str | None   # tree sha through a temp index; None outside git
-def diff(repo: Path, base_tree: str, scratch: Path) -> str  # the same unified diff tools.diff() returns
+def snapshot(repo: Path, scratch: Path, *, control: GitControl | None = None) -> str | None   # tree sha through a temp index; None outside git
+def diff(repo: Path, base_tree: str, scratch: Path, *, control: GitControl | None = None) -> str  # the same unified diff tools.diff() returns
 def fingerprint(repo: Path) -> str       # training editbox.fingerprint
 def remove_tree(path: Path) -> None      # training editbox.remove_tree: clears read-only bits (git objects on Windows)
 ```
@@ -604,7 +607,7 @@ Built at step 4 (2026-10-31). What step 6 can rely on, beyond the signatures:
 
 - **`Worker`** also has `cells`, `start_retries`, `python_version`, `stderr_lines` (the last 50 worker stderr lines), `blocked_seconds()` and `infra_error` (D-68). `run_cell` raises only `InfraError` and `CancelledError`. A handler failure is raised as the handler's own `InfraError` (kind and message unchanged), the wall cap and start failures as `InfraError("worker", …)`, any other handler exception as `InfraError("internal", …)`.
 - **`Bridge.handle`** sets `infra_error` and `infra_kind` before it raises, so the loop can read them after `run_cell` raises. `fetches` holds one `{url, status, chars, error, seconds}` per fetch.
-- **`workspace.snapshot`** returns None only outside a git work tree or without git, and raises `RuntimeError` for a later git failure; `workspace.diff` raises `RuntimeError` too (D-72). The loop turns either into its own error. Both need the same `scratch`, because the base tree lives in `<scratch>/git-objects` (`SNAPSHOT_OBJECTS`).
+- **`workspace.snapshot`** returns None only outside a git work tree or without git, and raises `RuntimeError` for a later git failure; `workspace.diff` raises `RuntimeError` too (D-72), and both raise it when a git call passes `GIT_TIMEOUT_S` (300 s) or the run's `GitControl` is aborted on cancel; git is killed and reaped first, so `run.finished` and scratch removal come after it (D-138). Neither runs a configured program: every filter driver is switched off through `no_filters()` and diffs use `--no-ext-diff --no-textconv` (D-138). The loop turns either into its own error. Both need the same `scratch`, because the base tree lives in `<scratch>/git-objects` (`SNAPSHOT_OBJECTS`).
 - **Worker-side modules** (`worker.py`, `hooks.py`, `tools.py`) import only each other and the standard library, never `rlm_engine`: the worker runs with `-I` from its own folder. `hooks.install(*, approve, workspace, scratch, tools)`, `hooks.exempt_thread()`, `hooks.ignored()`; `tools.quiet()` is what the hook reads (D-13, D-66).
 - **The hand check** (step 4's "Done when" 3) is `engine/tests/test_permissions.py`'s `__main__`: `--mode`, `--repo`, repeated `--cell`.
 
@@ -625,7 +628,7 @@ RECORD_KEYS: tuple[str, ...]                  # the top-level keys of the record
 def log_path(home: Path, batch: str, log_dir: Path | None) -> Path
 class RunLog:
     def __init__(self, path: Path): ...
-    def append(self, record: dict) -> None   # one line, flushed and fsynced
+    def append(self, record: dict) -> None   # one line, flushed and fsynced, under an OS file lock across processes (D-139)
     def records(self) -> list[dict]           # skips a torn last line
 ```
 
@@ -666,7 +669,7 @@ Built at step 6 (2026-10-31). What steps 7, 8 and 9 can rely on, beyond the sign
 
 - **Order on the wire (§5.4).** The `run.start` result comes first, then `run.started`, then the first root `model.complete`. A gate in `service.py` holds the run's notifications and delays its model calls and approvals until the handler has returned, which works because `Link` writes the result in the same step (no post-reply hook was needed). A run whose worker never starts sends its result, then `model.cancel`, then `run.finished` (D-84).
 - **`run.cancel`** returns `{}` only after `run.finished` was sent (it waits up to 10 s). Closing the engine's stdin cancels every run and waits for each record.
-- **`infra_kind`** is a ModelErrorData `kind` (root call or sub-call), `worker`, `internal` (a request handler failed), `workspace` (a git failure in snapshot or diff, D-85), `cancelled` or `host_bug`. `infra_error` is `"<kind>: <message>"`, the kind written once.
+- **`infra_kind`** is a ModelErrorData `kind` (root call or sub-call), `worker`, `internal` (a request handler failed), `workspace` (a git failure in snapshot or diff, D-85), `runlog` (the run-log line could not be written, D-137), `cancelled` or `host_bug`. `infra_error` is `"<kind>: <message>"`, the kind written once.
 - **The record.** `RECORD_KEYS` has `question` in the `question | task` slot: a repo-mode record has `task` there instead. A turn whose cell raised has its reply and `null` cell fields, and no `run.cell` was sent for it (D-86). `subcalls` are sorted by `subcall_id`; `run.finished.subcalls` is `bridge.subcalls_used`. `run.finished.answer` is the submitted JSON value, not always a string (D-89).
 - **`inputs.prepare`** runs once in `run.start` (in a thread) and again, as a no-op, in `loop.run`; a parity script that sends all four repo overrides makes no git call for them.
 - **`Session`** also exports `EngineStartError` (an engine that exits or doesn't answer `engine.info`, with its stderr tail). `open` throws `SettingsError`, `EngineNotFound`, `ProtocolMismatch` (the engine is killed) or `EngineStartError`. `start` throws `UsageError` before sending anything, or the engine's `RpcError`. `close` ends the engine's stdin and kills its tree after 2 s (D-93).

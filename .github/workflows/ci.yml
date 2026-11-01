@@ -77,7 +77,7 @@ jobs:
         run: |
           out="$("$BIN" --version)"
           echo "$out"
-          test "$out" = "rlmh 0.1.0"
+          test "$out" = "rlmh 0.1.1"
       - name: Smoke info
         env:
           RLMH_ENGINE: uv run --project engine python -X utf8 -m rlm_engine serve

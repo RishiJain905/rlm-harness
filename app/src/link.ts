@@ -4,7 +4,8 @@
 //
 // Lines are split on raw bytes and each is decoded with a fatal UTF-8 decoder, so a character
 // split across chunks survives, bad UTF-8 is answered with -32700, and the line limit counts
-// bytes. A bad line is answered with an error, never a crash.
+// bytes. A bad line is answered with an error, never a crash. The limit binds what this side
+// writes as well: a message the peer would refuse is failed here, where the caller can see it.
 
 import { ErrorCode } from "./protocol.ts";
 
@@ -28,6 +29,9 @@ export class RpcError extends Error {
 
 export type MessageKind = "request" | "notification" | "result" | "error" | "invalid";
 
+/** Why an outgoing message was not written (data.kind of the RpcError a request or reply carries). */
+export const MESSAGE_TOO_LARGE = "message_too_large";
+
 type Json = Record<string, unknown>;
 type Handler = (params: any, ctx: { signal: AbortSignal }) => Promise<unknown>;
 type Listener = (...args: any[]) => void;
@@ -45,11 +49,11 @@ function isId(v: unknown): v is string | number {
   return typeof v === "string" || Number.isInteger(v);
 }
 
-/** Link rule 3: what a parsed line is. */
+/** Link rule 3: what a parsed line is. `jsonrpc` must be "2.0", and a request or notification carries no result or error. */
 export function classify(msg: unknown): MessageKind {
-  if (!isObject(msg)) return "invalid";
+  if (!isObject(msg) || msg.jsonrpc !== "2.0") return "invalid";
   if ("method" in msg) {
-    if (typeof msg.method !== "string") return "invalid";
+    if (typeof msg.method !== "string" || "result" in msg || "error" in msg) return "invalid";
     if (!("id" in msg)) return "notification";
     return isId(msg.id) ? "request" : "invalid";
   }
@@ -75,6 +79,7 @@ export class Link {
   private readonly output: { write(chunk: string): void | Promise<void> };
   private readonly idPrefix: string | undefined;
   private readonly maxLineBytes: number;
+  private readonly maxSendBytes: number;
   private readonly handlers = new Map<string, Handler>();
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly pending = new Map<string | number, Pending>();
@@ -88,16 +93,20 @@ export class Link {
   private partBytes = 0;
   private dropping = false; // inside a line that went over the limit; skip to its \n
 
-  /** idPrefix absent: integer ids from 1; present: `${idPrefix}${n}`. */
+  /**
+   * idPrefix absent: integer ids from 1; present: `${idPrefix}${n}`. `maxLineBytes` bounds a line read,
+   * `maxSendBytes` a line written (the peer's own read limit); both default to MAX_LINE_BYTES.
+   */
   constructor(
     input: ReadableStream<Uint8Array>,
     output: { write(chunk: string): void | Promise<void> },
-    opts: { idPrefix?: string; maxLineBytes?: number } = {},
+    opts: { idPrefix?: string; maxLineBytes?: number; maxSendBytes?: number } = {},
   ) {
     this.input = input;
     this.output = output;
     this.idPrefix = opts.idPrefix;
     this.maxLineBytes = opts.maxLineBytes ?? MAX_LINE_BYTES;
+    this.maxSendBytes = opts.maxSendBytes ?? MAX_LINE_BYTES;
     this.closed = new Promise((resolve) => (this.resolveClosed = resolve));
     void this.readLoop();
   }
@@ -107,14 +116,26 @@ export class Link {
     const { signal } = opts;
     if (this.isClosed) return Promise.reject(new RpcError(ErrorCode.CANCELLED, "link closed"));
     if (signal?.aborted) return Promise.reject(new RpcError(ErrorCode.CANCELLED, "cancelled"));
-    this.nextId += 1;
-    const id = this.idPrefix === undefined ? this.nextId : `${this.idPrefix}${this.nextId}`;
+    const next = this.nextId + 1; // taken only once the line fits, so a refused request leaves no gap in the ids
+    const id = this.idPrefix === undefined ? next : `${this.idPrefix}${next}`;
     let line: string;
     try {
       line = JSON.stringify({ jsonrpc: "2.0", id, method, params });
     } catch (err) {
       return Promise.reject(err);
     }
+    const size = this.oversize(line);
+    if (size !== null) {
+      return Promise.reject(
+        new RpcError(ErrorCode.INVALID_REQUEST, `${method} request is too large: ${size} bytes, the link carries at most ${this.maxSendBytes}`, {
+          kind: MESSAGE_TOO_LARGE,
+          method,
+          bytes: size,
+          limit: this.maxSendBytes,
+        }),
+      );
+    }
+    this.nextId = next;
     return new Promise<R>((resolve, reject) => {
       const onAbort = () => {
         this.pending.delete(id); // a late answer is then ignored
@@ -136,8 +157,16 @@ export class Link {
     });
   }
 
+  /** Fire and forget. A notification over the size limit is dropped and logged: nobody waits on it. */
   notify(method: string, params: object): void {
-    if (!this.isClosed) this.writeLine(JSON.stringify({ jsonrpc: "2.0", method, params }));
+    if (this.isClosed) return;
+    const line = JSON.stringify({ jsonrpc: "2.0", method, params });
+    const size = this.oversize(line);
+    if (size !== null) {
+      logError(`notification ${method} dropped: ${size} bytes, the link carries at most ${this.maxSendBytes}`);
+      return;
+    }
+    this.writeLine(line);
   }
 
   /** Serve requests for `method`. A later call replaces the handler. */
@@ -318,7 +347,20 @@ export class Link {
     } catch (err) {
       line = JSON.stringify({ jsonrpc: "2.0", id, error: { code: ErrorCode.INTERNAL_ERROR, message: `internal error: ${describe(err)}` } });
     }
+    const size = this.oversize(line);
+    if (size !== null) {
+      // the peer would refuse the line and its request would wait for ever: answer it with a small error instead
+      const message = `internal error: the ${key} is too large: ${size} bytes, the link carries at most ${this.maxSendBytes}`;
+      line = JSON.stringify({ jsonrpc: "2.0", id, error: { code: ErrorCode.INTERNAL_ERROR, message, data: { kind: MESSAGE_TOO_LARGE, bytes: size, limit: this.maxSendBytes } } });
+    }
     this.writeLine(line);
+  }
+
+  /** The line's size in UTF-8 bytes when it is over the send limit, else null. The newline is not counted, as on the read side. */
+  private oversize(line: string): number | null {
+    if (line.length * 3 <= this.maxSendBytes) return null; // a UTF-16 unit is at most 3 bytes
+    const bytes = Buffer.byteLength(line, "utf8");
+    return bytes > this.maxSendBytes ? bytes : null;
   }
 
   private sendError(id: string | number | null, code: number, message: string): void {

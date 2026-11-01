@@ -65,6 +65,9 @@ def install(*, approve: Callable[[str, str, bool], None], workspace: str, scratc
         "_winapi.CreateProcess": guard.after_popen_at(1, any_detail=True),
         "os.startfile": guard.on_startfile,
         "socket.connect": guard.on_connect,
+        # UDP needs no connect: a datagram sent to an address asks as a connect to it would.
+        "socket.sendto": guard.on_send,
+        "socket.sendmsg": guard.on_send,
     }
     for event, (index, dir_fd) in _PATH_EVENTS.items():
         handlers[event] = guard.writer(index, dir_fd, skip_existing=event == "os.mkdir")
@@ -245,6 +248,12 @@ class _Guard:
         self._shell(_argv_text(path) if path is not None else "")
 
     # ------------------------------------------------------------------ network
+
+    def on_send(self, args: tuple) -> None:
+        """socket.sendto and socket.sendmsg: the same ask as a connect to the address. sendmsg on a connected socket
+        has no address (None); its connect asked already."""
+        if len(args) > 1 and args[1] is not None:
+            self.on_connect(args)
 
     def on_connect(self, args: tuple) -> None:
         if _in_socketpair():

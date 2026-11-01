@@ -3,12 +3,28 @@
 // a stand-in uv that records its argv and env. Offline: no real uv, no download. The one real check
 // starts the engine extracted from the generated bundle (skipped when app/build/engine-files.ts is absent).
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { ensureEngine, extractEngine, findUv, loadBundle, runSetup, type EngineBundle, type SetupOptions, type UvRunner } from "../src/cli/setup.ts";
+import { basename, dirname, join, resolve } from "node:path";
+import {
+  SETUP_LOCK,
+  classifyEngineEntry,
+  ensureEngine,
+  extractEngine,
+  findUv,
+  loadBundle,
+  pruneOldEngines,
+  runSetup,
+  stageEngine,
+  swapBack,
+  swapIn,
+  sweepEngine,
+  type EngineBundle,
+  type SetupOptions,
+  type UvRunner,
+} from "../src/cli/setup.ts";
 import { EngineNotFound, fetchInfo, findEngine, startEngine } from "../src/engine.ts";
 import { APP_VERSION, PROTOCOL_VERSION } from "../src/version.ts";
 
@@ -29,11 +45,11 @@ function temp(): string {
 
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
-/** A small bundle on disk, like the generated one: real files and their hashes. */
-function fakeBundle(): EngineBundle {
+/** A small bundle on disk, like the generated one: real files and their hashes. `variant` changes one file, so a second bundle is a different engine. */
+function fakeBundle(variant = ""): EngineBundle {
   const src = temp();
   const contents: Record<string, string | Uint8Array> = {
-    "rlm_engine/__main__.py": "print('serve')\n",
+    "rlm_engine/__main__.py": `print('serve${variant}')\n`,
     "rlm_engine/worker/worker.py": "# worker\r\nkeeps CRLF\r\n",
     "rlm_engine/profiles/default/guidance.md": "caf\u00e9 \u2014 bytes\n",
     "rlm_engine/blob.bin": new Uint8Array([0, 255, 13, 10, 128]),
@@ -118,12 +134,9 @@ describe("extractEngine", () => {
   test("byte_exact", () => {
     const bundle = fakeBundle();
     const dest = join(temp(), "engine", "0.1.0");
-    mkdirSync(`${dest}.tmp/rlm_engine`, { recursive: true }); // an earlier crash
-    writeFileSync(`${dest}.tmp/rlm_engine/stale.py`, "stale");
     extractEngine(bundle, dest);
     for (const f of bundle.files) expect(sha256(readFileSync(join(dest, f.path)))).toBe(f.sha256);
-    expect(existsSync(`${dest}.tmp`)).toBe(false);
-    expect(existsSync(join(dest, "rlm_engine", "stale.py"))).toBe(false);
+    expect(readdirSync(dirname(dest))).toEqual(["0.1.0"]); // no staging folder left beside it
     const all = readdirSync(dest, { recursive: true }).map(String);
     expect(all.some((p) => p.includes("__pycache__"))).toBe(false);
   });
@@ -291,6 +304,378 @@ describe("runSetup", () => {
     const o = options(homeWithUv(), { yes: true, bundle: null });
     expect(await runSetup(o)).toBe(1);
     expect(o.lines.join("\n")).toContain("from source");
+  });
+});
+
+describe("staging and swapping the engine folder", () => {
+  const mainPy = (dir: string) => readFileSync(join(dir, "rlm_engine", "__main__.py"), "utf8");
+
+  test("staging folders are unique, never the old fixed <dest>.tmp, and do not disturb each other", () => {
+    const bundle = fakeBundle();
+    const dest = join(temp(), "engine", "0.1.0");
+    const a = stageEngine(bundle, dest);
+    const b = stageEngine(bundle, dest);
+    expect(a).not.toBe(b);
+    expect([a, b]).not.toContain(`${dest}.tmp`);
+    expect(mainPy(a)).toBe("print('serve')\n");
+    expect(swapIn(a, dest)).toBeNull();
+    expect(mainPy(b)).toBe("print('serve')\n"); // b is still there
+    expect(mainPy(dest)).toBe("print('serve')\n");
+  });
+
+  test("a bundle that fails its check leaves the installed engine and no staging folder", () => {
+    const dest = join(temp(), "engine", "0.1.0");
+    extractEngine(fakeBundle("-old"), dest);
+    const bad = fakeBundle("-new");
+    writeFileSync(bad.files[0]!.file, "changed");
+    expect(() => extractEngine(bad, dest)).toThrow(/does not match/);
+    expect(mainPy(dest)).toBe("print('serve-old')\n");
+    expect(readdirSync(dirname(dest))).toEqual(["0.1.0"]);
+  });
+
+  test("swapIn keeps the old engine aside until it is discarded, and swapBack restores it", () => {
+    const parent = join(temp(), "engine");
+    const dest = join(parent, "0.1.0");
+    extractEngine(fakeBundle("-old"), dest);
+    const aside = swapIn(stageEngine(fakeBundle("-new"), dest), dest);
+    expect(aside).not.toBeNull();
+    expect(mainPy(dest)).toBe("print('serve-new')\n");
+    expect(mainPy(aside!)).toBe("print('serve-old')\n");
+    swapBack(dest, aside);
+    expect(mainPy(dest)).toBe("print('serve-old')\n");
+    expect(readdirSync(parent)).toEqual(["0.1.0"]);
+
+    // with nothing before it, swapBack removes the new engine
+    const fresh = join(parent, "0.2.0");
+    const none = swapIn(stageEngine(fakeBundle(), fresh), fresh);
+    expect(none).toBeNull();
+    swapBack(fresh, none);
+    expect(readdirSync(parent)).toEqual(["0.1.0"]);
+  });
+
+  test("sweepEngine restores the engine a crash between the two renames set aside, and removes the rest", () => {
+    const parent = join(temp(), "engine");
+    const dest = join(parent, "0.1.0");
+    const oldA = `${dest}.old-1-aaaa`;
+    const oldB = `${dest}.old-2-bbbb`;
+    for (const [dir, text] of [[oldA, "older"], [oldB, "newer"]] as const) {
+      mkdirSync(join(dir, "rlm_engine"), { recursive: true });
+      writeFileSync(join(dir, "rlm_engine", "__main__.py"), text);
+    }
+    utimesSync(oldA, new Date(2020, 0, 1), new Date(2020, 0, 1));
+    utimesSync(oldB, new Date(2021, 0, 1), new Date(2021, 0, 1));
+    mkdirSync(`${dest}.tmp-3-cccc`);
+    mkdirSync(`${dest}.tmp`); // the name an earlier rlmh used
+    writeFileSync(`${dest}.lock`, "{}");
+    mkdirSync(join(parent, "0.0.9"));
+    sweepEngine(dest);
+    expect(readFileSync(join(dest, "rlm_engine", "__main__.py"), "utf8")).toBe("newer");
+    expect(readdirSync(parent).sort()).toEqual(["0.0.9", "0.1.0", "0.1.0.lock"]);
+
+    // with the engine in place nothing is restored, and what was set aside goes
+    mkdirSync(`${dest}.old-4-dddd`);
+    sweepEngine(dest);
+    expect(readFileSync(join(dest, "rlm_engine", "__main__.py"), "utf8")).toBe("newer");
+    expect(readdirSync(parent).sort()).toEqual(["0.0.9", "0.1.0", "0.1.0.lock"]);
+    sweepEngine(join(parent, "no-such-engine")); // nothing there: no error
+  });
+});
+
+describe("runSetup: overlapping setups, a held lock and a failed replacement", () => {
+  const saved = { ...SETUP_LOCK };
+  beforeEach(() => {
+    SETUP_LOCK.pollMs = 10;
+  });
+  afterEach(() => {
+    Object.assign(SETUP_LOCK, saved);
+  });
+
+  const lockOf = (h: string) => join(h, "engine", `${APP_VERSION}.lock`);
+  const mainPy = (h: string) => readFileSync(join(h, "engine", APP_VERSION, "rlm_engine", "__main__.py"), "utf8");
+  const leftovers = (h: string) => readdirSync(join(h, "engine")).filter((e) => e !== APP_VERSION);
+  const holdLock = (h: string, owner: object) => {
+    mkdirSync(join(h, "engine"), { recursive: true });
+    writeFileSync(lockOf(h), JSON.stringify(owner));
+  };
+
+  test("two setups at once take turns: one installs, the other finds it done", async () => {
+    const h = homeWithUv();
+    const bundle = fakeBundle();
+    const uv = standInUv();
+    let inside = 0;
+    let most = 0;
+    let probes = 0;
+    const runPython: UvRunner = async () => {
+      probes += 1;
+      most = Math.max(most, (inside += 1));
+      await Bun.sleep(120);
+      inside -= 1;
+      return { code: 0, stdout: "3.12.99\nsh\n" };
+    };
+    const a = options(h, { yes: true, runUv: uv.run, bundle, runPython });
+    const b = options(h, { yes: true, runUv: uv.run, bundle, runPython });
+    expect(await Promise.all([runSetup(a), runSetup(b)])).toEqual([0, 0]);
+    expect(most).toBe(1);
+    expect(probes).toBe(1);
+    expect(uv.calls.filter((c) => c.argv[2] === "install")).toHaveLength(1); // one download, not two
+    const said = [...a.lines, ...b.lines].join("\n");
+    expect(said).toContain("waiting for it");
+    expect(said).toContain("already installed");
+    expect(JSON.parse(readFileSync(markerOf(h), "utf8")).bundle_sha256).toBe(bundle.sha256);
+    expect(leftovers(h)).toEqual([]); // no staging folder, no set-aside engine, no lock file
+  });
+
+  test("a lock held by a live setup is waited for, then the setup goes ahead", async () => {
+    const h = homeWithUv();
+    holdLock(h, { pid: process.pid, at: Date.now() });
+    const o = options(h, { yes: true, runUv: standInUv().run });
+    const result = runSetup(o);
+    await Bun.sleep(150);
+    expect(existsSync(markerOf(h))).toBe(false); // still waiting
+    expect(o.lines.join("\n")).toContain("waiting for it");
+    rmSync(lockOf(h));
+    expect(await result).toBe(0);
+    expect(existsSync(markerOf(h))).toBe(true);
+    expect(existsSync(lockOf(h))).toBe(false);
+  });
+
+  test("a lock left by a process that is gone is taken over", async () => {
+    const h = homeWithUv();
+    const gone = Bun.spawn({ cmd: [process.execPath, "-e", ""], stdout: "ignore", stderr: "ignore" });
+    await gone.exited;
+    holdLock(h, { pid: gone.pid, at: Date.now() });
+    const o = options(h, { yes: true, runUv: standInUv().run });
+    expect(await runSetup(o)).toBe(0);
+    expect(o.lines.join("\n")).not.toContain("waiting for it");
+    expect(existsSync(lockOf(h))).toBe(false);
+  });
+
+  test("an old lock is abandoned even when its pid is alive, and an unreadable fresh one is respected", async () => {
+    const h = homeWithUv();
+    holdLock(h, { pid: process.pid, at: Date.now() - 2 * SETUP_LOCK.staleMs });
+    expect(await runSetup(options(h, { yes: true, runUv: standInUv().run }))).toBe(0);
+
+    const h2 = homeWithUv();
+    mkdirSync(join(h2, "engine"), { recursive: true });
+    writeFileSync(lockOf(h2), "{half a"); // being written
+    SETUP_LOCK.waitMs = 100;
+    await expect(runSetup(options(h2, { yes: true, runUv: standInUv().run }))).rejects.toThrow(/\.lock/);
+    expect(existsSync(markerOf(h2))).toBe(false);
+  });
+
+  test("giving up after the wait names the lock file", async () => {
+    const h = homeWithUv();
+    holdLock(h, { pid: process.pid, at: Date.now() });
+    SETUP_LOCK.waitMs = 60;
+    await expect(runSetup(options(h, { yes: true, runUv: standInUv().run }))).rejects.toThrow(`another rlmh setup has held ${lockOf(h)}`);
+    expect(existsSync(lockOf(h))).toBe(true); // not ours to remove
+  });
+
+  /** An engine installed from `variant`, then a forced setup of `next` that goes wrong in the way `fail` says. */
+  async function failedReplacement(fail: Partial<SetupOptions>, next = fakeBundle("-new")) {
+    const h = homeWithUv();
+    const first = fakeBundle("-old");
+    expect(await runSetup(options(h, { yes: true, runUv: standInUv().run, bundle: first }))).toBe(0);
+    const o = options(h, { yes: true, force: true, runUv: standInUv().run, bundle: next, ...fail });
+    expect(await runSetup(o)).toBe(1);
+    // the engine that was there is still there, with its marker, and nothing is left beside it
+    expect(mainPy(h)).toBe("print('serve-old')\n");
+    expect(JSON.parse(readFileSync(markerOf(h), "utf8")).bundle_sha256).toBe(first.sha256);
+    expect(leftovers(h)).toEqual([]);
+    return o.lines.join("\n");
+  }
+
+  test("a new engine that does not start leaves the old one in place", async () => {
+    const said = await failedReplacement({ checkEngine: async () => ({ ok: false, message: "boom", stderr: ["Traceback: the tail"] }) });
+    expect(said).toContain("The installed engine did not start: boom");
+    expect(said).toContain("Traceback: the tail");
+  });
+
+  test("a Python that does not run leaves the old engine in place", async () => {
+    const said = await failedReplacement({ runPython: async () => ({ code: 1, stdout: "" }) });
+    expect(said).toContain("did not run");
+  });
+
+  test("a bundle that fails its own check never touches the old engine", async () => {
+    const bad = fakeBundle("-new");
+    writeFileSync(bad.files[0]!.file, "changed");
+    const said = await failedReplacement({}, bad);
+    expect(said).toContain("Could not put the engine");
+    expect(said).toContain("does not match");
+  });
+
+  test("a replacement that works discards the old engine", async () => {
+    const h = homeWithUv();
+    expect(await runSetup(options(h, { yes: true, runUv: standInUv().run, bundle: fakeBundle("-old") }))).toBe(0);
+    const next = fakeBundle("-new");
+    expect(await runSetup(options(h, { yes: true, force: true, runUv: standInUv().run, bundle: next }))).toBe(0);
+    expect(mainPy(h)).toBe("print('serve-new')\n");
+    expect(JSON.parse(readFileSync(markerOf(h), "utf8")).bundle_sha256).toBe(next.sha256);
+    expect(leftovers(h)).toEqual([]);
+  });
+
+  test("a setup killed between the two renames is repaired by the next one", async () => {
+    const h = homeWithUv();
+    const bundle = fakeBundle("-old");
+    expect(await runSetup(options(h, { yes: true, runUv: standInUv().run, bundle }))).toBe(0);
+    const dest = join(h, "engine", APP_VERSION);
+    renameSync(dest, `${dest}.old-9-dead`); // the engine set aside, the new one never arrived
+    mkdirSync(`${dest}.tmp-9-dead`);
+    const o = options(h, { yes: true, runUv: standInUv().run, bundle });
+    expect(await runSetup(o)).toBe(0);
+    expect(mainPy(h)).toBe("print('serve-old')\n");
+    expect(basename(dest)).toBe(APP_VERSION);
+    expect(leftovers(h)).toEqual([]);
+  });
+});
+
+describe("old engine versions are removed once this version's engine is in place", () => {
+  const engines = (h: string) => join(h, "engine");
+  const names = (h: string) => readdirSync(engines(h)).sort();
+  const saved = { ...SETUP_LOCK };
+  beforeEach(() => {
+    SETUP_LOCK.pollMs = 10;
+  });
+  afterEach(() => {
+    Object.assign(SETUP_LOCK, saved);
+  });
+
+  async function deadPid(): Promise<number> {
+    const gone = Bun.spawn({ cmd: [process.execPath, "-e", ""], stdout: "ignore", stderr: "ignore" });
+    await gone.exited;
+    return gone.pid;
+  }
+
+  /** Other versions' folders as an upgrade leaves them, and neighbours that are not engines. */
+  async function strew(h: string): Promise<void> {
+    const e = engines(h);
+    const dir = (name: string, files: Record<string, string> = { "rlm_engine/__main__.py": "old" }) => {
+      for (const [path, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(e, name, path)), { recursive: true });
+        writeFileSync(join(e, name, path), text);
+      }
+    };
+    dir("0.0.9", { ".installed.json": '{"python":"p"}', "rlm_engine/__main__.py": "old" });
+    dir("0.0.8"); // named like a version, no marker
+    dir("0.0.7.old-1-aaaa"); // an old setup's leftovers, no lock beside them
+    dir("0.0.7.tmp-2-bbbb");
+    dir("custom-engine", { ".installed.json": "{}" }); // a marker is enough
+    writeFileSync(join(e, "0.0.5.lock"), JSON.stringify({ pid: await deadPid(), at: Date.now() })); // its owner is gone
+    // not to be touched: a setup of another version that is running now, and what is not an engine at all
+    dir("0.0.6");
+    dir("0.0.6.tmp-3-cccc");
+    writeFileSync(join(e, "0.0.6.lock"), JSON.stringify({ pid: process.pid, at: Date.now() }));
+    dir("notes", { "todo.txt": "mine" });
+    writeFileSync(join(e, "readme.txt"), "mine");
+    writeFileSync(join(e, "0.0.4"), "a file, not a folder");
+  }
+  const KEPT = ["0.0.4", "0.0.6", "0.0.6.lock", "0.0.6.tmp-3-cccc", APP_VERSION, "notes", "readme.txt"].sort();
+
+  async function installed(): Promise<{ h: string; bundle: EngineBundle }> {
+    const h = homeWithUv();
+    const bundle = fakeBundle();
+    expect(await runSetup(options(h, { yes: true, runUv: standInUv().run, bundle }))).toBe(0);
+    return { h, bundle };
+  }
+
+  test("classifyEngineEntry names what a folder in <home>/engine is", () => {
+    expect(classifyEngineEntry("0.1.0")).toEqual({ version: "0.1.0", kind: "version" });
+    expect(classifyEngineEntry("0.1.0-rc.1")).toEqual({ version: "0.1.0-rc.1", kind: "version" });
+    expect(classifyEngineEntry("0.1.0.lock")).toEqual({ version: "0.1.0", kind: "lock" });
+    expect(classifyEngineEntry("0.1.0.tmp-12-ab")).toEqual({ version: "0.1.0", kind: "staging" });
+    expect(classifyEngineEntry("0.1.0.old-12-ab")).toEqual({ version: "0.1.0", kind: "staging" });
+    expect(classifyEngineEntry("0.1.0.tmp")).toEqual({ version: "0.1.0", kind: "staging" });
+    expect(classifyEngineEntry("0.1.0-rc.1.tmp-3-aa")).toEqual({ version: "0.1.0-rc.1", kind: "staging" });
+    for (const other of ["notes", "readme.txt", "0.1", "v0.1.0", "0.1.0.bak", ".tmp-1", "x.lock", ""]) expect(classifyEngineEntry(other)).toBeNull();
+  });
+
+  test("a fresh install or an upgrade removes the other versions, and only those", async () => {
+    const h = homeWithUv();
+    await strew(h);
+    expect(await runSetup(options(h, { yes: true, runUv: standInUv().run }))).toBe(0);
+    expect(names(h)).toEqual(KEPT);
+    // what was kept is untouched
+    expect(readFileSync(join(engines(h), "notes", "todo.txt"), "utf8")).toBe("mine");
+    expect(existsSync(join(engines(h), "0.0.6", "rlm_engine", "__main__.py"))).toBe(true);
+    expect(existsSync(markerOf(h))).toBe(true);
+  });
+
+  test("an install that is already there is tidied too, without waiting for the lock", async () => {
+    const { h, bundle } = await installed();
+    await strew(h);
+    const o = options(h, { yes: true, runUv: standInUv().run, bundle });
+    expect(await runSetup(o)).toBe(0);
+    expect(o.lines.join("\n")).toContain("already installed");
+    expect(names(h)).toEqual(KEPT);
+
+    // a setup of this version running now: nothing is removed, nothing is waited for, its lock stays
+    await strew(h);
+    const lock = join(engines(h), `${APP_VERSION}.lock`);
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, at: Date.now() }));
+    const started = Date.now();
+    expect(await runSetup(options(h, { yes: true, runUv: standInUv().run, bundle }))).toBe(0);
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(existsSync(join(engines(h), "0.0.9"))).toBe(true);
+    expect(existsSync(lock)).toBe(true);
+    rmSync(lock);
+    expect(await runSetup(options(h, { yes: true, runUv: standInUv().run, bundle }))).toBe(0);
+    expect(names(h)).toEqual(KEPT);
+  });
+
+  test("the start-up check (ensureEngine) tidies when the installed engine is the one in use, and not from a source checkout", async () => {
+    const { h } = await installed();
+    await strew(h);
+    await ensureEngine(options(h, { sourceDir: join(ROOT, "app", "src") })); // a source checkout: its own engine is used, the home's folders are not touched
+    expect(names(h)).toContain("0.0.9");
+    await ensureEngine(options(h, { env: { PATH: "", RLMH_ENGINE: "my-engine serve" }, sourceDir: COMPILED })); // an override likewise
+    expect(names(h)).toContain("0.0.9");
+    await ensureEngine(options(h, { sourceDir: COMPILED }));
+    expect(names(h)).toEqual(KEPT);
+  });
+
+  test("an upgrade (the old engine's Python is reused) removes the old engine's folder", async () => {
+    const h = homeWithUv();
+    const python = join(h, "python", "cpython-3.12.98-test", "bin", `python${EXE}`);
+    mkdirSync(resolve(python, ".."), { recursive: true });
+    writeFileSync(python, "");
+    mkdirSync(join(h, "engine", "0.0.9"), { recursive: true });
+    writeFileSync(join(h, "engine", "0.0.9", ".installed.json"), JSON.stringify({ python }));
+    await ensureEngine(options(h, { sourceDir: COMPILED }));
+    expect(names(h)).toEqual([APP_VERSION]);
+    expect(existsSync(python)).toBe(true); // the Python is shared, and stays
+    expect(JSON.parse(readFileSync(markerOf(h), "utf8")).python).toBe(python);
+  });
+
+  test("nothing is removed while this version's engine is not whole: the old one is the fallback", async () => {
+    const h = homeWithUv();
+    await strew(h);
+    const o = options(h, { yes: true, runUv: standInUv().run, checkEngine: async () => ({ ok: false, message: "boom", stderr: [] }) });
+    expect(await runSetup(o)).toBe(1);
+    expect(names(h)).toContain("0.0.9");
+    expect(names(h)).not.toContain(APP_VERSION);
+    expect(await pruneOldEngines(h)).toEqual({ removed: [], left: [] });
+    expect(names(h)).toContain("0.0.9");
+  });
+
+  test.skipIf(process.platform !== "win32")("a folder a running older rlmh still uses stays whole and is removed next time", async () => {
+    const { h } = await installed();
+    const old = join(engines(h), "0.0.9");
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, ".installed.json"), "{}");
+    writeFileSync(join(old, "keep.py"), "in use");
+    // the old engine's Python runs with the engine folder as its working directory
+    const running = Bun.spawn({ cmd: [process.execPath, "-e", "setInterval(() => {}, 1000)"], cwd: old, stdout: "ignore", stderr: "ignore" });
+    try {
+      await Bun.sleep(300);
+      const first = await pruneOldEngines(h);
+      expect(first).toEqual({ removed: [], left: ["0.0.9"] });
+      expect(readFileSync(join(old, "keep.py"), "utf8")).toBe("in use"); // not half-deleted
+    } finally {
+      running.kill();
+      await running.exited;
+    }
+    expect(await pruneOldEngines(h)).toEqual({ removed: ["0.0.9"], left: [] });
+    expect(names(h)).toEqual([APP_VERSION]);
   });
 });
 

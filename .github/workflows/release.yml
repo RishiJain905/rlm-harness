@@ -119,6 +119,9 @@ jobs:
 
           On first run `rlmh` asks before it downloads Python 3.12 through uv.
 
+          To upgrade an installed `rlmh`, run `rlmh update` (or rerun the installer). The next start sets up
+          the new engine and removes the old engine folders.
+
           The checksums catch a corrupted download, not a compromised release. The binaries are not code
           signed: macOS ones carry an ad hoc signature only, and Windows may show SmartScreen's
           "Unknown publisher", or Smart App Control may block the binary.

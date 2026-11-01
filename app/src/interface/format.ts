@@ -203,6 +203,41 @@ function graphemes(text: string): string[] {
   return Array.from(segmenter.segment(text), (s) => s.segment);
 }
 
+/** The grapheme clusters of `text`, each with the UTF-16 offset it starts at. */
+export function graphemeSpans(text: string): { start: number; text: string }[] {
+  return Array.from(segmenter.segment(text), (s) => ({ start: s.index, text: s.segment }));
+}
+
+/** Where the cursor goes on Left from `at`: the start of the grapheme before it. `at` inside a grapheme counts as inside. */
+export function prevGrapheme(text: string, at: number): number {
+  let prev = 0;
+  for (const s of segmenter.segment(text)) {
+    if (s.index >= at) break;
+    prev = s.index;
+  }
+  return prev;
+}
+
+/** Where the cursor goes on Right from `at`: the end of the grapheme at it. */
+export function nextGrapheme(text: string, at: number): number {
+  for (const s of segmenter.segment(text)) {
+    const end = s.index + s.segment.length;
+    if (end > at) return end;
+  }
+  return text.length;
+}
+
+/** `at` moved back to the start of the grapheme it is inside (a cursor never rests in the middle of one). */
+export function snapToGrapheme(text: string, at: number): number {
+  if (at >= text.length) return text.length;
+  let start = 0;
+  for (const s of segmenter.segment(text)) {
+    if (s.index > at) break;
+    start = s.index;
+  }
+  return start;
+}
+
 /** Tabs to spaces up to the next multiple of 4 columns. */
 function expandTabs(line: string): string {
   if (!line.includes("\t")) return line;

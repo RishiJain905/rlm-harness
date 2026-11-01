@@ -11,6 +11,7 @@ broken-reply redraws and format penalties. Added: the §5.3 events, the run-log 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import os
@@ -215,7 +216,9 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
                       "infra_error": f"host error: could not build the run record: {exc!r}", "infra_kind": "host_bug",
                       "host_traceback": traceback.format_exc()}
             _note(f"run {spec.run_id}: {record['host_traceback']}")
-        step.call("write the run log", RunLog(spec.log_path).append, record)
+        log_failure = step.call("write the run log", RunLog(spec.log_path).append, record)
+        if log_failure is not None:  # no durable record: the run fails, so the CLI exits 1, but the answer stays
+            record = _log_failed(record, spec.log_path, log_failure)
         subcalls = bridge.subcalls_used if bridge is not None else 0
         step.call("send run.finished", emit, "run.finished", _finished_event(spec, record, subcalls))
         if cancelled or step.cancelled:
@@ -248,9 +251,22 @@ def _cell_event(turn: int, code: str | None, result: CellResult, observation: st
 
 
 async def _workspace_call(fn, *args: Any) -> Any:
-    """workspace.snapshot or diff on a thread; their RuntimeError (a git failure, D-72) stops the run."""
+    """workspace.snapshot or diff on a thread; their RuntimeError (a git failure or timeout, D-72) stops the run.
+
+    A cancel kills the git call that is running and waits for the thread to end before it goes on, so the record,
+    the scratch folder's removal and run.finished all come after git is gone."""
+    control = workspace.GitControl()
+    work = asyncio.ensure_future(asyncio.to_thread(fn, *args, control=control))
     try:
-        return await asyncio.to_thread(fn, *args)
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        control.abort()
+        while not work.done():  # a second cancel still waits: the thread ends once its git call is killed
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait({work})  # never raises what the call raised
+        if not work.cancelled():
+            work.exception()  # retrieved: the cancel is what this run ends with
+        raise
     except RuntimeError as exc:
         raise InfraError("workspace", str(exc)) from exc
 
@@ -344,6 +360,15 @@ def _record(spec: RunSpec, *, started_at: float, wall_s: float, limits: contract
     }
 
 
+def _log_failed(record: dict, log_path: Path, exc: Exception) -> dict:
+    """The record as run.finished reports it when the run log could not be written: infra_kind "runlog", or, for a
+    run that had already failed, its own kind with the log failure added to the message."""
+    note = f"runlog: could not write the run log {log_path}: {exc!r}"
+    if record.get("infra_error") is None:
+        return {**record, "infra_error": note, "infra_kind": "runlog"}
+    return {**record, "infra_error": f"{record['infra_error']}; {note}"}
+
+
 def _finished_event(spec: RunSpec, record: dict, subcalls: int) -> dict:
     """`.get` with defaults only for the fallback record a host bug in `_record` leaves."""
     return {
@@ -381,11 +406,14 @@ class _Steps:
         except Exception as exc:
             _note(f"run {self.run_id}: could not {what}: {exc!r}")
 
-    def call(self, what: str, fn: Any, *args: Any) -> None:
+    def call(self, what: str, fn: Any, *args: Any) -> Exception | None:
+        """None when `fn` ran, else the exception it raised (noted on stderr)."""
         try:
             fn(*args)
         except Exception as exc:
             _note(f"run {self.run_id}: could not {what}: {exc!r}")
+            return exc
+        return None
 
 
 def _rmtree(path: Path) -> None:

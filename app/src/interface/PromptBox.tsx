@@ -6,7 +6,7 @@
 import { Box, useInput, usePaste } from "ink";
 import { useState } from "react";
 import { completePath } from "./mentions.ts";
-import { sanitize, truncate } from "./format.ts";
+import { graphemeSpans, nextGrapheme, prevGrapheme, sanitize, snapToGrapheme, truncate } from "./format.ts";
 import { Lines } from "./Lines.tsx";
 import { paint, span, useTheme, type Line } from "./theme.ts";
 
@@ -53,7 +53,8 @@ export function PromptBox(props: {
   const [cursor, setCursor] = useState(value.length);
   const [menuSel, setMenuSel] = useState(0);
   const [hist, setHist] = useState<{ index: number; draft: string } | null>(null);
-  const at = Math.min(cursor, value.length);
+  // the cursor sits between graphemes (a user-perceived character: an emoji, a letter and its accent), never inside one
+  const at = snapToGrapheme(value, Math.min(cursor, value.length));
   const menuOpen = props.menu.length > 0;
   const sel = Math.min(menuSel, Math.max(0, props.menu.length - 1));
 
@@ -91,10 +92,13 @@ export function PromptBox(props: {
         return;
       }
       if (key.tab) return complete();
-      if (key.leftArrow) return setCursor(Math.max(0, at - 1));
-      if (key.rightArrow) return setCursor(Math.min(value.length, at + 1));
+      if (key.leftArrow) return setCursor(prevGrapheme(value, at));
+      if (key.rightArrow) return setCursor(nextGrapheme(value, at));
       if (key.backspace || key.delete) {
-        if (at > 0) set(value.slice(0, at - 1) + value.slice(at), at - 1);
+        if (at > 0) {
+          const from = prevGrapheme(value, at);
+          set(value.slice(0, from) + value.slice(at), from);
+        }
         return;
       }
       if (key.upArrow || key.downArrow) {
@@ -142,15 +146,24 @@ export function PromptBox(props: {
   if (value === "") {
     line = [span("> ", { bold: true }), ...(props.active && !props.disabled ? [span(" ", { inverse: true })] : []), span(truncate(props.hint, inner - 1, theme.more), { dim: true })];
   } else {
-    const start = Math.max(0, at - inner + 1);
-    const shown = value.slice(start, start + inner);
-    const c = at - start;
+    // whole graphemes only: up to inner - 1 columns before the cursor, the cursor's own, and what fits after
+    const segs = graphemeSpans(value);
+    const ci = segs.findIndex((s) => s.start >= at);
+    const cursorAt = ci < 0 ? segs.length : ci;
+    const offset = (i: number) => segs[i]?.start ?? value.length;
+    let before = 0;
+    let first = cursorAt;
+    while (first > 0 && before + Bun.stringWidth(segs[first - 1]!.text) <= inner - 1) before += Bun.stringWidth(segs[--first]!.text);
+    const under = segs[cursorAt]?.text ?? " ";
+    let room = inner - before - Math.max(1, Bun.stringWidth(under));
+    let last = cursorAt + 1;
+    while (last < segs.length && Bun.stringWidth(segs[last]!.text) <= room) room -= Bun.stringWidth(segs[last++]!.text);
     const cursorOn = props.active && !props.disabled;
     line = [
       span("> ", { bold: true }),
-      span(shown.slice(0, c), { dim: props.disabled }),
-      ...(cursorOn ? [span(shown[c] ?? " ", { inverse: true })] : [span(shown[c] ?? "")]),
-      span(shown.slice(c + 1), { dim: props.disabled }),
+      span(value.slice(offset(first), offset(cursorAt)), { dim: props.disabled }),
+      ...(cursorOn ? [span(under, { inverse: true })] : [span(segs[cursorAt]?.text ?? "")]),
+      span(value.slice(offset(cursorAt + 1), offset(last)), { dim: props.disabled }),
     ];
   }
   return (
