@@ -88,12 +88,13 @@ Bare `rlmh` opens the real app: a prompt box, the transcript of the current run 
 | Esc | in this order: deny the head approval; close the open screen or sub-call view; cancel the active run; clear the prompt |
 | Ctrl+C | cancel an active run; idle: press twice within 2 s to quit. `exitOnCtrlC` is off |
 | Tab | complete `/command` or `@path`; on an empty prompt, move focus to the panel |
+| Shift+Tab | *(added by D-156)* the next question's mode choice: auto (the rule below), repo or read |
 | Up / Down | prompt history (this session only, 100 entries, never written to disk); in the panel, move the selection |
 | PageUp / PageDown, End | scroll the transcript; End follows the tail |
 | y / a / n | approval: allow, allow for this run, deny |
 | Backspace | deletes left. Ink reports Windows backspace as `delete`, so both flags are handled; there is no forward delete |
 
-**Starting a run (6c).** `parseQuestion` finds mentions with `(^|\s)@("[^"]+"|\S+)`, so `a@b.com` is not one. Paths resolve against `cwd` and accept `\` and `/` and a drive letter. Each must exist and be a file; otherwise nothing starts and the line says which `@token` failed. Mentions are deduplicated in order, and the `@` is dropped from `question` with the path written with `/` (D-17). One or more mentions give `{mode: "read", question, inputs}`. None gives `{mode: "repo", task: text, repoPath: cwd}`. Both send `interactive: true`, the session's permission mode, and no model refs (`Session.start` fills them from settings). Before `start()` the app checks locally, with no network call:
+**Starting a run (6c).** *(D-156: this is the `auto` choice; Shift+Tab can pick `repo`, a repo run whatever the mentions, or `read`, which needs one.)* `parseQuestion` finds mentions with `(^|\s)@("[^"]+"|\S+)`, so `a@b.com` is not one. Paths resolve against `cwd` and accept `\` and `/` and a drive letter. Each must exist and be a file; otherwise nothing starts and the line says which `@token` failed. Mentions are deduplicated in order, and the `@` is dropped from `question` with the path written with `/` (D-17). One or more mentions give `{mode: "read", question, inputs}`. None gives `{mode: "repo", task: text, repoPath: cwd}`. Both send `interactive: true`, the session's permission mode, and no model refs (`Session.start` fills them from settings). Before `start()` the app checks locally, with no network call:
 - `root.model` is empty → "No model picked. Use /model." and `/model` opens.
 - The root provider needs a key and `keys.resolve` finds none → "No key for <provider>. Use /providers."
 - Repo mode with no `.git` in `cwd` or its parents → a warning line ("diff() will be unavailable"), and the run goes on.

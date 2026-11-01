@@ -88,6 +88,37 @@ describe("app", () => {
     expect(app.startCalls[0]).toMatchObject({ mode: "repo", task: "Mail a@b.com about it" });
   });
 
+  test("(4b) Shift+Tab picks the mode: repo works on the folder with @files named, read needs a mention, then auto again", async () => {
+    const { app, m } = await open({ scenario: "simpleRead" });
+    const status = () => m.screen().trimEnd().split("\n").at(-1)!;
+    expect(status()).not.toContain("repo mode");
+    await m.press(KEYS.shiftTab);
+    await m.waitFor(() => status().includes("repo mode") && m.screen().includes("Repo mode (Shift+Tab changes)"));
+    await ask(m, "Read @a.txt and complete everything in it");
+    await m.waitFor(() => app.startCalls.length === 1);
+    expect(app.startCalls[0]).toMatchObject({ mode: "repo", task: "Read a.txt and complete everything in it", repoPath: app.deps.cwd });
+    expect(app.startCalls[0]!.inputs).toBeUndefined();
+    await m.waitFor(() => status().startsWith("finished"));
+    await m.press(KEYS.shiftTab);
+    await m.waitFor(() => status().includes("read mode"));
+    await ask(m, "What is in this folder?");
+    await m.waitForText("Read mode needs @file mentions");
+    expect(app.startCalls).toHaveLength(1);
+    await m.press(KEYS.esc);
+    await m.press(KEYS.shiftTab); // back to auto: the segment goes, and a mention reads again
+    await m.waitFor(() => !status().includes("read mode") && !status().includes("repo mode"));
+    await ask(m, "Summarize @a.txt");
+    await m.waitFor(() => app.startCalls.length === 2);
+    expect(app.startCalls[1]).toMatchObject({ mode: "read", question: "Summarize a.txt" });
+    // /clear starts a new session in auto
+    await m.waitFor(() => status().startsWith("finished"));
+    await m.press(KEYS.shiftTab);
+    await m.waitFor(() => status().includes("repo mode"));
+    await ask(m, "/clear");
+    await m.waitForText("New session.");
+    await m.waitFor(() => !status().includes("repo mode") && m.screen().includes("Ask a question"));
+  });
+
   test("(5) first run, no model and no key: /providers opens, then /model; a question still opens /model", async () => {
     const { app, m } = await open({ settings: { "root.model": "" } });
     let s = await m.waitForText("── /providers");

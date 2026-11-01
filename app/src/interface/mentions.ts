@@ -5,7 +5,7 @@
 
 import { spawnSync } from "node:child_process";
 import { opendirSync, readdirSync, statSync, type Dir } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { StartRun } from "../session.ts";
 
 /** What `parseQuestion` needs from the file system; tests pass a fake. `other` is anything that exists and is neither a file nor a folder. */
@@ -32,20 +32,33 @@ const QUOTED = /^"[^"]+"$/;
 export type ParsedQuestion = { ok: true; run: StartRun } | { ok: false; error: string };
 
 /**
+ * How the next question picks its mode (D-156, Shift+Tab in the prompt). `auto` is S-31's rule: mentions mean read mode
+ * on those files, none means repo mode on the folder. `repo` always works on the folder, so `@spec.md implement it`
+ * edits the repo with the spec named in the task. `read` always reads the mentioned files and needs at least one.
+ */
+export type RunChoice = "auto" | "repo" | "read";
+export const RUN_CHOICES: readonly RunChoice[] = ["auto", "repo", "read"];
+
+/**
  * Pure apart from `fs` (which defaults to node's `statSync`). Paths resolve against `cwd`. `\` means
  * `/` except on win32, where node:path takes both and `C:\temp\a.txt` is a path. The `question`
  * carries each mention's path as typed with every `\` written as `/` (D-17), quotes and `@` dropped.
- * `inputs` are absolute and deduplicated in order. The first mention that is not a file stops it.
+ * `inputs` are absolute and deduplicated in order. The first mention that is not a file stops it. Under `choice`
+ * `repo` the same checks run and each mention is written into the task as the file it named (`repoPath`): relative to
+ * `cwd` with `/` when inside it, else absolute with `/`, quoted when it holds whitespace, so the worker's `/tmp` and
+ * `/work/repo` names can't send the model elsewhere. Under `read` a question needs a mention.
  */
-export function parseQuestion(text: string, cwd: string, fs: FileProbe = nodeProbe): ParsedQuestion {
+export function parseQuestion(text: string, cwd: string, fs: FileProbe = nodeProbe, choice: RunChoice = "auto"): ParsedQuestion {
   const mentions = [...text.matchAll(MENTION)];
   if (mentions.length === 0) {
+    if (choice === "read") return { ok: false, error: "Read mode needs @file mentions. Shift+Tab changes the mode." };
     return { ok: true, run: { mode: "repo", task: text, repoPath: cwd, interactive: true } };
   }
   const win32 = process.platform === "win32";
   const inputs: string[] = [];
   const seen = new Set<string>();
   let question = "";
+  let task = "";
   let last = 0;
   for (const m of mentions) {
     const lead = m[1] as string;
@@ -62,10 +75,21 @@ export function parseQuestion(text: string, cwd: string, fs: FileProbe = nodePro
     }
     const start = (m.index ?? 0) + lead.length;
     question += text.slice(last, start) + typed.replaceAll("\\", "/");
+    task += text.slice(last, start) + repoPath(absolute, cwd);
     last = (m.index ?? 0) + m[0].length;
   }
   question += text.slice(last);
+  task += text.slice(last);
+  if (choice === "repo") return { ok: true, run: { mode: "repo", task, repoPath: cwd, interactive: true } };
   return { ok: true, run: { mode: "read", question, inputs, interactive: true } };
+}
+
+/** A checked mention as a repo task names it: relative to `cwd` inside it, else absolute; `/` always; quoted with whitespace. */
+function repoPath(absolute: string, cwd: string): string {
+  const rel = relative(cwd, absolute);
+  const inside = rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  const path = (inside ? rel : absolute).replaceAll("\\", "/");
+  return /\s/.test(path) ? `"${path}"` : path;
 }
 
 const MAX_COMPLETIONS = 50;

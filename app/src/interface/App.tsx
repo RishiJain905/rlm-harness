@@ -17,7 +17,7 @@ import { COMMANDS, slashMatches } from "./commands/index.ts";
 import { envKeyVar } from "./commands/providers.tsx";
 import { layoutHeights } from "./format.ts";
 import { Lines } from "./Lines.tsx";
-import { listFiles, mentionToken, parseQuestion, rankFiles } from "./mentions.ts";
+import { listFiles, mentionToken, parseQuestion, rankFiles, RUN_CHOICES, type RunChoice } from "./mentions.ts";
 import { HISTORY_MAX, PromptBox } from "./PromptBox.tsx";
 import { StatusLine } from "./StatusLine.tsx";
 import { engineStoppedMessage, isActive, RunStore, statusModel, type AppDeps } from "./store.ts";
@@ -31,7 +31,11 @@ export const MIN_ROWS = 12;
 const QUIT_WINDOW_MS = 2000;
 const MENU_MAX = 9; // every command fits: the eight with screens or not, /clear and /quit
 const DENY = { allow: false, remember_for_run: false };
-const HINT = "Ask a question. @file reads files; / for commands";
+const HINT: Record<RunChoice, string> = {
+  auto: "Ask a question. @file reads files; / for commands",
+  repo: "Repo mode (Shift+Tab changes): works on this folder; @file names files",
+  read: "Read mode (Shift+Tab changes): ask about @files",
+};
 const WELCOME_PROVIDERS = "Welcome to rlmh. Connect a provider: pick one, a adds a key; Esc when done.";
 const WELCOME_MODEL = "Pick the root model: Enter on root, then a provider and a model; Esc when done.";
 const NO_MODEL_YET = "No model picked yet: /model picks one, /providers adds a key.";
@@ -79,6 +83,7 @@ export function App(props: { deps: AppDeps }) {
   );
 
   const [text, setText] = useState("");
+  const [runChoice, setRunChoice] = useState<RunChoice>("auto"); // Shift+Tab (D-156); kept until /clear or quit
   // the prompt text Esc closed the file menu on; any change to the text opens it again
   const [filesClosedAt, setFilesClosedAt] = useState<string | null>(null);
   useEffect(() => {
@@ -207,6 +212,7 @@ export function App(props: { deps: AppDeps }) {
     setScroll(0);
     setFull(false);
     setModeOverride(null);
+    setRunChoice("auto");
     store.clear();
     store.note("New session.", "info");
   };
@@ -227,7 +233,7 @@ export function App(props: { deps: AppDeps }) {
     const exited = store.snapshot().engineExit;
     if (exited) return store.note(engineStoppedMessage(exited.code), "error");
     if (isActive(store.live().phase)) return store.note("A run is active. Esc cancels it.", "warn");
-    const parsed = parseQuestion(typed, deps.cwd);
+    const parsed = parseQuestion(typed, deps.cwd, undefined, runChoice);
     if (!parsed.ok) return store.note(parsed.error, "error");
     const settings = deps.session.settings;
     if (settings.root.model === "") {
@@ -330,7 +336,7 @@ export function App(props: { deps: AppDeps }) {
   const row = subview === null ? undefined : rows.find((r) => r.key === subview);
   const command = screen === null ? undefined : COMMANDS.find((c) => c.name === screen);
   const engineGone = view.engineExit !== null;
-  const placeholder = engineGone ? engineStoppedMessage(view.engineExit!.code) : (hint ?? (isActive(view.phase) ? "A run is active; Esc cancels it." : HINT));
+  const placeholder = engineGone ? engineStoppedMessage(view.engineExit!.code) : (hint ?? (isActive(view.phase) ? "A run is active; Esc cancels it." : HINT[runChoice]));
 
   let main;
   if (command) {
@@ -426,8 +432,9 @@ export function App(props: { deps: AppDeps }) {
           onFocusPanel={() => {
             if (view.blocks.length > 0) setFocus("panel");
           }}
+          onCycleRunChoice={() => setRunChoice((c) => RUN_CHOICES[(RUN_CHOICES.indexOf(c) + 1) % RUN_CHOICES.length]!)}
         />
-        <StatusLine segments={statusModel(view, deps, nextMode)} width={size.columns} />
+        <StatusLine segments={statusModel(view, deps, nextMode, runChoice)} width={size.columns} />
       </Box>
     </ThemeContext.Provider>
   );

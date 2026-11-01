@@ -44,6 +44,8 @@ export function PromptBox(props: {
   cwd: string;
   history: string[];
   onFocusPanel(): void;
+  /** Shift+Tab: the next question's mode choice (D-156). */
+  onCycleRunChoice(): void;
 }) {
   const theme = useTheme();
   const { value } = props;
@@ -100,6 +102,7 @@ export function PromptBox(props: {
         setHist(null);
         return;
       }
+      if (key.tab && key.shift) return props.onCycleRunChoice();
       if (key.tab) return complete();
       if (key.leftArrow) return setCursor(prevGrapheme(value, at));
       if (key.rightArrow) return setCursor(nextGrapheme(value, at));

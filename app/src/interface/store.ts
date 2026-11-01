@@ -635,7 +635,8 @@ function finishEntries(p: { answer: unknown; submitted: boolean; infra_error: st
  * The status line's segments, before layoutStatus drops what doesn't fit. With no run the models
  * come from settings, and the mode is the one the next run would use.
  */
-export function statusModel(view: RunView, deps: AppDeps, nextMode?: string): StatusSegment[] {
+/** `runChoice` is the next question's mode choice (D-156); it shows only when it is not `auto`. */
+export function statusModel(view: RunView, deps: AppDeps, nextMode?: string, runChoice?: string): StatusSegment[] {
   const settings = deps.session.settings;
   const segs: StatusSegment[] = [{ id: "state", ...stateText(view, deps) }];
   const root = view.root ?? settingsRef(settings.root.model);
@@ -664,6 +665,7 @@ export function statusModel(view: RunView, deps: AppDeps, nextMode?: string): St
   }
   const mode = isActive(view.phase) && view.permissionMode ? view.permissionMode : (nextMode ?? settings.permissions.mode);
   segs.push({ id: "mode", text: mode, tone: mode === "bypass" ? "high" : undefined });
+  if (runChoice && runChoice !== "auto") segs.push({ id: "run", text: `${runChoice} mode`, tone: "warn" });
   return segs;
 }
 

@@ -18,6 +18,7 @@ export const KEYS = {
   pageDown: "\u001B[6~",
   end: "\u001B[F",
   tab: "\t",
+  shiftTab: "\u001B[Z",
   backspace: "\u007F",
   ctrlH: "\b",
   ctrlC: "\u0003",

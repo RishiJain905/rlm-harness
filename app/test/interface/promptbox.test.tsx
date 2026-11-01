@@ -320,6 +320,38 @@ describe("completePath", () => {
   });
 });
 
+describe("parseQuestion with a mode choice (D-156)", () => {
+  test("repo: mentions are checked and named in the task; the run works on the folder", () => {
+    touch("spec-01.md");
+    expect(parseQuestion("Read @spec-01.md and do it", cwd, undefined, "repo")).toEqual({
+      ok: true,
+      run: { mode: "repo", task: "Read spec-01.md and do it", repoPath: cwd, interactive: true },
+    });
+    expect(parseQuestion("Fix it", cwd, undefined, "repo")).toEqual({ ok: true, run: { mode: "repo", task: "Fix it", repoPath: cwd, interactive: true } });
+    expect(parseQuestion("Read @nope.md", cwd, undefined, "repo")).toEqual({ ok: false, error: "@nope.md: no such file" });
+  });
+
+  test("repo: each mention is named by the file it checked, never by a spelling the worker would map elsewhere", () => {
+    touch("my dir", "a b.md");
+    touch("sub", "x.md");
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "rlmh-outside-")));
+    try {
+      writeFileSync(join(outside, "spec.md"), "x");
+      const r = parseQuestion(`Do @"my dir/a b.md", @./sub/../sub/x.md and @${join(outside, "spec.md")}`, cwd, undefined, "repo");
+      if (!r.ok) throw new Error(r.error);
+      expect(r.run.task).toBe(`Do "my dir/a b.md", sub/x.md and ${join(outside, "spec.md").replaceAll("\\", "/")}`);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("read: a mention reads as in auto; no mention is refused", () => {
+    const a = touch("a.txt");
+    expect(parseQuestion("Summarize @a.txt", cwd, undefined, "read")).toEqual({ ok: true, run: { mode: "read", question: "Summarize a.txt", inputs: [a], interactive: true } });
+    expect(parseQuestion("What is here?", cwd, undefined, "read")).toEqual({ ok: false, error: "Read mode needs @file mentions. Shift+Tab changes the mode." });
+  });
+});
+
 describe("mentionToken and mentionText", () => {
   test("only an @ at the end of the line, at the start or after whitespace, is a token", () => {
     expect(mentionToken("@")).toEqual({ start: 0, typed: "" });

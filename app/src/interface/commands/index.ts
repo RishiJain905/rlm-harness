@@ -59,6 +59,7 @@ export const KEYS: readonly [string, string][] = [
   ["Esc", "deny the approval; close the screen; close the @ file menu; cancel the run; clear the prompt"],
   ["Ctrl+C", "cancel the run; when idle, twice within 2 s quits"],
   ["Tab", "complete /command or @path, or take the @ file menu's pick; on an empty prompt, select in the sub-call panel"],
+  ["Shift+Tab", "the next question's mode: auto (@file reads files, none works on the folder), repo, read"],
   ["Up / Down", "prompt history; in the panel, move the selection"],
   ["PageUp / PageDown", "scroll the transcript"],
   ["End", "follow the transcript's tail"],
