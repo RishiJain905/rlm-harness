@@ -1,8 +1,10 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
 // What a typed question means (6c): `@path` mentions make a read-mode run over those files, no
-// mention makes a repo-mode run on the folder. Also the `@path` completion for the prompt box.
+// mention makes a repo-mode run on the folder. Also the `@path` completion and the `@` file menu for
+// the prompt box.
 
-import { readdirSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { opendirSync, readdirSync, statSync, type Dir } from "node:fs";
 import { join, resolve } from "node:path";
 import type { StartRun } from "../session.ts";
 
@@ -105,4 +107,149 @@ export function completePath(prefix: string, cwd: string): string[] {
   } catch {
     return [];
   }
+}
+
+/** The `@` token at the end of `value`: where its `@` is and what follows it (an opening `"` kept), or null. */
+export function mentionToken(value: string): { start: number; typed: string } | null {
+  const m = /(^|\s)@("[^"]*|\S*)$/.exec(value);
+  if (!m) return null;
+  const start = m.index + m[1]!.length;
+  return { start, typed: value.slice(start + 1) };
+}
+
+/** A path as it goes after `@`: quoted when it holds whitespace, so `parseQuestion` reads it back whole. */
+export function mentionText(path: string): string {
+  return /\s/.test(path) ? `"${path}"` : path;
+}
+
+/** True when the mention `typed` (what follows `@`) names a file that exists, read the way `parseQuestion` reads it. */
+export function namesFile(typed: string, cwd: string, fs: FileProbe = nodeProbe): boolean {
+  const path = QUOTED.test(typed) ? typed.slice(1, -1) : typed;
+  if (path === "") return false;
+  return fs.stat(resolve(cwd, process.platform === "win32" ? path : path.replaceAll("\\", "/"))) === "file";
+}
+
+const INDEX_TTL_MS = 10_000;
+const INDEX_MAX = 20_000;
+const WALK_BUDGET_MS = 300;
+const GIT_TIMEOUT_MS = 2_000;
+const SKIP_DIRS = new Set(["node_modules", "__pycache__"]);
+let index: { cwd: string; at: number; files: string[] } | null = null;
+
+/**
+ * Files under `cwd` for the `@` menu, relative and written with `/`, at most 20,000. In a git work
+ * tree that is git's own list (tracked, plus untracked files that are not ignored); elsewhere a
+ * breadth-first walk that skips dot-entries and `node_modules`, read one entry at a time and
+ * stopped after 300 ms, so a home folder, a drive root or one huge folder cannot hang the prompt.
+ * Kept for 10 s per folder. Never throws.
+ */
+export function listFiles(cwd: string, now = Date.now()): string[] {
+  if (index && index.cwd === cwd && now - index.at < INDEX_TTL_MS) return index.files;
+  const files = (gitFiles(cwd) ?? walkFiles(cwd)).slice(0, INDEX_MAX);
+  index = { cwd, at: now, files };
+  return files;
+}
+
+function gitFiles(cwd: string): string[] | null {
+  try {
+    // core.fsmonitor=false: a folder's own git config must not get to run a command just because rlmh opened there
+    const r = spawnSync("git", ["-c", "core.fsmonitor=false", "-c", "core.quotepath=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: 64 * 1024 * 1024,
+      windowsHide: true,
+    });
+    if (r.error || r.status !== 0) return null;
+    return [...new Set(r.stdout.split("\0").filter(Boolean))];
+  } catch {
+    return null;
+  }
+}
+
+function walkFiles(cwd: string): string[] {
+  const files: string[] = [];
+  const queue = [""];
+  const until = Date.now() + WALK_BUDGET_MS;
+  const more = () => files.length < INDEX_MAX && Date.now() < until;
+  for (let next = 0; next < queue.length && more(); next++) {
+    const rel = queue[next]!;
+    let dir: Dir | undefined;
+    try {
+      dir = opendirSync(join(cwd, rel));
+      // entry by entry, with the budget checked on each, rather than one readdir of a folder of any size
+      for (let e = dir.readSync(); e !== null && more(); e = dir.readSync()) {
+        if (e.name.startsWith(".") || SKIP_DIRS.has(e.name)) continue;
+        const path = rel + e.name;
+        if (e.isDirectory()) queue.push(`${path}/`);
+        else if (e.isFile()) files.push(path);
+        else if (e.isSymbolicLink()) {
+          try {
+            if (statSync(join(cwd, path)).isFile()) files.push(path);
+          } catch {
+            // a broken link is no file to read
+          }
+        }
+      }
+    } catch {
+      // an unreadable folder adds nothing
+    } finally {
+      try {
+        dir?.closeSync();
+      } catch {
+        // already closed
+      }
+    }
+  }
+  return files;
+}
+
+const MAX_SUGGESTIONS = 50;
+
+/** Lower is better: [tier, penalty]. Null when `path` does not hold `q`'s characters in order. */
+function rank(q: string, path: string): [number, number] | null {
+  const p = path.toLowerCase();
+  if (q === "") return [0, (p.split("/").length - 1) * 1000 + p.length];
+  if (p === q) return [0, 0];
+  const base = p.slice(p.lastIndexOf("/") + 1);
+  if (base.startsWith(q)) return [1, base.length];
+  const inBase = base.indexOf(q);
+  if (inBase >= 0) return [2, inBase * 100 + base.length];
+  if (p.startsWith(q)) return [3, p.length];
+  const inPath = p.indexOf(q);
+  if (inPath >= 0) return [4, inPath * 100 + p.length];
+  // the characters in order: fewer and shorter gaps first
+  let at = 0;
+  let gaps = 0;
+  let spread = 0;
+  for (const ch of q) {
+    const found = p.indexOf(ch, at);
+    if (found < 0) return null;
+    if (found > at && at > 0) {
+      gaps += 1;
+      spread += found - at;
+    }
+    at = found + 1;
+  }
+  return [5, gaps * 1000 + spread * 10 + p.length];
+}
+
+/**
+ * The `@` menu's files for `typed` (the token after `@`; an opening `"` and a closing one are
+ * dropped, and on win32 `\` means `/`), best first, at most 50. Case-insensitive: a whole-path
+ * match, then a file name that starts with it, holds it, a path that starts with it, holds it, and
+ * last the characters in order. Ties go to the shorter path, then the sorted order. An empty token
+ * lists the shallowest files first.
+ */
+export function rankFiles(typed: string, files: readonly string[]): string[] {
+  let q = typed.replace(/^"/, "").replace(/"$/, "").toLowerCase();
+  if (process.platform === "win32") q = q.replaceAll("\\", "/");
+  const scored: { path: string; tier: number; penalty: number }[] = [];
+  for (const path of files) {
+    const r = rank(q, path);
+    if (r) scored.push({ path, tier: r[0], penalty: r[1] });
+  }
+  scored.sort((a, b) => a.tier - b.tier || a.penalty - b.penalty || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return scored.slice(0, MAX_SUGGESTIONS).map((s) => s.path);
 }

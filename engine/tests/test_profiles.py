@@ -7,6 +7,7 @@ block and nothing else, and user profiles are validated, normalised and never sh
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from pathlib import Path
@@ -55,15 +56,19 @@ def test_training_v4_is_training(tmp_path: Path) -> None:
     assert training.system_prompt("PowerShell") == contract.SYSTEM_PROMPT_V4
 
 
-def test_default_differs_only_by_guidance(tmp_path: Path) -> None:
+def test_default_differs_by_guidance_and_limits(tmp_path: Path) -> None:
     training = builtin("training-v4", tmp_path)
     default = builtin("default", tmp_path)
-    assert (default.read, default.repo) == (training.read, training.repo)
+    # D-152: more turns and output tokens; every other limit, and the pacing line, are training's
+    more = {"root_max_tokens": 16384, "subcall_max_tokens": 16384}
+    assert default.read.limits == dataclasses.replace(training.read.limits, max_turns=50, **more)
+    assert default.repo.limits == dataclasses.replace(training.repo.limits, max_turns=150, **more)
+    assert (default.read.pace_nudge, default.repo.pace_nudge) == (training.read.pace_nudge, training.repo.pace_nudge)
     assert (default.root_temperature, default.sub_temperature) == (training.root_temperature, training.sub_temperature)
     assert default.guidance
     assert default.system_prompt("sh") == training.system_prompt("sh") + "\n\n" + default.guidance.replace("{shell}", "sh")
     assert default.prompt_hash() != training.prompt_hash()
-    limits = json.dumps({"read": default.read.limits.as_dict(), "edit": default.repo.limits.as_dict()}, sort_keys=True)
+    limits = json.dumps({"read": training.read.limits.as_dict(), "edit": training.repo.limits.as_dict()}, sort_keys=True)
     assert contract.prompt_hash(dict(contract.PROMPTS_V4, limits=limits)) == contract.TRAINING_HASH
     before = default.prompt_hash()
     git_bash = default.system_prompt("Git Bash")
@@ -94,7 +99,8 @@ def test_profile_hash(tmp_path: Path) -> None:
     assert mine.profile_hash() == default.profile_hash()
     assert p.load_profile("copy", tmp_path).profile_hash() != default.profile_hash()
     (copy / "guidance.md").write_bytes(guidance)
-    (copy / "profile.toml").write_bytes(toml.replace(b"max_turns = 20", b"max_turns = 21"))
+    assert b"max_turns = 50" in toml
+    (copy / "profile.toml").write_bytes(toml.replace(b"max_turns = 50", b"max_turns = 51"))
     assert p.load_profile("copy", tmp_path).profile_hash() != default.profile_hash()
     (copy / "profile.toml").unlink()
     (copy / "guidance.md").unlink()

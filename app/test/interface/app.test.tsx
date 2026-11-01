@@ -271,6 +271,8 @@ describe("/clear", () => {
     // the history holds the question: Up brings it back
     await m.press(KEYS.up);
     await m.waitFor(() => promptLine(m.screen()) === "Summarize @a.txt");
+    await m.press(KEYS.esc); // the line ends in a mention: the first Esc closes the file menu
+    await m.waitFor(() => !m.screen().includes("  @a.txt"));
     await m.press(KEYS.esc);
     await m.waitFor(() => promptLine(m.screen()).includes("Ask a question"));
 

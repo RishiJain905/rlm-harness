@@ -185,6 +185,7 @@ export class Gateway {
       prompt: p.messages[p.messages.length - 1]?.content ?? "",
       started_at: startedAt,
     });
+    p = this.capOutput(p); // before lastRoot, so /context shows the reply room actually asked for
     const run = this.run(p.run_id);
     if (p.role === "root") run.lastRoot = p;
     const ac = new AbortController();
@@ -564,6 +565,13 @@ export class Gateway {
     const url = String(getSetting(this.settings, `providers.${def.id}.base_url`));
     if (url === "") throw this.error("other", p, null, `No base URL for the ${def.id} provider. Set providers.${def.id}.base_url in /settings.`);
     return url;
+  }
+
+  /** D-152: a profile's max_tokens is a ceiling; a model whose known maximum is lower gets that maximum, not a 400. */
+  private capOutput(p: ModelCompleteParams): ModelCompleteParams {
+    const def = provider(p.model.provider);
+    const info = def ? this.catalog.get(def.id, p.model.model) : undefined;
+    return info && info.max_output > 0 && p.max_tokens > info.max_output ? { ...p, max_tokens: info.max_output } : p;
   }
 
   /** D-25, root calls only: ceil(chars / 3) + max_tokens against a known window. */

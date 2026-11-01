@@ -17,7 +17,7 @@ import { COMMANDS, slashMatches } from "./commands/index.ts";
 import { envKeyVar } from "./commands/providers.tsx";
 import { layoutHeights } from "./format.ts";
 import { Lines } from "./Lines.tsx";
-import { parseQuestion } from "./mentions.ts";
+import { listFiles, mentionToken, parseQuestion, rankFiles } from "./mentions.ts";
 import { HISTORY_MAX, PromptBox } from "./PromptBox.tsx";
 import { StatusLine } from "./StatusLine.tsx";
 import { engineStoppedMessage, isActive, RunStore, statusModel, type AppDeps } from "./store.ts";
@@ -79,6 +79,11 @@ export function App(props: { deps: AppDeps }) {
   );
 
   const [text, setText] = useState("");
+  // the prompt text Esc closed the file menu on; any change to the text opens it again
+  const [filesClosedAt, setFilesClosedAt] = useState<string | null>(null);
+  useEffect(() => {
+    if (filesClosedAt !== null && text !== filesClosedAt) setFilesClosedAt(null);
+  }, [text, filesClosedAt]);
   const history = useRef<string[]>([]);
   const [screen, setScreen] = useState<string | null>(null);
   const [subview, setSubview] = useState<string | null>(null);
@@ -271,10 +276,13 @@ export function App(props: { deps: AppDeps }) {
   // -- layout --
 
   const tooSmall = size.columns < MIN_COLUMNS || size.rows < MIN_ROWS;
-  const menu = screen || subview || !keyboardFree || focus !== "prompt" ? [] : slashMatches(text);
+  const menusFree = !screen && !subview && keyboardFree && focus === "prompt";
+  const menu = menusFree ? slashMatches(text) : [];
+  const mention = menusFree && text !== filesClosedAt ? (mentionToken(text)?.typed ?? null) : null;
+  const files = useMemo(() => (mention === null ? [] : rankFiles(mention, listFiles(deps.cwd))), [mention, deps.cwd]);
   const showPanel = !screen && !subview && view.blocks.length > 0;
   const wantApproval = head ? approvalHeight(head, size.columns) : confirm ? 3 : 0;
-  const h = layoutHeights(size.rows, { panel: showPanel, approval: wantApproval, menu: Math.min(menu.length, MENU_MAX) });
+  const h = layoutHeights(size.rows, { panel: showPanel, approval: wantApproval, menu: Math.min(menu.length || files.length, MENU_MAX) });
   const mainHeight = h.transcript + h.panel;
   const lines = useMemo(() => {
     if (view.entries.length === 0 && view.phase === "idle") {
@@ -298,6 +306,7 @@ export function App(props: { deps: AppDeps }) {
       if (deps.approvals.head()) return deps.approvals.answer(DENY);
       if (screen || subview) return; // they close themselves
       if (focus === "panel") return setFocus("prompt");
+      if (files.length > 0) return setFilesClosedAt(text);
       const { phase } = store.live();
       if (phase === "starting" || phase === "running") return cancelRun();
       return setText("");
@@ -410,6 +419,7 @@ export function App(props: { deps: AppDeps }) {
           active={keyboardFree && !screen && !subview && focus === "prompt"}
           width={size.columns}
           menu={menu}
+          files={files}
           menuHeight={h.menu}
           cwd={deps.cwd}
           history={history.current}
