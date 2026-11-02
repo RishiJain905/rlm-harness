@@ -164,7 +164,8 @@ The parent session also found that `bun --no-env-file --config=<path> main.ts` b
   - It checked `rlmh-windows-x64.exe` against `SHA256SUMS`, and uv's zip against `install.ps1`'s pin.
   - `@rlmh/win32-x64` packed to 71,499,053 bytes (rlmh 119,559,680 and uv 31,803,184 unpacked), and `rlmh` to 3,873.
 - The full `npm-check.sh` on a binary built from this branch, run with no uv on PATH:
-  - `npm i -g` and `bun add -g --trust` from Verdaccio each gave an `rlmh` whose target is the binary byte for byte, and npm's `rlmh.cmd` starts `binlmh.exe` with no `node`.
+  - `npm i -g` and `bun add -g --trust` from Verdaccio each gave an `rlmh` whose target is the binary byte for byte, and npm's `rlmh.cmd` starts `bin
+lmh.exe` with no `node`.
   - `rlmh --version` run from a folder with a `.env` and a preload `bunfig.toml` printed no preload line.
   - Plain `bun add -g` failed on Windows, as documented.
   - `rlmh setup --yes` fetched CPython 3.12.16 with the bundled uv (no `<home>/bin/uv`), `rlmh info` was right, and the fake-provider question completed.
@@ -187,7 +188,7 @@ The parent session also found that `bun --no-env-file --config=<path> main.ts` b
    - Optionally, under **Deployment branches and tags**, choose **Selected branches and tags** and add the tag rule `v*` (the `npm.yml` dispatch runs on a branch, so add `main` too).
 3. **The first publish, by hand.** After the first release that holds `npm/` (v0.1.1):
    1. Download the `npm-tarballs` artifact from that release run's `npm` job, or from a `publish: false` dispatch of `npm.yml`.
-   2. Run `npm publish <file> --access public` for the four `rlmh-<platform>-*.tgz` files, then for `rlmh-<version>.tgz`.
+   2. Run `npm publish ./<file> --access public` (the `./` matters: without it npm reads `out/x.tgz` as a GitHub repo, D-167) for the four `rlmh-<platform>-*.tgz` files, then for `rlmh-<version>.tgz`.
 4. **Trusted publishing, within 2 days of the next tag.** A new trusted-publisher configuration expires if it has not published successfully within 2 days, so do this step just before tagging the release after v0.1.1.
    - On each of the five packages' **Settings** page on npmjs.com, add a GitHub Actions trusted publisher: owner `RishiJain905`, repository `rlm-harness`, workflow `release.yml` (npm checks the calling workflow), environment `npm`, and under **Allowed actions** tick direct `npm publish` (only `npm stage publish` is allowed by default, and `npm.yml` runs `npm publish`). The five packages are `rlm-harness` and the four `@rlmh/<platform>-<arch>`. npm checks none of these fields when you save, and they are case-sensitive, so a typo shows only as a failed publish.
    - Add `npm.yml` the same way only when you plan to publish through a dispatch run.
