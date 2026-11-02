@@ -10,7 +10,7 @@ import { formatCost } from "../format.ts";
 import { Lines } from "../Lines.tsx";
 import { listRuns, readRun, RUN_LOG_FORMAT, type RunSummary } from "../runs.ts";
 import { viewFromRecord, type RunView } from "../store.ts";
-import { allRows, SubcallPanel, type PanelState } from "../SubcallPanel.tsx";
+import { allRows, blockOfRow, rowCellCode, SubcallPanel, type PanelState } from "../SubcallPanel.tsx";
 import { SubcallView } from "../SubcallView.tsx";
 import { Transcript, transcriptLines } from "../Transcript.tsx";
 import { paint, span, useTheme, type Line } from "../theme.ts";
@@ -62,7 +62,7 @@ export function RunsScreen(props: ScreenProps) {
         readRun(r).then(
           (record) => {
             setMessage(null);
-            setReplay(viewFromRecord(record as Record<string, any>));
+            setReplay(viewFromRecord(record as Record<string, any>, { unicode: theme.unicode }));
           },
           (err: unknown) => setMessage(err instanceof Error ? err.message : String(err)),
         );
@@ -128,8 +128,8 @@ function Replay(props: { view: RunView; width: number; height: number; active: b
         <SubcallView
           key={row.key}
           row={row}
-          block={view.blocks.find((b) => b.id === row.batchId)}
-          cellCode={view.cellCode}
+          block={blockOfRow(view.blocks, row.key)}
+          cellCode={rowCellCode(view.blocks, row, view.cellCode)}
           now={view.now}
           width={width}
           height={props.height - 1}

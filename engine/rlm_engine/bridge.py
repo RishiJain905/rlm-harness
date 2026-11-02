@@ -6,7 +6,9 @@ gone: `handle` takes a worker `request` (architecture §6.1) and returns the `re
 
 It enforces the sub-call budget and the prompt-size rule, sends each sub-call to the app as `model.complete` (§5.2),
 reports `run.subcall` and `run.budget` (§5.3), makes `fetch` GET requests for the worker (D-16), and hands `approve`
-requests to `Permissions`. Nothing the worker sends can set `infra_error`: only a failure on this side does.
+requests to `Permissions`. Nothing the worker sends can set `infra_error`: only a failure on this side does. Under
+agent_api, `rlm` requests go to `children` (child.py, D-160), whose child runs use this bridge's budget: each child is
+one sub-call, and its own sub-calls come through `_llm` with `child` set.
 """
 
 from __future__ import annotations
@@ -30,7 +32,8 @@ from .errors import InfraError, ModelError, SubcallError
 from .permissions import KINDS, Permissions
 from .profiles import Profile
 
-OPS = ("llm", "llm_batch", "fetch", "approve")
+OPS = ("llm", "llm_batch", "fetch", "approve", "rlm")
+THINKING = ("off", "low", "medium", "high")  # a request's own thinking level for its sub-calls (D-164)
 INFRA_REPLY = "sub-call failed for an infrastructure reason; this episode will be discarded"
 PREFIX_SEPARATOR = "\n\n"  # cacheapi.SEPARATOR: between a sub-call's stable prefix and its prompt (D-119)
 
@@ -79,6 +82,7 @@ class Bridge:
         self.fetches: list[dict] = []  # {url, status, chars, error, seconds}, one per fetch call
         self.infra_error: str | None = None
         self.infra_kind: str | None = None
+        self.children: Any = None  # child.Children under agent_api (D-160); None refuses `rlm`
         self._batches = 0
 
     def subcalls_left(self) -> int:
@@ -93,16 +97,24 @@ class Bridge:
             return await self._fetch(request)
         if op == "approve":
             return await self._approve(request)
+        if op == "rlm":
+            if self.children is None:
+                return {"error": "unknown request"}
+            return await self.children.run(request, None)
         return await self._llm(op, request)
 
     # ------------------------------------------------------------------------------------------ llm, llm_batch
 
-    async def _llm(self, op: str, request: dict) -> dict:
+    async def _llm(self, op: str, request: dict, child: Any = None) -> dict:
+        """llm and llm_batch, from the run's worker or (with `child`, a child.ChildRun) from a child run's worker."""
         prompts = request.get("prompts")
         if not isinstance(prompts, list) or not all(isinstance(p, str) for p in prompts):
             return {"error": "prompts must be a list of strings"}
         if op == "llm" and len(prompts) != 1:
             return {"error": "llm takes exactly one prompt"}
+        thinking = request.get("thinking")  # agentapi's thinking= (D-164); training's requests have none
+        if thinking is not None and thinking not in THINKING:
+            return {"error": f"thinking must be one of {', '.join(THINKING)}"}
         prefixes = request.get("prefixes")  # cache-shaped sub-calls (D-119); training's requests have none
         if prefixes is None:
             prefixes = [None] * len(prompts)
@@ -112,11 +124,12 @@ class Bridge:
         if self.infra_error:
             return {"error": INFRA_REPLY}
         if self.subcalls_used + len(prompts) > self.max_subcalls:
-            return self._reject(prompts, request, contract.budget_exhausted_message(self.max_subcalls))
+            return self._reject(prompts, request, contract.budget_exhausted_message(self.max_subcalls), child)
         if self.limits.subcall_oversize == "error":
             longest = max((len(_joined(prefix, p)) for prefix, p in zip(prefixes, prompts)), default=0)
             if longest > self.limits.subcall_max_chars:
-                return self._reject(prompts, request, contract.oversize_message(longest, self.limits.subcall_max_chars))
+                return self._reject(prompts, request, contract.oversize_message(longest, self.limits.subcall_max_chars),
+                                    child)
         if not prompts:
             return {"outputs": []}
 
@@ -126,11 +139,11 @@ class Bridge:
         first_id = self.subcalls_used + 1
         self.subcalls_used += n
         batch_id = self._next_batch_id()
-        origin = self._origin(request)
+        origin = self._origin(request, child)
 
         tasks = [
             asyncio.ensure_future(
-                self._one(first_id + i, prompt, origin, {"id": batch_id, "index": i, "size": n}, prefixes[i]))
+                self._one(first_id + i, prompt, origin, {"id": batch_id, "index": i, "size": n}, prefixes[i], thinking))
             for i, prompt in enumerate(prompts)
         ]
         results = await self._settle(tasks)
@@ -178,14 +191,40 @@ class Bridge:
             raise
         return [_outcome(t) for t in tasks]
 
-    def _reject(self, prompts: list[str], request: dict, message: str) -> dict:
+    def _reject(self, prompts: list[str], request: dict, message: str, child: Any = None) -> dict:
         """A refused request: one `rejected` event, no model call, no sub-call ids used."""
         batch = {"id": self._next_batch_id(), "index": 0, "size": len(prompts)}
         longest = max((len(p) for p in prompts), default=0)
-        self._subcall_event(None, self._origin(request), batch, longest, "rejected", message, 0.0)
+        self._subcall_event(None, self._origin(request, child), batch, longest, "rejected", message, 0.0)
         return {"error": message}
 
-    async def _one(self, subcall_id: int, prompt: str, origin: dict, batch: dict, prefix: str | None = None) -> str:
+    # ------------------------------------------------------------------------------------------ rlm children
+
+    def reserve_child(self, request: dict, task: str, parent: Any, child_no: int) -> tuple[int, dict, dict] | dict:
+        """One sub-call id for a child run (D-160): `(subcall_id, origin, batch)` with its `sent` event, or the
+        reply fields of a refusal (an infra failure, or no sub-calls left)."""
+        if self.infra_error:
+            return {"error": INFRA_REPLY}
+        if self.subcalls_used + 1 > self.max_subcalls:
+            return self._reject([task], request, contract.budget_exhausted_message(self.max_subcalls), parent)
+        self.subcalls_used += 1
+        subcall_id = self.subcalls_used
+        origin = self._origin(request, parent)
+        batch = {"id": f"rlm{child_no}", "index": 0, "size": 1}
+        self._subcall_event(subcall_id, origin, batch, len(task), "sent", None, None)
+        return subcall_id, origin, batch
+
+    def finish_child(self, record: SubcallRecord) -> None:
+        """A child run's sub-call record and its `done` or `error` event, then the budget."""
+        self.records.append(record)
+        status = "error" if record.error is not None else "done"
+        self._subcall_event(record.subcall_id, record.origin, record.batch, len(record.prompt), status, record.error,
+                            record.seconds)
+        self.app.event("run.budget", {"run_id": self.run_id, "turns_left": max(0, self.limits.max_turns - self.turn),
+                                      "subcalls_left": self.subcalls_left()})
+
+    async def _one(self, subcall_id: int, prompt: str, origin: dict, batch: dict, prefix: str | None = None,
+                   thinking: str | None = None) -> str:
         if prefix is not None:
             prefix = contract.clean_text(prefix)
         prompt = contract.truncate_prompt(_joined(prefix, contract.clean_text(prompt)), self.limits.subcall_max_chars)
@@ -197,7 +236,7 @@ class Bridge:
             "tools": [],
             "max_tokens": self.limits.subcall_max_tokens,
             "temperature": self.profile.sub_temperature,
-            "thinking": self.sub_ref.get("thinking") or self.limits.subcall_thinking or "off",
+            "thinking": thinking or self.sub_ref.get("thinking") or self.limits.subcall_thinking or "off",
             "turn": self.turn,
             "subcall_id": subcall_id,
             "origin": dict(origin),
@@ -235,9 +274,17 @@ class Bridge:
         self._batches += 1
         return f"b{self._batches}"
 
-    def _origin(self, request: dict) -> dict:
+    def _origin(self, request: dict, child: Any = None) -> dict:
+        """Where a request came from: the turn and the cell line, plus `child` (the child run's number) for a request a
+        child run's worker made, whose turn is then the child's own (D-160)."""
         line = request.get("line")
-        return {"turn": self.turn, "line": line if isinstance(line, int) and not isinstance(line, bool) else None}
+        turn = request.get("turn")  # the manager's, for a request an llm_async thread made in an earlier cell (D-159)
+        if not isinstance(turn, int) or isinstance(turn, bool):
+            turn = child.turn if child is not None else self.turn
+        origin = {"turn": turn, "line": line if isinstance(line, int) and not isinstance(line, bool) else None}
+        if child is not None:
+            origin["child"] = child.child_id
+        return origin
 
     def _subcall_event(
         self, subcall_id: int | None, origin: dict, batch: dict, prompt_chars: int, status: str, error: str | None,
@@ -259,12 +306,16 @@ class Bridge:
 
     # ------------------------------------------------------------------------------------------ approve
 
-    async def _approve(self, request: dict) -> dict:
+    async def _approve(self, request: dict, permissions: Any = None) -> dict:
+        """`permissions` is a child run's own (child.ReadOnly for rlm(tools="read")); else the run's."""
         kind, detail, inside = request.get("kind"), request.get("detail"), request.get("inside_workspace")
         if kind not in KINDS or not isinstance(detail, str) or not isinstance(inside, bool):
             return {"error": "malformed request"}
-        allowed = await self.permissions.check(kind, detail, inside_workspace=inside, turn=self.turn)
-        if not allowed and not self.permissions.interactive:
+        permissions = permissions or self.permissions
+        allowed = await permissions.check(kind, detail, inside_workspace=inside, turn=self.turn)
+        if not allowed and getattr(permissions, "read_only", False) and kind != "network":
+            return {"allow": False, "reason": "read-only"}
+        if not allowed and not permissions.interactive:
             # D-154: say why, so the model stops trying actions that can never be approved in this run
             return {"allow": False, "reason": "unattended"}
         return {"allow": allowed}

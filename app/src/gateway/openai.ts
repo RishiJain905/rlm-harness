@@ -20,7 +20,7 @@ export interface OpenAIContext {
   dropped: ReadonlySet<string>;
   /** The replay to attach to this assistant message, if any (D-33). */
   replay(m: Extract<Message, { role: "assistant" }>): Replay | undefined;
-  /** Cache markers: root calls, and batch calls that share one whole prompt (cache.ts). Only OpenRouter's Anthropic models use them (D-117). */
+  /** Cache markers: root calls, an rlm() child's turns, and batch calls that share one whole prompt (cache.ts). Only OpenRouter's Anthropic models use them (D-117). */
   markers: boolean;
   /** OpenRouter: mark the sub-call's stable prefix (p.prefix) as its own block; only Anthropic models use it (D-119). */
   prefixMark: boolean;

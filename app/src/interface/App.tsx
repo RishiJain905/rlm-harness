@@ -21,7 +21,7 @@ import { listFiles, mentionToken, parseQuestion, rankFiles, RUN_CHOICES, type Ru
 import { HISTORY_MAX, PromptBox } from "./PromptBox.tsx";
 import { StatusLine } from "./StatusLine.tsx";
 import { engineStoppedMessage, isActive, RunStore, statusModel, type AppDeps } from "./store.ts";
-import { allRows, SubcallPanel, type PanelState } from "./SubcallPanel.tsx";
+import { allRows, blockOfRow, rowCellCode, SubcallPanel, type PanelState } from "./SubcallPanel.tsx";
 import { SubcallView } from "./SubcallView.tsx";
 import { makeTheme, paint, span, ThemeContext } from "./theme.ts";
 import { bannerLines, Transcript, transcriptLines } from "./Transcript.tsx";
@@ -358,8 +358,8 @@ export function App(props: { deps: AppDeps }) {
       <SubcallView
         key={row.key}
         row={row}
-        block={view.blocks.find((b) => b.id === row.batchId)}
-        cellCode={view.cellCode}
+        block={blockOfRow(view.blocks, row.key)}
+        cellCode={rowCellCode(view.blocks, row, view.cellCode)}
         now={view.now}
         width={size.columns}
         height={mainHeight}

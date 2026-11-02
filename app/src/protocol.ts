@@ -78,10 +78,12 @@ export interface ModelErrorData {
   message: string;
 }
 
-/** The root turn and the line in that turn's cell. */
+/** The root turn and the line in that turn's cell. A sub-call an `rlm()` child makes also names the child (D-160); its
+ *  `turn` and `line` are then the child's own turn and cell line. */
 export interface Origin {
   turn: number;
   line: number | null;
+  child?: number;
 }
 
 /** A single `llm()` call is a batch of one (D-24). */
@@ -188,6 +190,18 @@ export interface ModelCompleteParams {
    *  batch's shared preamble) that many calls repeat byte for byte; `key` names it. The gateway marks and routes it
    *  for the provider's cache (D-119). */
   prefix?: { chars: number; key: string };
+  /** A root turn of an `rlm()` child run (D-160): `role` is "sub", `subcall_id` is the child's row, and the conversation
+   *  grows turn by turn like a root's, so the gateway caches and routes it as one (cache.ts routeKey). */
+  child?: ChildTurn;
+}
+
+/** Which child run a `model.complete` turn belongs to: its id, this turn and the child's limit, and its depth (1: the
+ *  root's own child). */
+export interface ChildTurn {
+  id: number;
+  turn: number;
+  max_turns: number;
+  depth: number;
 }
 
 export interface ModelCompleteResult {
@@ -285,6 +299,25 @@ export interface RunSubcallParams {
   seconds: number | null;
 }
 
+/** One `rlm()` child run's progress (D-160): "started" once, "turn" after each of its cells (that cell's code, output and
+ *  error), then "done" (with `answer`) or "error". The child's row also gets the usual run.subcall sent/done/error. */
+export interface RunChildParams {
+  run_id: string;
+  child_id: number;
+  subcall_id: number;
+  depth: number;
+  status: "started" | "turn" | "done" | "error";
+  task: string;
+  tools: string;
+  turn: number;
+  max_turns: number;
+  code: string | null;
+  output: string | null;
+  error: string | null;
+  answer: unknown;
+  seconds: number | null;
+}
+
 export interface RunPermissionParams {
   run_id: string;
   turn: number;
@@ -328,6 +361,7 @@ export type EngineEvents = {
   "run.reply": RunReplyParams;
   "run.cell": RunCellParams;
   "run.subcall": RunSubcallParams;
+  "run.child": RunChildParams;
   "run.permission": RunPermissionParams;
   "run.budget": RunBudgetParams;
   "run.finished": RunFinishedParams;

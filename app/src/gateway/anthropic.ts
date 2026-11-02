@@ -51,7 +51,7 @@ export interface AnthropicContext {
   shape?: ThinkingShape;
   /** Fields the parameter fallback took out for this model. */
   dropped: ReadonlySet<string>;
-  /** Cache markers: root calls, and batch calls that share one whole prompt (cache.ts). */
+  /** Cache markers: root calls, an rlm() child's turns, and batch calls that share one whole prompt (cache.ts). */
   markers: boolean;
   /** Mark the sub-call's stable prefix (p.prefix) as its own block (D-119). */
   prefixMark?: boolean;

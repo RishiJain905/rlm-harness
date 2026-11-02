@@ -11,6 +11,7 @@ import { RpcError } from "../link.ts";
 import {
   ErrorCode,
   type Batch,
+  type ChildTurn,
   type Message,
   type ModelCompleteParams,
   type ModelCompleteResult,
@@ -33,7 +34,9 @@ import { AttemptError, causeText, formatBytes, type Failure, type Replay, type S
 import { billedCost, emptyUsage, replyChars, requestChars, RunTotals, toUsage } from "./usage.ts";
 
 export type AppEvents = {
-  "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number };
+  "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number;
+                  /** A root turn of an rlm() child (D-160): the interface adds it to the child's row instead of starting the row again. */
+                  child?: ChildTurn };
   /** reset: a broken stream is retried whole; drop this call's text and reasoning so far. */
   "call.delta": { call_id: string; text?: string; reasoning?: string; reset?: true };
   "call.end": { call_id: string; run_id: string; usage: Usage; finish_reason: string; seconds: number; error?: ModelErrorData;
@@ -183,6 +186,7 @@ export class Gateway {
       ...(p.subcall_id !== undefined ? { subcall_id: p.subcall_id } : {}),
       ...(p.batch !== undefined ? { batch: p.batch } : {}),
       ...(p.origin !== undefined ? { origin: p.origin } : {}),
+      ...(p.child !== undefined ? { child: p.child } : {}),
       model: p.model,
       prompt: p.messages[p.messages.length - 1]?.content ?? "",
       started_at: startedAt,
@@ -217,10 +221,10 @@ export class Gateway {
     const run = this.runs.get(runId);
     if (run) for (const ac of [...run.calls]) ac.abort(new Error("cancelled"));
     this.gate.dropRun(runId);
-    // the run's own conversations are over; prefix pins (rlmh-<key>) outlive it, for the next run on the same input
+    // the run's own conversations (root, sub-calls, children) are over; prefix pins (rlmh-<key>) outlive it, for the next run on the same input
     for (const key of [...this.pins.keys()]) {
       const route = key.slice(key.indexOf("\0") + 1);
-      if (route === runId || route === `${runId}-sub`) this.pins.delete(key);
+      if (route === runId || route === `${runId}-sub` || route.startsWith(`${runId}-child-`)) this.pins.delete(key);
     }
   }
 
@@ -322,7 +326,8 @@ export class Gateway {
     if (def.client === "fake") return this.fakeCall(c);
 
     let ticket: BatchTicket | null = null;
-    if (p.role === "sub" && p.batch && p.batch.size > 1 && def.caching !== "none") {
+    // a child's turn is a conversation of its own, never a member of a batch (D-160)
+    if (p.role === "sub" && !p.child && p.batch && p.batch.size > 1 && def.caching !== "none") {
       const member = { index: p.batch.index, size: p.batch.size, prompt: p.messages[p.messages.length - 1]?.content ?? "" };
       // with a stable prefix the call marks its own block, so Anthropic needs only the leader-first order (D-119)
       const caching = p.prefix && def.caching === "anthropic" ? "auto" : def.caching;
@@ -447,8 +452,9 @@ export class Gateway {
     const { p, def, run } = c;
     const modelKey = `${def.id}\0${p.model.model}`;
     const dropped = this.dropped.get(modelKey) ?? new Set<string>();
-    const replay = (m: Extract<Message, { role: "assistant" }>) => (m.tool_call ? run.replay.get(replayKey(m.content, m.tool_call.id)) : undefined);
-    const markers = p.role === "root" || (ticket?.marker ?? false);
+    const replay = (m: Extract<Message, { role: "assistant" }>) => (m.tool_call ? run.replay.get(replayKey(m.content, m.tool_call.id, p)) : undefined);
+    // a child's turns grow like the root's, so each turn marks the conversation so far for the next (D-160)
+    const markers = p.role === "root" || p.child !== undefined || (ticket?.marker ?? false);
     const prefixMark = prefixWorthMarking(p, c.info?.cache_min_tokens ?? null);
     if (def.client === "anthropic") return buildAnthropicRequest(p, { shape: this.shapes.get(modelKey), dropped, markers, prefixMark, replay });
     return buildOpenAIRequest(p, { provider: def, info: c.info, dropped, replay, markers, prefixMark, endpoint: this.endpointFor(c) });
@@ -524,12 +530,13 @@ export class Gateway {
     const { p, def, run } = c;
     let toolCall: ToolCall | null = null;
     if (out.toolCall) {
-      toolCall = { id: out.toolCall.id ?? `call_${p.run_id}_${p.turn}`, name: out.toolCall.name, arguments: parseArguments(out.toolCall.arguments) };
+      const fallbackId = p.child ? `call_${p.run_id}_c${p.child.id}_${p.turn}` : `call_${p.run_id}_${p.turn}`; // a child's turns count from 1 too
+      toolCall = { id: out.toolCall.id ?? fallbackId, name: out.toolCall.name, arguments: parseArguments(out.toolCall.arguments) };
     }
     const finish = toolCall && out.finish !== "length" ? "tool_call" : (out.finish ?? "stop");
     if (toolCall) {
       const replay = pickReplay(def.id, out.replay);
-      if (replay) run.replay.set(replayKey(out.text, toolCall.id), replay);
+      if (replay) run.replay.set(replayKey(out.text, toolCall.id, p), replay);
     }
     const usage = toUsage(out.usage, c.info, { input: requestChars(p), output: replyChars(out.text, toolCall) });
     const billed = def.id === "openrouter" ? billedCost(out.usage) : null;
@@ -584,9 +591,9 @@ export class Gateway {
     return info && info.max_output > 0 && p.max_tokens > info.max_output ? { ...p, max_tokens: info.max_output } : p;
   }
 
-  /** D-25, root calls only: ceil(chars / 3) + max_tokens against a known window. */
+  /** D-25, root calls and a child's turns (D-160): ceil(chars / 3) + max_tokens against a known window. */
   private windowCheck(p: ModelCompleteParams, info?: ModelInfo): void {
-    if (p.role !== "root" || !info || info.context_window <= 0) return;
+    if ((p.role !== "root" && !p.child) || !info || info.context_window <= 0) return;
     const prompt = Math.ceil(requestChars(p) / 3);
     const est = prompt + p.max_tokens;
     if (est <= info.context_window) return;
@@ -836,8 +843,11 @@ function portOf(url: string): string {
   }
 }
 
-function replayKey(text: string, toolCallId: string): string {
-  return createHash("sha256").update(`${text}\0${toolCallId}`).digest("hex");
+/** Scoped to the conversation (the root, or one rlm() child, D-160), so two conversations that reuse a tool-call id
+ *  never get each other's reasoning back. */
+function replayKey(text: string, toolCallId: string, p: Pick<ModelCompleteParams, "child">): string {
+  const scope = p.child ? `child-${p.child.id}` : "root";
+  return createHash("sha256").update(`${scope}\0${text}\0${toolCallId}`).digest("hex");
 }
 
 /** The replay table (D-33): what each provider needs back. */

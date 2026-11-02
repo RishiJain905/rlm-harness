@@ -18,6 +18,8 @@ export interface Glyphs {
   on: string;
   off: string;
   more: string;
+  /** Marks a block of calls an rlm() child made (D-160). */
+  nest: string;
 }
 
 /** One decimal under 100 units, none from 100. */
@@ -93,6 +95,7 @@ const UNICODE_GLYPHS: Glyphs = {
   on: "●",
   off: "○",
   more: "…",
+  nest: "↳",
 };
 
 const ASCII_GLYPHS: Glyphs = {
@@ -103,6 +106,7 @@ const ASCII_GLYPHS: Glyphs = {
   on: "*",
   off: ".",
   more: "...",
+  nest: "->",
 };
 
 export function glyphs(unicode: boolean): Glyphs {

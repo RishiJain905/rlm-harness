@@ -1192,6 +1192,7 @@ export function runRecord(over: Record<string, unknown> = {}): Record<string, an
       seconds: [1.21, 1.34, 1.18][i],
       usage: subUsage[i],
     })),
+    children: [],
     fetches: [],
     permissions: [{ turn: 1, kind: "shell", detail: "wc -l notes.txt", allowed: true, asked: true, remembered: false }],
     submitted: true,

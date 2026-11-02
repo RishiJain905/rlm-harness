@@ -3,7 +3,8 @@
 One run: training's `run_episode` (rlm_rl/env.py at RLM commit 0b9af69) against any model through the app, with
 `_cap_output` copied. Left out, as the build plan lists: token ids, logprobs, rewards, detectors, the grader,
 broken-reply redraws and format penalties. Added: the §5.3 events, the run-log record (§7.8), native tool calls
-(callformat, 6b), the permission modes, and a scratch folder that is removed when the run ends (D-12).
+(callformat, 6b), the permission modes, a scratch folder that is removed when the run ends (D-12), and under a
+profile's agent_api the rlm() children (child.py, D-160).
 
 `run` never raises, except CancelledError, and that only after the record is written and `run.finished` sent.
 """
@@ -27,6 +28,7 @@ from typing import Any
 from . import PROTOCOL_VERSION, __version__, callformat, contract, inputs, workspace
 from .appport import AppPort
 from .bridge import Bridge
+from .child import Children
 from .errors import InfraError, ModelError
 from .permissions import Permissions
 from .profiles import Profile
@@ -37,6 +39,9 @@ USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write
               "cost_usd")
 EVENT_LIMITS = ("max_turns", "max_subcalls", "root_max_tokens", "output_max_chars", "cell_timeout_s",
                 "subcall_max_chars", "subcall_max_tokens")  # run.started's `limits` (§5.3)
+# A cell that waits on an rlm() child waits for a whole run, so agent_api raises the worker's wall cap from 30 minutes
+# (manager.Worker's default) to three hours (D-160).
+AGENT_WALL_CAP_S = 3 * 3600.0
 RMTREE_TRIES = 5
 RMTREE_WAIT_S = 0.2
 
@@ -62,6 +67,7 @@ class RunSpec:
     tag: str | None
     batch: str
     log_path: Path
+    input_spans: list[dict] | None = None  # read mode: each input's place in `context` (inputs.prepare, D-157)
 
 
 async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker) -> dict:
@@ -89,6 +95,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
     cancelled = False
     perms: Permissions | None = None
     bridge: Bridge | None = None
+    children: Children | None = None
     worker: Any = None
 
     try:
@@ -112,10 +119,20 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
                             repo_mode=repo_mode, interactive=spec.interactive, app=app)
         bridge = Bridge(run_id=spec.run_id, app=app, profile=spec.profile, mode=spec.mode, sub_ref=spec.sub,
                         permissions=perms)
+        init_extra = None
+        if spec.profile.agent_api:  # never training-v4: its worker's init and REPL stay training's (D-157)
+            children = bridge.children = Children(
+                run_id=spec.run_id, app=app, profile=spec.profile, mode=spec.mode, root=spec.root,
+                call_format=spec.call_format, bridge=bridge, permissions=perms, shell=shell, scratch=scratch,
+                repo_path=spec.repo_path, base_tree=base_tree, test_hint=spec.test_hint, language=spec.language,
+                worker_factory=worker_factory, emit=emit)
+            init_extra = children.init_extra(mode=spec.mode, task=spec.task, tool_names=None,
+                                             input_files=spec.input_spans or [Path(p).as_posix() for p in spec.inputs])
         worker = worker_factory(mode=spec.mode, context=spec.context, workspace=workspace_path, scratch=scratch,
                                 limits=limits, messages=contract.cell_messages(limits, edit=repo_mode),
                                 on_request=bridge.handle, shell=shell, base_tree=base_tree,
-                                cache_api=spec.profile.cache_api)
+                                cache_api=spec.profile.cache_api,
+                                **({"init_extra": init_extra, "wall_cap_s": AGENT_WALL_CAP_S} if init_extra else {}))
         await worker.start()
         emit("run.started", {
             "tag": spec.tag, "mode": spec.mode, "profile": spec.profile.name,
@@ -185,6 +202,9 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
             emit("run.cell", _cell_event(turn, code, result, entry["observation"]))
             emit("run.budget", {"turns_left": turns_left, "subcalls_left": bridge.subcalls_left()})
 
+        if children is not None and children.started:
+            # rlm() children still running (rlm_async) end with the worker, before the diff, so none edits after it
+            await worker.close()
         if infra_error is None and repo_mode and base_tree is not None:
             diff = await _workspace_call(workspace.diff, spec.repo_path, base_tree, scratch)
     except asyncio.CancelledError:
@@ -207,7 +227,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
             record = _record(
                 spec, started_at=started_at, wall_s=round(time.monotonic() - clock, 3), limits=limits,
                 workspace_path=workspace_path, base_tree=base_tree, messages=messages, turns=turns,
-                root_usage=root_usage, bridge=bridge, perms=perms, worker=worker, submitted=submitted,
+                root_usage=root_usage, bridge=bridge, children=children, perms=perms, worker=worker, submitted=submitted,
                 answer=answer, answer_valid=answer_valid, diff=diff, infra_error=infra_error,
                 infra_kind=infra_kind, host_traceback=host_traceback,
             )
@@ -303,7 +323,7 @@ def _input_info(spec: RunSpec) -> dict:
 
 def _record(spec: RunSpec, *, started_at: float, wall_s: float, limits: contract.Limits | None, workspace_path: Path,
             base_tree: str | None, messages: list[dict], turns: list[dict], root_usage: dict, bridge: Bridge | None,
-            perms: Permissions | None, worker: Any, submitted: bool, answer: Any, answer_valid: bool, diff: str | None,
+            children: Children | None, perms: Permissions | None, worker: Any, submitted: bool, answer: Any, answer_valid: bool, diff: str | None,
             infra_error: str | None, infra_kind: str | None, host_traceback: str | None) -> dict:
     """The run-log record, keys in runlog.RECORD_KEYS order (§7.8)."""
     records = sorted(bridge.records, key=lambda r: r.subcall_id) if bridge is not None else []
@@ -341,6 +361,7 @@ def _record(spec: RunSpec, *, started_at: float, wall_s: float, limits: contract
         "messages": messages,
         "turns": turns,
         "subcalls": [dataclasses.asdict(r) for r in records],
+        "children": children.records() if children is not None else [],
         "fetches": list(bridge.fetches) if bridge is not None else [],
         "permissions": list(perms.log) if perms is not None else [],
         "submitted": submitted,

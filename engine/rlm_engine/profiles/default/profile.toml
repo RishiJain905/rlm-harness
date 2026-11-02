@@ -1,11 +1,18 @@
 contract = "v4"
 guidance = "guidance.md"
 cache_api = true              # cache-shaped sub-calls: segments(), llm(..., over=), llm_batch(..., shared=, over=) (D-119)
+agent_api = true              # ask_files, schema=, llm_async, rlm, review, check, outline (D-157 to D-162)
 
 [root]
 temperature = 1.0
 [sub]
 temperature = 0.3
+
+[rlm]                         # rlm() child runs (D-160)
+max_runs = 12                 # children per run, at any depth
+max_turns = 30                # each child's turn limit; rlm(max_turns=) can only lower it
+max_depth = 1                 # the root's children cannot start children of their own
+max_parallel = 4              # children running at once; the rest wait
 
 [read]                        # contract.READ_LIMITS_V4 with more turns and output tokens (D-152)
 max_turns = 50

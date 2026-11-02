@@ -80,8 +80,10 @@ def test_default_guidance_text() -> None:
     raw = (p.BUILTIN_DIR / "default" / "guidance.md").read_bytes()
     assert b"\r\n" not in raw and not raw.startswith(b"\xef\xbb\xbf") and raw.endswith(b"\n")
     text = raw.decode("utf-8")
-    assert len(text.splitlines()) <= 12
+    assert len(text.splitlines()) <= 24  # D-162: the delegation notes doubled it
     assert "fetch(url) -> str" in text and "200,000" in text and "{shell}" in text
+    for name in ("ask_files(", "schema=", "llm_async", "gather(", "rlm(", "outline(", "check(", "review("):
+        assert name in text, name
 
 
 def test_profile_hash(tmp_path: Path) -> None:

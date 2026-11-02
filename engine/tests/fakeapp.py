@@ -40,7 +40,9 @@ class FakeApp(AppPort):
     the script: root replies in order (a `tool_call: {code}` entry becomes a `python` call with id
     `call_<n>`), sub-calls by the first rule whose `match` regex finds the prompt, else the rule
     without `match`, and `errors` entries as ModelError. Tokens are ceil(chars / 4) at zero cost,
-    unless an entry carries its own `usage`. `delay_ms` waits that long before each answer.
+    unless an entry carries its own `usage`. `delay_ms` waits that long before each answer. An rlm()
+    child's turn (params with `child`, D-160) is served `children[<child id>]`, else `children["*"]`,
+    at the child's turn number, and leaves the root and sub counters alone.
     `requests` holds a deep copy of every `complete` params, in order.
     """
 
@@ -101,6 +103,20 @@ class FakeApp(AppPort):
         script = self.script or {}
         role = params["role"]
         state = self._runs.setdefault(params["run_id"], {"served": 0, "root": 0, "sub": 0})
+        child = params.get("child")
+        if child is not None:  # an rlm() child's turn (D-160): `children[id]` or `children["*"]`, by the child's turn
+            if script.get("delay_ms"):
+                await asyncio.sleep(script["delay_ms"] / 1000)
+            lists = script.get("children") or {}
+            entries = lists.get(str(child["id"]), lists.get("*")) or []
+            if child["turn"] > len(entries):
+                raise ModelError("fake script exhausted", kind="other")
+            entry = entries[child["turn"] - 1]
+            tool_call = None
+            if entry.get("tool_call"):
+                tool_call = {"id": f"call_c{child['id']}_{child['turn']}", "name": "python",
+                             "arguments": {"code": entry["tool_call"]["code"]}}
+            return self._reply(params, entry, tool_call)
         state[role] += 1
         n = state[role]
         if script.get("delay_ms"):
@@ -127,6 +143,9 @@ class FakeApp(AppPort):
             entry = entry or next((r for r in rules if "match" not in r), None)
             if entry is None:
                 raise ModelError("fake script has no sub-call rule for this prompt", kind="other")
+        return self._reply(params, entry, tool_call)
+
+    def _reply(self, params: dict, entry: dict, tool_call: dict | None) -> dict:
         text = entry.get("text", "")
         usage = zero_usage()
         usage["input_tokens"] = math.ceil(_request_chars(params) / 4)

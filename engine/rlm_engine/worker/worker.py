@@ -4,7 +4,8 @@ KV cache: what a cell prints, its traceback and the sub-call errors become the m
 is frozen to training's (_Capped, _format_error, _truncate, submit), so the same cell gives the same bytes.
 
 Launched as `python -I -B -X utf8 <dir>/rlm_engine/worker/worker.py` (D-01, D-42). Standard library only, and it
-imports only its sibling files `hooks`, `tools` and `cacheapi` (D-119), by putting its own folder on sys.path for those imports.
+imports only its sibling files `hooks`, `tools`, `cacheapi` (D-119), `agentapi` and `codeapi` (D-157 to D-162), by
+putting its own folder on sys.path for those imports.
 It speaks JSON lines on private dups of its original stdin and stdout (architecture §6.1): the engine sends `init`,
 then `cell`s and `vars`; the worker sends `ready`, `result`s, `vars` answers and `request`s (`llm`, `llm_batch`,
 `fetch`, `approve`), whose `reply` the reader thread hands back to the waiting thread.
@@ -34,7 +35,9 @@ import traceback
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)  # -I leaves the script's folder off sys.path (D-01)
 try:
+    import agentapi
     import cacheapi
+    import codeapi
     import hooks
     import tools
 finally:
@@ -50,6 +53,7 @@ SUBMIT_MAX_BYTES = 100_000
 
 STDERR_KEEP_CHARS = 4000
 HIDDEN_NAMES = frozenset(API_NAMES + ("fetch",) + tools.TOOL_NAMES)  # never listed by `vars`
+_hidden = set(HIDDEN_NAMES)  # plus agentapi's and codeapi's names when init installs them (D-157)
 VARS_REPR_MAX = 10**6
 
 _state = {"submitted": False, "answer": None}
@@ -107,6 +111,9 @@ def _repl_line():
     return None
 
 
+_async_line = threading.local()
+
+
 def _request(op: str, **fields) -> dict:
     """One request to the engine, from any thread; blocks until its reply. Raises RuntimeError on an error reply."""
     slot = [threading.Event(), None]
@@ -115,7 +122,12 @@ def _request(op: str, **fields) -> dict:
             _link["next_id"] += 1
             request_id = _link["next_id"]
             _pending[request_id] = slot
-        message = {"type": "request", "id": request_id, "op": op, "line": _repl_line(), **fields}
+        line, cell = _repl_line(), None
+        if line is None:  # a thread agentapi started for llm_async and the like: the cell, and line, that started it
+            line, cell = getattr(_async_line, "line", None), getattr(_async_line, "cell", None)
+        message = {"type": "request", "id": request_id, "op": op, "line": line, **fields}
+        if cell is not None:
+            message["cell"] = cell  # the manager names its turn (D-159); only agentapi's threads set it
         with _waiting_lock:
             if not _waiting["calls"]:
                 _waiting["since"] = time.monotonic()
@@ -147,6 +159,8 @@ def _approve(kind: str, detail: str, inside_workspace: bool) -> None:
         return
     if reply.get("reason") == "unattended":
         raise PermissionError(13, UNATTENDED_DENIAL, detail)
+    if reply.get("reason") == "read-only":
+        raise PermissionError(13, READ_ONLY_DENIAL, detail)
     raise PermissionError(13, "Permission denied (not approved)", detail)
 
 
@@ -155,17 +169,29 @@ UNATTENDED_DENIAL = ("Permission denied (no one can approve this in this run: ev
                      "approval is refused until it ends, so do not retry it; do the work in Python inside the REPL)")
 
 
+# D-160: a child run started with rlm(tools="read") may read the repository but not change it
+READ_ONLY_DENIAL = ("Permission denied (this rlm() run is read-only: it can read files and fetch, but not write files "
+                    "or run commands; submit() what you found instead)")
+
+
 def _remote_fetch(url: str) -> str:
     """tools.fetch's GET, made by the engine (D-16): the worker opens no connection."""
     return _request("fetch", url=url)["text"]
 
 
+_sub_thinking = threading.local()  # agentapi's thinking= for the sub-calls this thread sends (D-164)
+
+
 def _bridge(op: str, prompts: list, prefixes: list | None = None) -> list:
-    """One sub-call request to the engine, which enforces the budget. `prefixes` (cacheapi, D-119) rides along only
-    when some prompt has one, so training's requests are unchanged."""
+    """One sub-call request to the engine, which enforces the budget. `prefixes` (cacheapi, D-119) and `thinking`
+    (agentapi, D-164) ride along only when set, so training's requests are unchanged."""
+    fields = {"prompts": prompts}
     if prefixes is not None and any(p is not None for p in prefixes):
-        return _request(op, prompts=prompts, prefixes=prefixes)["outputs"]
-    return _request(op, prompts=prompts)["outputs"]
+        fields["prefixes"] = prefixes
+    thinking = getattr(_sub_thinking, "value", None)
+    if thinking is not None:
+        fields["thinking"] = thinking
+    return _request(op, **fields)["outputs"]
 
 
 _SUBCALLS = {"max_chars": SUBCALL_MAX_CHARS, "oversize": "truncate"}
@@ -359,7 +385,7 @@ def _format_error(exc: BaseException) -> str:
     return text
 
 
-_cell = {"timeout": None, "start": 0.0, "bridge_at_start": 0.0}
+_cell = {"timeout": None, "start": 0.0, "bridge_at_start": 0.0, "id": None}
 
 
 def cell_seconds_left() -> float:
@@ -491,7 +517,7 @@ def _vars() -> list:
     else:
         return []
     return [_var_info(name, value) for name, value in items  # exact str names: no user __eq__ or startswith
-            if type(name) is str and not name.startswith("_") and name not in HIDDEN_NAMES]
+            if type(name) is str and not name.startswith("_") and name not in _hidden]
 
 
 def _read_engine(proto_in) -> None:
@@ -536,12 +562,21 @@ def _start(message: dict) -> dict:
     _set_subcall_limits(message.get("subcall_max_chars"), message.get("subcall_oversize"))
     tools.configure(root=workspace, base=message.get("base_tree"), time_left=cell_seconds_left, scratch=scratch,
                     shell=message.get("shell"), alias=message.get("repo_alias"), approve=_approve,
-                    remote_fetch=_remote_fetch)
+                    remote_fetch=_remote_fetch, objects=message.get("snapshot_objects"))
     namespace = make_namespace(message["context"])
     if message.get("cache_api"):  # the default profile's cache-shaped sub-calls (D-119); never under training-v4
         namespace.update(cacheapi.namespace(message["context"], message.get("segment_chars"), _bridge, _SUBCALLS))
     if repo:
-        namespace.update(tools.namespace())
+        names = message.get("tool_names")  # a read-only rlm() child gets only the reading tools (D-160)
+        namespace.update({k: v for k, v in tools.namespace().items() if names is None or k in names})
+    if message.get("agent_api"):  # the default profile's delegation helpers (D-157 to D-162); never under training-v4
+        namespace.update(agentapi.namespace(
+            namespace, request=_request, limits=_SUBCALLS, async_line=_async_line, repl_line=_repl_line,
+            cell_id=lambda: _cell["id"], repo=repo,
+            tools=tools, sub_thinking=_sub_thinking, input_files=message.get("input_files") or []))
+        namespace.update(codeapi.namespace(llm_batch=namespace["llm_batch"], tools=tools, task=message.get("task"),
+                                           test_hint=message.get("test_hint"), repo=repo))
+        _hidden.update(agentapi.NAMES + codeapi.NAMES)
     hooks.install(approve=_approve, workspace=workspace, scratch=scratch, tools=tools)
     _namespace.update(namespace)
     return _namespace
@@ -583,6 +618,7 @@ def repl_main() -> None:
         if message.get("type") != "cell" or not isinstance(code, str):
             _send({"type": "protocol_error", "error": "expected {\"type\": \"cell\", \"id\": ..., \"code\": ...}"})
             continue
+        _cell["id"] = message.get("id")
         _send({"type": "result", "id": message.get("id"), **run_cell(code, namespace)})
 
 

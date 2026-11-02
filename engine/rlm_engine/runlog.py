@@ -39,7 +39,7 @@ FORMAT_VERSION = 1
 RECORD_KEYS: tuple[str, ...] = (
     "format", "run_id", "tag", "batch", "harness_version", "protocol", "contract", "contract_hash", "prompt_hash",
     "profile", "profile_hash", "mode", "call_format", "root", "sub", "permission_mode", "limits", "started_at",
-    "wall_s", "question", "input", "workspace", "base_tree", "messages", "turns", "subcalls", "fetches",
+    "wall_s", "question", "input", "workspace", "base_tree", "messages", "turns", "subcalls", "children", "fetches",
     "permissions", "submitted", "answer", "answer_valid", "usage", "cost_usd", "cache", "timeouts", "crashes",
     "restarts", "diff", "infra_error", "infra_kind", "host_traceback",
 )

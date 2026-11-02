@@ -7,6 +7,7 @@ import type { AppEvents } from "../gateway/gateway.ts";
 import type {
   ModelRef,
   RunCellParams,
+  RunChildParams,
   RunFinishedParams,
   RunPermissionParams,
   RunReplyParams,
@@ -96,6 +97,18 @@ export function attachPlain(bus: Bus<AppEvents>, out: LineSink): () => void {
         say(p.run_id, [`turn ${p.origin.turn}: sub-call${id} ${how}`]);
         break;
       }
+      case "run.child": {
+        const p = params as RunChildParams;
+        if (p.status === "turn") break;
+        const how =
+          p.status === "started"
+            ? `started (depth ${p.depth}, tools ${p.tools}, up to ${p.max_turns} turns): ${p.task.split("\n")[0]!.slice(0, 120)}`
+            : p.status === "done"
+              ? `done after ${p.turn} turn${p.turn === 1 ? "" : "s"}, ${secs(p.seconds ?? 0)}`
+              : `error: ${p.error ?? ""}`;
+        say(p.run_id, [`rlm${p.child_id} ${how}`]);
+        break;
+      }
       case "run.permission": {
         const p = params as RunPermissionParams;
         const how = [p.allowed ? "allowed" : "denied", p.asked ? "asked" : "not asked", ...(p.remembered ? ["remembered"] : [])];
@@ -113,7 +126,7 @@ export function attachPlain(bus: Bus<AppEvents>, out: LineSink): () => void {
         tags.delete(p.run_id);
         break;
       }
-      // run.budget and sub-calls at `sent` stay silent
+      // run.budget, sub-calls at `sent` and a child's turns stay silent
     }
   });
 }

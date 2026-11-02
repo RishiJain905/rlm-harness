@@ -194,6 +194,35 @@
       }}
     },
     {
+      "name": "model.complete:request:child",
+      "direction": "engine->app",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": "e6", "method": "model.complete", "params": {
+        "run_id": "r_0123456789ab",
+        "role": "sub",
+        "model": {"provider": "anthropic", "model": "example-root-model", "thinking": null},
+        "messages": [
+          {"role": "system", "content": "Example system prompt."},
+          {"role": "user", "content": "Task: Find where the config file is parsed and name the function.\n\nThe repository is your working folder, read-only. Call submit() with your answer."},
+          {"role": "assistant", "content": "Searching for the loader.", "tool_call": {"id": "call_c1_1", "name": "python", "arguments": {"code": "print(grep('def load_config'))"}}},
+          {"role": "tool", "tool_call_id": "call_c1_1", "content": "src/config.py:12: def load_config(path):\n\nExample turns and sub-calls left."}
+        ],
+        "tools": [
+          {"name": "python",
+           "description": "Run one cell of Python in the persistent REPL. Variables persist between calls. The result is what the cell printed, followed by your remaining turns and sub-calls.",
+           "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "The Python code to run."}}, "required": ["code"], "additionalProperties": false}}
+        ],
+        "max_tokens": 4096,
+        "temperature": 0.0,
+        "thinking": "off",
+        "turn": 2,
+        "subcall_id": 4,
+        "origin": {"turn": 3, "line": 2},
+        "batch": {"id": "rlm1", "index": 0, "size": 1},
+        "child": {"id": 1, "turn": 2, "max_turns": 30, "depth": 1}
+      }}
+    },
+    {
       "name": "model.complete:result",
       "direction": "app->engine",
       "kind": "result",
@@ -332,6 +361,27 @@
         "status": "done",
         "error": null,
         "seconds": 3.4
+      }}
+    },
+    {
+      "name": "run.child:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.child", "params": {
+        "run_id": "r_0123456789ab",
+        "child_id": 1,
+        "subcall_id": 4,
+        "depth": 1,
+        "status": "turn",
+        "task": "Find where the config file is parsed and name the function.",
+        "tools": "read",
+        "turn": 1,
+        "max_turns": 30,
+        "code": "print(grep('def load_config'))",
+        "output": "src/config.py:12: def load_config(path):\n",
+        "error": null,
+        "answer": null,
+        "seconds": null
       }}
     },
     {

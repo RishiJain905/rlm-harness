@@ -47,6 +47,7 @@ const REQUIRED = [
   "model.complete:request:root",
   "model.complete:request:sub",
   "model.complete:request:sub-prefix",
+  "model.complete:request:child",
   "model.complete:result",
   "approval.request:request",
   "approval.request:result",
@@ -64,6 +65,7 @@ const REQUIRED = [
   "run.reply:notification",
   "run.cell:notification",
   "run.subcall:notification",
+  "run.child:notification",
   "run.permission:notification",
   "run.budget:notification",
   "run.finished:notification",
@@ -83,6 +85,7 @@ const METHODS: Record<string, string> = {
   "run.reply": "engine->app",
   "run.cell": "engine->app",
   "run.subcall": "engine->app",
+  "run.child": "engine->app",
   "run.permission": "engine->app",
   "run.budget": "engine->app",
   "run.finished": "engine->app",
@@ -105,6 +108,7 @@ const PYTHON_TOOL = {
 // -- a small type language for §4 and §5 --
 
 type Spec =
+  | "any"
   | "str"
   | "int"
   | "num"
@@ -144,7 +148,7 @@ const MODEL_ERROR_DATA = obj({
   status: nullable("int"),
   message: "str",
 });
-const ORIGIN = obj({ turn: "int", line: nullable("int") });
+const ORIGIN = obj({ turn: "int", line: nullable("int") }, { child: "int" });
 const BATCH = obj({ id: "str", index: "int", size: "int" });
 const MESSAGES: Record<string, Spec> = {
   system: obj({ role: oneOf("system"), content: "str" }),
@@ -201,7 +205,13 @@ const FIELDS: Record<string, Spec> = {
       thinking: THINKING,
       turn: "int",
     },
-    { subcall_id: "int", origin: ORIGIN, batch: BATCH, prefix: obj({ chars: "int", key: "str" }) },
+    {
+      subcall_id: "int",
+      origin: ORIGIN,
+      batch: BATCH,
+      prefix: obj({ chars: "int", key: "str" }),
+      child: obj({ id: "int", turn: "int", max_turns: "int", depth: "int" }),
+    },
   ),
   "model.complete:result": obj({
     text: "str",
@@ -271,6 +281,22 @@ const FIELDS: Record<string, Spec> = {
     error: nullable("str"),
     seconds: nullable("num"),
   }),
+  "run.child:notification": obj({
+    run_id: "str",
+    child_id: "int",
+    subcall_id: "int",
+    depth: "int",
+    status: oneOf("started", "turn", "done", "error"),
+    task: "str",
+    tools: "str",
+    turn: "int",
+    max_turns: "int",
+    code: nullable("str"),
+    output: nullable("str"),
+    error: nullable("str"),
+    answer: "any",
+    seconds: nullable("num"),
+  }),
   "run.permission:notification": obj({
     run_id: "str",
     turn: "int",
@@ -308,7 +334,8 @@ function check(value: unknown, spec: Spec, path: string): void {
   const fail = (what: string) => {
     throw new Error(`${path}: ${what}: ${JSON.stringify(value)}`);
   };
-  if (spec === "str") typeof value === "string" || fail("not a string");
+  if (spec === "any") return;
+  else if (spec === "str") typeof value === "string" || fail("not a string");
   else if (spec === "int") Number.isInteger(value) || fail("not an integer");
   else if (spec === "num") typeof value === "number" || fail("not a number");
   else if (spec === "bool") typeof value === "boolean" || fail("not a bool");
@@ -432,6 +459,16 @@ describe("protocol examples", () => {
     expect(sub.role).toBe("sub");
     expect(sub.tools).toEqual([]);
     expect(sub.messages.map((m: { role: string }) => m.role)).toEqual(["user"]);
+    expect("child" in sub).toBe(false);
+    // an rlm() child's root turn (D-160): role sub, a growing conversation with the python tool, its own batch of one
+    const child = byName.get("model.complete:request:child")!.message.params;
+    expect(child.role).toBe("sub");
+    expect(child.tools[0]).toEqual(PYTHON_TOOL);
+    expect(child.batch).toEqual({ id: `rlm${child.child.id}`, index: 0, size: 1 });
+    expect(child.turn).toBe(child.child.turn);
+    expect("prefix" in child).toBe(false);
+    const ev = byName.get("run.child:notification")!.message.params;
+    expect([ev.child_id, ev.subcall_id]).toEqual([child.child.id, child.subcall_id]);
   });
 
   test("check rejects bad shapes", () => {

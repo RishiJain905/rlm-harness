@@ -2,23 +2,24 @@
 // The full view of one sub-call: status, model, the cell line that issued it, tokens, cost and
 // time, then the prompt, the reasoning (when there is any) and the answer, which follows the
 // stream until the user scrolls. Esc or q closes; Left/Right step to the previous or next row.
+// An rlm() child (D-160) shows its task, its turns' replies, its cells and its answer instead.
 
 import { useInput } from "ink";
 import { useState } from "react";
 import { formatCost, formatDuration, formatTokens, wrapText } from "./format.ts";
 import { Lines } from "./Lines.tsx";
-import type { Block, SubcallRow } from "./store.ts";
-import { rowSeconds, rowTokens, statusColor } from "./SubcallPanel.tsx";
+import type { Block, ChildInfo, SubcallRow } from "./store.ts";
+import { rowSeconds, rowTokens, statusColor, statusWord } from "./SubcallPanel.tsx";
 import { paint, span, useTheme, type Line, type Theme } from "./theme.ts";
 
-const WORDS: Record<SubcallRow["status"], string> = { queued: "queued", streaming: "streaming", done: "done", error: "err", rejected: "rej" };
-
-/** "Issued by turn T, line L: <that line of the cell>", once the cell's code is known. */
+/** "Issued by turn T, line L: <that line of the cell>", once the cell's code is known; `rlm<n> turn T` for a call an
+ *  rlm() child made, whose cells `cellCode` then holds. */
 export function issuedBy(row: SubcallRow, cellCode: Record<number, string>): string {
   const { turn, line } = row.origin;
-  if (line === null) return `Issued by turn ${turn}, line unknown`;
+  const by = row.origin.child === undefined ? `turn ${turn}` : `rlm${row.origin.child} turn ${turn}`;
+  if (line === null) return `Issued by ${by}, line unknown`;
   const text = cellCode[turn]?.split("\n")[line - 1]?.trim();
-  return `Issued by turn ${turn}, line ${line}${text ? `: ${text}` : ""}`;
+  return `Issued by ${by}, line ${line}${text ? `: ${text}` : ""}`;
 }
 
 export function subcallViewLines(row: SubcallRow, block: Block | undefined, cellCode: Record<number, string>, now: number, width: number, theme: Theme): Line[] {
@@ -26,9 +27,10 @@ export function subcallViewLines(row: SubcallRow, block: Block | undefined, cell
   const wrap = (text: string, style: Omit<Line[number], "text"> = {}) => {
     for (const l of wrapText(text, width)) lines.push([span(l, style)]);
   };
-  const id = row.subcallId === null ? "refused request" : `Sub-call #${String(row.subcallId).padStart(2, "0")}`;
-  const where = block ? `  batch ${block.id}, call ${row.index + 1} of ${block.size}` : "";
-  lines.push([span(`${id}  `, { bold: true }), span(WORDS[row.status], { bold: true, color: statusColor(theme, row.status) }), span(where, { dim: true })]);
+  const c = row.child;
+  const id = c ? `rlm${c.id} child run` : row.subcallId === null ? "refused request" : `Sub-call #${String(row.subcallId).padStart(2, "0")}`;
+  const where = c ? `  depth ${c.depth}, tools ${c.tools || "?"}` : block ? `  batch ${block.id}, call ${row.index + 1} of ${block.size}` : "";
+  lines.push([span(`${id}  `, { bold: true }), span(statusWord(row), { bold: true, color: statusColor(theme, row.status) }), span(where, { dim: true })]);
   wrap(`model ${row.model ? `${row.model.provider}/${row.model.model}` : "--"}`);
   wrap(issuedBy(row, cellCode));
   if (row.status !== "rejected") {
@@ -40,10 +42,15 @@ export function subcallViewLines(row: SubcallRow, block: Block | undefined, cell
       : `tokens in ${t.input}  out ${t.output}`;
     wrap(`${tokens}  cost ${u ? formatCost(u.cost_usd) : "--"}  time ${s === null ? "--" : formatDuration(s)}`);
   }
+  if (c) wrap(`turn ${c.turn}/${c.maxTurns}`);
   const section = (title: string) => {
     lines.push([]);
     lines.push([span(`${title} `, { bold: true }), span(theme.rule.repeat(Math.max(0, width - title.length - 1)), { dim: true })]);
   };
+  if (c) {
+    childSections(row, c, wrap, section, lines, width, theme);
+    return lines;
+  }
   section("Prompt");
   wrap(row.prompt || (row.status === "rejected" ? `(${row.promptChars} characters, not sent)` : "(not sent yet)"), { dim: !row.prompt });
   if (row.reasoning) {
@@ -55,6 +62,40 @@ export function subcallViewLines(row: SubcallRow, block: Block | undefined, cell
   if (row.error) wrap(row.error, { color: paint(theme, row.status === "rejected" ? "yellow" : "red") });
   if (!row.text && !row.error) wrap(row.status === "done" ? "(empty answer)" : "(waiting)", { dim: true });
   return lines;
+}
+
+/** A child's task, reasoning, replies (each turn after its turn line), cells and answer. */
+function childSections(
+  row: SubcallRow,
+  c: ChildInfo,
+  wrap: (text: string, style?: Omit<Line[number], "text">) => void,
+  section: (title: string) => void,
+  lines: Line[],
+  width: number,
+  theme: Theme,
+): void {
+  section("Task");
+  wrap(c.task || row.prompt || "(not known yet)", { dim: !(c.task || row.prompt) });
+  if (row.reasoning) {
+    section("Reasoning");
+    wrap(row.reasoning, { dim: true });
+  }
+  section("Replies");
+  if (row.text) wrap(row.text);
+  else wrap("(waiting)", { dim: true });
+  section("Cells");
+  if (c.cells.length === 0) wrap("(none yet)", { dim: true });
+  const gutter = `${theme.bar} `;
+  for (const cell of c.cells) {
+    lines.push([span(`turn ${cell.turn}`, { bold: true })]);
+    if (cell.code !== null) for (const l of wrapText(cell.code, Math.max(1, width - gutter.length))) lines.push([span(gutter, { dim: true }), span(l, { color: paint(theme, "cyan") })]);
+    if (cell.output) wrap(cell.output);
+    if (cell.error) wrap(cell.error, { color: paint(theme, "red") });
+  }
+  section("Answer");
+  if (c.done && row.status !== "error") wrap(c.answer === null || c.answer === undefined ? "(no answer)" : typeof c.answer === "string" ? c.answer : JSON.stringify(c.answer), { dim: c.answer === null || c.answer === undefined });
+  if (row.error) wrap(row.error, { color: paint(theme, "red") });
+  if (!c.done && !row.error) wrap("(waiting)", { dim: true });
 }
 
 export function SubcallView(props: {

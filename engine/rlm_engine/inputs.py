@@ -76,6 +76,19 @@ def join_context(paths: Sequence[PurePath], texts: Sequence[str]) -> str:
     return "\n\n".join(f"=== {p.as_posix()} ===\n{t}" for p, t in zip(paths, texts))
 
 
+def context_spans(paths: Sequence[PurePath], texts: Sequence[str]) -> list[dict]:
+    """Where each file's text sits in join_context's string: `{name, start, end}` per file, in order (D-157), so the
+    REPL never has to find a part by searching text a file may itself contain."""
+    if len(texts) == 1:
+        return [{"name": paths[0].as_posix(), "start": 0, "end": len(texts[0])}]
+    spans, pos = [], 0
+    for p, t in zip(paths, texts):
+        start = pos + len(f"=== {p.as_posix()} ===\n")
+        spans.append({"name": p.as_posix(), "start": start, "end": start + len(t)})
+        pos = start + len(t) + len("\n\n")
+    return spans
+
+
 def read_context(paths: Sequence[Path]) -> str:
     """The `context` of a read-mode run (D-10). Raises InputError for an empty list, a relative path, or a path
     that is missing, a folder or unreadable."""
@@ -254,7 +267,12 @@ def prepare(spec: RunSpec) -> None:
     are set, and a second call changes nothing. Returns nothing. Raises InputError."""
     if spec.mode == "read":
         if spec.context is None:
-            spec.context = read_context(spec.inputs)
+            items = [p if isinstance(p, PurePath) else Path(p) for p in spec.inputs]
+            if not items:
+                raise InputError("a read-mode run needs at least one input file")
+            texts = [_read_file(p) for p in items]
+            spec.context = join_context(items, texts)
+            spec.input_spans = context_spans(items, texts)
         return
     if spec.mode != "repo":
         raise InputError(f"unknown mode {spec.mode!r}")

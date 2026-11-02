@@ -4,8 +4,9 @@ Copied from rlm_rl/repl_tools.py at RLM commit 0b9af69 (step 4 of the v0 build).
 signatures and docstrings, TOOLS_VERSION, ShellResult, namespace(), active() and on_call are training's. The
 changes, each required by the step 4 spec: configure() takes scratch, shell, alias, approve and remote_fetch;
 _abs maps the /work/repo alias onto the workspace; the paths the tools show and match use `/` on every OS;
-_git runs quietly (quiet(), read by the worker's audit hook) with no prompt, no fsmonitor and no console
-window; shell() asks approve() first and runs the shell find_shell chose (sh, Git Bash or PowerShell);
+_git runs quietly (quiet(), read by the worker's audit hook) with no prompt, no fsmonitor, no repository hooks
+(D-165) and no console window; configure() also takes objects, the snapshot's object store when it is not the scratch folder's own (an rlm()
+child's, D-160); shell() asks approve() first and runs the shell find_shell chose (sh, Git Bash or PowerShell);
 diff() compares against the engine's snapshot tree with a temporary index in the scratch folder; fetch()
 is new; and shell()'s processes stay the engine's to kill: on POSIX its process group is listed in
 <scratch>/shell-groups, on Windows it runs in a job object of its own (popen_owned). Everything else,
@@ -72,12 +73,12 @@ else:
     _NEW_GROUP = {"start_new_session": True}
 
 _config = {"root": REPO_DIR, "base": None, "time_left": None, "on_call": None, "scratch": None, "shell": SH,
-           "alias": REPO_DIR, "approve": None, "remote_fetch": None}
+           "alias": REPO_DIR, "approve": None, "remote_fetch": None, "objects": None}
 _local = threading.local()
 
 
 def configure(root: str = REPO_DIR, base: str | None = None, time_left=None, on_call=None, *, scratch=None,
-              shell=None, alias="/work/repo", approve=None, remote_fetch=None) -> None:
+              shell=None, alias="/work/repo", approve=None, remote_fetch=None, objects=None) -> None:
     """Set the repository the tools work in.
 
     base: the git tree diff() compares against (the engine's workspace.snapshot); None makes diff() raise.
@@ -88,11 +89,12 @@ def configure(root: str = REPO_DIR, base: str | None = None, time_left=None, on_
     alias: the path the model knows the repository by, mapped onto root; None turns the mapping off.
     approve: called as approve(kind, detail, inside_workspace) before shell() and fetch(); raises PermissionError.
     remote_fetch: called as remote_fetch(url) to make fetch()'s GET; None means fetch() is unavailable.
+    objects: the folder holding the base tree's objects, when it is not <scratch>/git-objects.
     """
     shell = SH if shell is None else {"kind": shell["kind"], "argv": list(shell["argv"])}
     _config.update(root=os.path.abspath(root), base=base, time_left=time_left, on_call=on_call,
                    scratch=os.path.abspath(scratch) if scratch else None, shell=shell, alias=alias, approve=approve,
-                   remote_fetch=remote_fetch)
+                   remote_fetch=remote_fetch, objects=os.path.abspath(objects) if objects else None)
 
 
 def namespace() -> dict:
@@ -224,7 +226,8 @@ def _git(args: list, cwd: str, env: dict | None = None, ok: tuple = (0,)) -> str
     env = {**(os.environ if env is None else env), "GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1"}  # D-63
     with _quiet():  # read-only git never asks (D-13); diff()'s writes go to the scratch folder
         done = subprocess.run(["git", "-c", "safe.directory=*", "-c", "core.quotepath=off", "-c",
-                               "core.fsmonitor=false", "-c", "core.safecrlf=false", *args], cwd=cwd,
+                               "core.fsmonitor=false", "-c", "core.safecrlf=false", "-c", f"core.hooksPath={os.devnull}",
+                               *args], cwd=cwd,
                               capture_output=True, env=env, stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
     if done.returncode not in ok:
         raise RuntimeError(f"git {args[0]} failed: {done.stderr.decode(errors='replace').strip()[:500]}")
@@ -689,7 +692,7 @@ def diff() -> str:
             real, index = os.path.join(git_dir, "index"), os.path.join(tmp, "index")
             if os.path.exists(real):
                 shutil.copy2(real, index)  # keeps the index's mtime for git's racy-entry check (D-64)
-            store = os.path.join(scratch or tmp, SNAPSHOT_OBJECTS)
+            store = _config["objects"] or os.path.join(scratch or tmp, SNAPSHOT_OBJECTS)
             os.makedirs(store, exist_ok=True)
             env = {k: v for k, v in os.environ.items() if k not in _GIT_STORE_VARS}
             env.update(GIT_INDEX_FILE=index, GIT_OBJECT_DIRECTORY=store,
