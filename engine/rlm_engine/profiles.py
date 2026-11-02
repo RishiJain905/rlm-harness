@@ -23,7 +23,7 @@ from . import contract
 BUILTIN_DIR = Path(__file__).resolve().parent / "profiles"
 
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-_TOP_KEYS = ("contract", "guidance", "cache_api", "root", "sub", "read", "repo")
+_TOP_KEYS = ("contract", "guidance", "cache_api", "agent_api", "rlm", "root", "sub", "read", "repo")
 _LIMIT_FIELDS = tuple(f.name for f in dataclasses.fields(contract.Limits))
 _THINKING = {"off": None, "low": "low", "medium": "medium", "high": "high"}  # TOML has no null: off means none
 _OVERSIZE = ("truncate", "error")
@@ -46,6 +46,20 @@ class ModeSettings:
 
 
 @dataclass(frozen=True)
+class RlmSettings:
+    """rlm() child runs (D-160): how many a run may start, each one's turn limit, how deep they nest, and how many run at
+    once (the rest wait)."""
+
+    max_runs: int = 12
+    max_turns: int = 30
+    max_depth: int = 1
+    max_parallel: int = 4
+
+
+_RLM_FIELDS = tuple(f.name for f in dataclasses.fields(RlmSettings))
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     source: str  # "builtin" or "user"
@@ -56,6 +70,8 @@ class Profile:
     read: ModeSettings
     repo: ModeSettings
     cache_api: bool = False  # cache-shaped sub-calls in the REPL (D-119); training-v4 never has them
+    agent_api: bool = False  # ask_files, schema=, llm_async, rlm, review, check, outline (D-157 to D-162); never training-v4
+    rlm: RlmSettings = RlmSettings()
     file_hash: str = ""  # profile_hash() of the bytes this profile was loaded from
 
     def system_prompt(self, shell_name: str = "sh") -> str:
@@ -149,6 +165,8 @@ def _load(name: str, folder: Path, source: str) -> Profile:
         raise ProfileError(f"profile {name!r}: missing key 'contract'")
     if data["contract"] != contract.CONTRACT_VERSION:
         raise ProfileError(f"profile {name!r}: contract must be {contract.CONTRACT_VERSION!r}, not {data['contract']!r}")
+    if data.get("agent_api") is True and data.get("cache_api") is not True:
+        raise ProfileError(f"profile {name!r}: agent_api needs cache_api = true")  # it builds on cacheapi's llm (D-157)
     guidance_path = _guidance_path(name, folder, data.get("guidance", ""))
     guidance, guidance_bytes = "", b""
     if guidance_path:
@@ -164,6 +182,8 @@ def _load(name: str, folder: Path, source: str) -> Profile:
         read=_mode(name, "read", data, contract.READ_LIMITS_V4),
         repo=_mode(name, "repo", data, contract.EDIT_LIMITS_V4),
         cache_api=_bool(name, "cache_api", data.get("cache_api", False)),
+        agent_api=_bool(name, "agent_api", data.get("agent_api", False)),
+        rlm=_rlm(name, data),
         file_hash=hashlib.sha256(toml_bytes + b"\x00" + guidance_bytes).hexdigest(),
     )
 
@@ -242,6 +262,22 @@ def _mode(name: str, key: str, data: dict, base: contract.Limits) -> ModeSetting
         else:
             raise ProfileError(f"profile {name!r}: unknown key {field!r} in [{key}]")
     return ModeSettings(dataclasses.replace(base, **changes), pace_nudge)
+
+
+def _rlm(name: str, data: dict) -> RlmSettings:
+    """The [rlm] table over RlmSettings' defaults. It needs agent_api, which brings rlm() into the REPL."""
+    table = _table(name, "rlm", data)
+    if table and data.get("agent_api") is not True:
+        raise ProfileError(f"profile {name!r}: [rlm] needs agent_api = true")
+    changes = {}
+    for field, value in table.items():
+        if field not in _RLM_FIELDS:
+            raise ProfileError(f"profile {name!r}: unknown key {field!r} in [rlm]")
+        least = 0 if field == "max_depth" else 1
+        if isinstance(value, bool) or not isinstance(value, int) or value < least:
+            raise ProfileError(f"profile {name!r}: [rlm] {field} must be an integer of at least {least}")
+        changes[field] = value
+    return RlmSettings(**changes)
 
 
 def _limit(where: str, field: str, value: object) -> object:

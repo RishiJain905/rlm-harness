@@ -364,6 +364,42 @@ describe("the window check", () => {
   });
 });
 
+describe("the output cap", () => {
+  test("max_tokens above the model's known maximum is lowered to it; at or below, and for an unknown maximum, it is sent as asked", async () => {
+    const r = await make({ keys: ["openai"] });
+    const small: ModelInfo = { provider: "openai", id: "small-out-FAKE", name: "small", context_window: 128_000, max_output: 4096, price: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, tool_call: true, reasoning: false, cache_min_tokens: null };
+    r.catalog.merge("openai", [small]);
+    server.script(() => openaiStream({ text: "ok" }));
+    const sent = async (model: string, max_tokens: number) => {
+      await r.gateway.complete(params(ref("openai", model), { max_tokens }));
+      return server.requests[server.requests.length - 1]!.body.max_completion_tokens;
+    };
+    expect(await sent("small-out-FAKE", 16_384)).toBe(4096);
+    expect(await sent("small-out-FAKE", 4096)).toBe(4096);
+    expect(await sent("small-out-FAKE", 1000)).toBe(1000);
+    expect(await sent("not-in-the-catalog", 16_384)).toBe(16_384);
+  });
+
+  test("the root request /context reads carries the lowered value", async () => {
+    const r = await make({ keys: ["openai"] });
+    const small: ModelInfo = { provider: "openai", id: "small-out-FAKE", name: "small", context_window: 128_000, max_output: 4096, price: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, tool_call: true, reasoning: false, cache_min_tokens: null };
+    r.catalog.merge("openai", [small]);
+    server.script(() => openaiStream({ text: "ok" }));
+    const p = params(ref("openai", "small-out-FAKE"), { max_tokens: 16_384 });
+    await r.gateway.complete(p);
+    expect(r.gateway.lastRootRequest(p.run_id)?.max_tokens).toBe(4096);
+  });
+
+  test("the window check counts the lowered value", async () => {
+    const r = await make({ keys: ["openai"] });
+    const tight: ModelInfo = { provider: "openai", id: "tight-FAKE", name: "tight", context_window: 5000, max_output: 4096, price: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, tool_call: true, reasoning: false, cache_min_tokens: null };
+    r.catalog.merge("openai", [tight]);
+    server.script(() => openaiStream({ text: "fits" }));
+    // a short prompt plus 16,384 would not fit in 5,000, but plus the model's 4,096 it does
+    expect((await r.gateway.complete(params(ref("openai", "tight-FAKE"), { max_tokens: 16_384 }))).text).toBe("fits");
+  });
+});
+
 describe("cancelling", () => {
   const ways = ["cancelRun", "signal"] as const;
 

@@ -36,8 +36,10 @@ from pathlib import Path
 from typing import Any
 
 # Every snapshot and diff git call gets these (step 4 spec, "Snapshot and diff").
+# core.hooksPath points at the null device, so no hook the repository sets up (post-index-change after the temporary
+# index's `git add`) runs as a side effect of a snapshot or diff (D-165)
 GIT_ARGS = ("-c", "safe.directory=*", "-c", "core.quotepath=off", "-c", "core.fsmonitor=false",
-            "-c", "core.safecrlf=false")
+            "-c", "core.safecrlf=false", "-c", f"core.hooksPath={os.devnull}")
 SNAPSHOT_OBJECTS = "git-objects"  # <scratch>/git-objects: the snapshot tree and every blob staged for it
 _GIT_STORE_VARS = ("GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
 DIFF_ARGS = ("--no-color", "--no-ext-diff", "--no-textconv")  # no program the config names runs for the diff

@@ -4,7 +4,7 @@
 // tool output from breaking the terminal. Nothing here imports Ink.
 
 export type Tone = "ok" | "warn" | "high";
-export type StatusId = "state" | "root" | "sub" | "ctx" | "cost" | "cache" | "budget" | "mode";
+export type StatusId = "state" | "root" | "sub" | "ctx" | "cost" | "cache" | "budget" | "mode" | "run";
 export interface StatusSegment {
   id: StatusId;
   text: string;
@@ -18,6 +18,8 @@ export interface Glyphs {
   on: string;
   off: string;
   more: string;
+  /** Marks a block of calls an rlm() child made (D-160). */
+  nest: string;
 }
 
 /** One decimal under 100 units, none from 100. */
@@ -93,6 +95,7 @@ const UNICODE_GLYPHS: Glyphs = {
   on: "●",
   off: "○",
   more: "…",
+  nest: "↳",
 };
 
 const ASCII_GLYPHS: Glyphs = {
@@ -103,6 +106,7 @@ const ASCII_GLYPHS: Glyphs = {
   on: "*",
   off: ".",
   more: "...",
+  nest: "->",
 };
 
 export function glyphs(unicode: boolean): Glyphs {
@@ -159,7 +163,7 @@ export function layoutHeights(
 }
 
 const SEPARATOR = " | ";
-const DROP_ORDER: readonly StatusId[] = ["mode", "sub", "cache", "root", "cost", "ctx", "budget"];
+const DROP_ORDER: readonly StatusId[] = ["mode", "sub", "cache", "root", "cost", "ctx", "budget", "run"]; // "run" shows only when it is not auto (D-156): it goes last
 
 /** The segments that fit `columns` joined with ` | `. `state` is never dropped, and order is kept. */
 export function layoutStatus(segments: readonly StatusSegment[], columns: number): StatusSegment[] {

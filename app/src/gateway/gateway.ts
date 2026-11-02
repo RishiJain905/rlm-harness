@@ -11,6 +11,7 @@ import { RpcError } from "../link.ts";
 import {
   ErrorCode,
   type Batch,
+  type ChildTurn,
   type Message,
   type ModelCompleteParams,
   type ModelCompleteResult,
@@ -33,7 +34,9 @@ import { AttemptError, causeText, formatBytes, type Failure, type Replay, type S
 import { billedCost, emptyUsage, replyChars, requestChars, RunTotals, toUsage } from "./usage.ts";
 
 export type AppEvents = {
-  "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number };
+  "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number;
+                  /** A root turn of an rlm() child (D-160): the interface adds it to the child's row instead of starting the row again. */
+                  child?: ChildTurn };
   /** reset: a broken stream is retried whole; drop this call's text and reasoning so far. */
   "call.delta": { call_id: string; text?: string; reasoning?: string; reset?: true };
   "call.end": { call_id: string; run_id: string; usage: Usage; finish_reason: string; seconds: number; error?: ModelErrorData;
@@ -118,6 +121,8 @@ interface Call {
   info?: ModelInfo;
   key: ResolvedKey | null;
   baseUrl: string;
+  /** Set once this call's pinned attempt failed: the rest of the call goes wherever OpenRouter routes (D-155). */
+  unpinned?: boolean;
 }
 
 /** Most OpenRouter pins kept; the oldest go first. Prefix pins outlive their run, so the map is bounded. */
@@ -181,10 +186,12 @@ export class Gateway {
       ...(p.subcall_id !== undefined ? { subcall_id: p.subcall_id } : {}),
       ...(p.batch !== undefined ? { batch: p.batch } : {}),
       ...(p.origin !== undefined ? { origin: p.origin } : {}),
+      ...(p.child !== undefined ? { child: p.child } : {}),
       model: p.model,
       prompt: p.messages[p.messages.length - 1]?.content ?? "",
       started_at: startedAt,
     });
+    p = this.capOutput(p); // before lastRoot, so /context shows the reply room actually asked for
     const run = this.run(p.run_id);
     if (p.role === "root") run.lastRoot = p;
     const ac = new AbortController();
@@ -214,10 +221,10 @@ export class Gateway {
     const run = this.runs.get(runId);
     if (run) for (const ac of [...run.calls]) ac.abort(new Error("cancelled"));
     this.gate.dropRun(runId);
-    // the run's own conversations are over; prefix pins (rlmh-<key>) outlive it, for the next run on the same input
+    // the run's own conversations (root, sub-calls, children) are over; prefix pins (rlmh-<key>) outlive it, for the next run on the same input
     for (const key of [...this.pins.keys()]) {
       const route = key.slice(key.indexOf("\0") + 1);
-      if (route === runId || route === `${runId}-sub`) this.pins.delete(key);
+      if (route === runId || route === `${runId}-sub` || route.startsWith(`${runId}-child-`)) this.pins.delete(key);
     }
   }
 
@@ -319,7 +326,8 @@ export class Gateway {
     if (def.client === "fake") return this.fakeCall(c);
 
     let ticket: BatchTicket | null = null;
-    if (p.role === "sub" && p.batch && p.batch.size > 1 && def.caching !== "none") {
+    // a child's turn is a conversation of its own, never a member of a batch (D-160)
+    if (p.role === "sub" && !p.child && p.batch && p.batch.size > 1 && def.caching !== "none") {
       const member = { index: p.batch.index, size: p.batch.size, prompt: p.messages[p.messages.length - 1]?.content ?? "" };
       // with a stable prefix the call marks its own block, so Anthropic needs only the leader-first order (D-119)
       const caching = p.prefix && def.caching === "anthropic" ? "auto" : def.caching;
@@ -347,7 +355,7 @@ export class Gateway {
     };
     let sent = false;
     let fallbacks = 0;
-    let unpinned = false;
+    let pinnedTo: string | null = null; // the gateway's pin the last attempt went to
     const hooks: StreamHooks = {
       maxBytes: LIMITS.MAX_RESPONSE_BYTES,
       onEvent: () => {},
@@ -366,6 +374,7 @@ export class Gateway {
       for (let attempt = 0; ; ) {
         let out: StreamResult;
         try {
+          pinnedTo = this.gatewayPin(c); // read with the body, before any await, so it is the pin this attempt carries
           out = await this.attempt(c, this.buildBody(c, ticket), hooks);
         } catch (err) {
           if (signal.aborted) throw err;
@@ -378,8 +387,10 @@ export class Gateway {
             fallbacks += 1; // not a retry: no sleep, and the try count stays
             continue;
           }
-          if (!unpinned && this.unpin(c, f)) {
-            unpinned = true; // the pinned endpoint failed: try once more wherever OpenRouter routes, and pin there (D-120)
+          if (!c.unpinned && this.unpin(c, f, pinnedTo)) {
+            // the pinned endpoint failed: from here on this call goes wherever OpenRouter routes, even if a call beside
+            // it pins the conversation elsewhere meanwhile, and the endpoint that serves it may become the pin (D-120, D-155)
+            c.unpinned = true;
             continue;
           }
           if (!retryable(f) || attempt + 1 >= TRIES) throw this.failureError(f, def, p, c.key, c.baseUrl, attempt + 1);
@@ -407,7 +418,7 @@ export class Gateway {
   /** The endpoint this call must use: the one chosen in the model ref, else the one its conversation is pinned to. */
   private endpointFor(c: Call): string | null {
     if (c.def.id !== "openrouter") return null;
-    return openRouterEndpoint(c.p.model.model).endpoint ?? this.pins.get(this.pinKey(c)) ?? null;
+    return openRouterEndpoint(c.p.model.model).endpoint ?? (c.unpinned ? null : this.pins.get(this.pinKey(c))) ?? null;
   }
 
   /** After a success: the first endpoint that served a conversation becomes its pin. */
@@ -420,14 +431,19 @@ export class Gateway {
     while (this.pins.size > PIN_CAP) this.pins.delete(this.pins.keys().next().value!);
   }
 
-  /** A pinned call failed: drop the gateway's pin (never the user's choice). A 400 or 404 means OpenRouter can't route
-   *  to that endpoint at all, so it is never pinned again for this model. True when there was a pin to drop. */
-  private unpin(c: Call, f: Failure): boolean {
-    if (c.def.id !== "openrouter" || openRouterEndpoint(c.p.model.model).endpoint) return false;
+  /** The gateway's own pin for this call's conversation, or null (not OpenRouter, the user chose an endpoint, or no pin yet). */
+  private gatewayPin(c: Call): string | null {
+    if (c.def.id !== "openrouter" || openRouterEndpoint(c.p.model.model).endpoint || c.unpinned) return null;
+    return this.pins.get(this.pinKey(c)) ?? null;
+  }
+
+  /** A call sent pinned to `slug` failed: drop that pin (never the user's choice). A 400 or 404 means OpenRouter can't
+   *  route to that endpoint at all, so it is never pinned again for this model. True when the call was pinned, so it
+   *  tries once more unpinned, even when a call beside it in the same conversation already dropped the pin. */
+  private unpin(c: Call, f: Failure, slug: string | null): boolean {
+    if (slug === null) return false;
     const key = this.pinKey(c);
-    const slug = this.pins.get(key);
-    if (slug === undefined) return false;
-    this.pins.delete(key);
+    if (this.pins.get(key) === slug) this.pins.delete(key); // not a newer pin another call set meanwhile
     if (f.kind === "http" && (f.status === 400 || f.status === 404)) this.badPins.add(`${openRouterEndpoint(c.p.model.model).model}\0${slug}`);
     return true;
   }
@@ -436,8 +452,9 @@ export class Gateway {
     const { p, def, run } = c;
     const modelKey = `${def.id}\0${p.model.model}`;
     const dropped = this.dropped.get(modelKey) ?? new Set<string>();
-    const replay = (m: Extract<Message, { role: "assistant" }>) => (m.tool_call ? run.replay.get(replayKey(m.content, m.tool_call.id)) : undefined);
-    const markers = p.role === "root" || (ticket?.marker ?? false);
+    const replay = (m: Extract<Message, { role: "assistant" }>) => (m.tool_call ? run.replay.get(replayKey(m.content, m.tool_call.id, p)) : undefined);
+    // a child's turns grow like the root's, so each turn marks the conversation so far for the next (D-160)
+    const markers = p.role === "root" || p.child !== undefined || (ticket?.marker ?? false);
     const prefixMark = prefixWorthMarking(p, c.info?.cache_min_tokens ?? null);
     if (def.client === "anthropic") return buildAnthropicRequest(p, { shape: this.shapes.get(modelKey), dropped, markers, prefixMark, replay });
     return buildOpenAIRequest(p, { provider: def, info: c.info, dropped, replay, markers, prefixMark, endpoint: this.endpointFor(c) });
@@ -513,12 +530,13 @@ export class Gateway {
     const { p, def, run } = c;
     let toolCall: ToolCall | null = null;
     if (out.toolCall) {
-      toolCall = { id: out.toolCall.id ?? `call_${p.run_id}_${p.turn}`, name: out.toolCall.name, arguments: parseArguments(out.toolCall.arguments) };
+      const fallbackId = p.child ? `call_${p.run_id}_c${p.child.id}_${p.turn}` : `call_${p.run_id}_${p.turn}`; // a child's turns count from 1 too
+      toolCall = { id: out.toolCall.id ?? fallbackId, name: out.toolCall.name, arguments: parseArguments(out.toolCall.arguments) };
     }
     const finish = toolCall && out.finish !== "length" ? "tool_call" : (out.finish ?? "stop");
     if (toolCall) {
       const replay = pickReplay(def.id, out.replay);
-      if (replay) run.replay.set(replayKey(out.text, toolCall.id), replay);
+      if (replay) run.replay.set(replayKey(out.text, toolCall.id, p), replay);
     }
     const usage = toUsage(out.usage, c.info, { input: requestChars(p), output: replyChars(out.text, toolCall) });
     const billed = def.id === "openrouter" ? billedCost(out.usage) : null;
@@ -566,9 +584,16 @@ export class Gateway {
     return url;
   }
 
-  /** D-25, root calls only: ceil(chars / 3) + max_tokens against a known window. */
+  /** D-152: a profile's max_tokens is a ceiling; a model whose known maximum is lower gets that maximum, not a 400. */
+  private capOutput(p: ModelCompleteParams): ModelCompleteParams {
+    const def = provider(p.model.provider);
+    const info = def ? this.catalog.get(def.id, p.model.model) : undefined;
+    return info && info.max_output > 0 && p.max_tokens > info.max_output ? { ...p, max_tokens: info.max_output } : p;
+  }
+
+  /** D-25, root calls and a child's turns (D-160): ceil(chars / 3) + max_tokens against a known window. */
   private windowCheck(p: ModelCompleteParams, info?: ModelInfo): void {
-    if (p.role !== "root" || !info || info.context_window <= 0) return;
+    if ((p.role !== "root" && !p.child) || !info || info.context_window <= 0) return;
     const prompt = Math.ceil(requestChars(p) / 3);
     const est = prompt + p.max_tokens;
     if (est <= info.context_window) return;
@@ -818,8 +843,11 @@ function portOf(url: string): string {
   }
 }
 
-function replayKey(text: string, toolCallId: string): string {
-  return createHash("sha256").update(`${text}\0${toolCallId}`).digest("hex");
+/** Scoped to the conversation (the root, or one rlm() child, D-160), so two conversations that reuse a tool-call id
+ *  never get each other's reasoning back. */
+function replayKey(text: string, toolCallId: string, p: Pick<ModelCompleteParams, "child">): string {
+  const scope = p.child ? `child-${p.child.id}` : "root";
+  return createHash("sha256").update(`${scope}\0${text}\0${toolCallId}`).digest("hex");
 }
 
 /** The replay table (D-33): what each provider needs back. */

@@ -8,7 +8,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { graphemeSpans, nextGrapheme, prevGrapheme, snapToGrapheme } from "../../src/interface/format.ts";
-import { completePath, parseQuestion, type FileProbe } from "../../src/interface/mentions.ts";
+import { completePath, listFiles, mentionText, mentionToken, parseQuestion, rankFiles, type FileProbe } from "../../src/interface/mentions.ts";
 import { createFakeApp, type FakeApp } from "../fakes/engine.ts";
 import { KEYS, mount, type Mounted } from "./helpers.ts";
 
@@ -320,6 +320,128 @@ describe("completePath", () => {
   });
 });
 
+describe("parseQuestion with a mode choice (D-156)", () => {
+  test("repo: mentions are checked and named in the task; the run works on the folder", () => {
+    touch("spec-01.md");
+    expect(parseQuestion("Read @spec-01.md and do it", cwd, undefined, "repo")).toEqual({
+      ok: true,
+      run: { mode: "repo", task: "Read spec-01.md and do it", repoPath: cwd, interactive: true },
+    });
+    expect(parseQuestion("Fix it", cwd, undefined, "repo")).toEqual({ ok: true, run: { mode: "repo", task: "Fix it", repoPath: cwd, interactive: true } });
+    expect(parseQuestion("Read @nope.md", cwd, undefined, "repo")).toEqual({ ok: false, error: "@nope.md: no such file" });
+  });
+
+  test("repo: each mention is named by the file it checked, never by a spelling the worker would map elsewhere", () => {
+    touch("my dir", "a b.md");
+    touch("sub", "x.md");
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "rlmh-outside-")));
+    try {
+      writeFileSync(join(outside, "spec.md"), "x");
+      const r = parseQuestion(`Do @"my dir/a b.md", @./sub/../sub/x.md and @${join(outside, "spec.md")}`, cwd, undefined, "repo");
+      if (!r.ok) throw new Error(r.error);
+      expect(r.run.task).toBe(`Do "my dir/a b.md", sub/x.md and ${join(outside, "spec.md").replaceAll("\\", "/")}`);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("read: a mention reads as in auto; no mention is refused", () => {
+    const a = touch("a.txt");
+    expect(parseQuestion("Summarize @a.txt", cwd, undefined, "read")).toEqual({ ok: true, run: { mode: "read", question: "Summarize a.txt", inputs: [a], interactive: true } });
+    expect(parseQuestion("What is here?", cwd, undefined, "read")).toEqual({ ok: false, error: "Read mode needs @file mentions. Shift+Tab changes the mode." });
+  });
+});
+
+describe("mentionToken and mentionText", () => {
+  test("only an @ at the end of the line, at the start or after whitespace, is a token", () => {
+    expect(mentionToken("@")).toEqual({ start: 0, typed: "" });
+    expect(mentionToken("Read @src/ma")).toEqual({ start: 5, typed: "src/ma" });
+    expect(mentionToken('Read @"my di')).toEqual({ start: 5, typed: '"my di' });
+    expect(mentionToken("Read @a.txt now")).toBeNull();
+    expect(mentionToken("Read @a.txt ")).toBeNull();
+    expect(mentionToken("mail a@b.com")).toBeNull();
+  });
+
+  test("a path with whitespace is quoted, and reads back whole", () => {
+    expect(mentionText("src/a.ts")).toBe("src/a.ts");
+    expect(mentionText("my dir/a b.txt")).toBe('"my dir/a b.txt"');
+    const f = touch("my dir", "a b.txt");
+    expect(parseQuestion(`Read @${mentionText("my dir/a b.txt")}`, cwd)).toMatchObject({ ok: true, run: { inputs: [f] } });
+  });
+});
+
+describe("rankFiles", () => {
+  const files = ["README.md", "app/src/main.ts", "app/src/interface/PromptBox.tsx", "app/test/interface/promptbox.test.tsx", "docs/prompt.md", "engine/rlm_engine/loop.py"];
+
+  test("an empty token lists the shallowest files first", () => {
+    expect(rankFiles("", files).slice(0, 3)).toEqual(["README.md", "docs/prompt.md", "app/src/main.ts"]);
+  });
+
+  test("a file name that starts with the token beats one that only holds it, case-insensitively", () => {
+    expect(rankFiles("prompt", files)).toEqual(["docs/prompt.md", "app/src/interface/PromptBox.tsx", "app/test/interface/promptbox.test.tsx"]);
+  });
+
+  test("a path part matches, and so do the characters in order", () => {
+    // the two that hold "app/src" first; app/test/interface/… holds its characters in order, so it comes last
+    expect(rankFiles("app/src", files)).toEqual(["app/src/main.ts", "app/src/interface/PromptBox.tsx", "app/test/interface/promptbox.test.tsx"]);
+    expect(rankFiles("rlmloop", files)).toEqual(["engine/rlm_engine/loop.py"]);
+    expect(rankFiles("zzz", files)).toEqual([]);
+  });
+
+  test("the whole path comes first; quotes are dropped", () => {
+    expect(rankFiles("app/src/main.ts", [...files, "app/src/main.ts.bak"])[0]).toBe("app/src/main.ts");
+    expect(rankFiles('"docs/prompt.md"', files)[0]).toBe("docs/prompt.md");
+  });
+
+  test("at most 50", () => {
+    expect(rankFiles("", Array.from({ length: 80 }, (_, i) => `f${i}.txt`))).toHaveLength(50);
+  });
+
+  test.if(WIN32)("on Windows a backslash means /", () => {
+    expect(rankFiles("app\\src\\main", files)[0]).toBe("app/src/main.ts");
+  });
+});
+
+describe("listFiles", () => {
+  test("outside git: a walk, shallow first, without dot-entries or node_modules", () => {
+    touch("b.txt");
+    touch("sub", "a.txt");
+    touch(".hidden", "x.txt");
+    touch(".env");
+    touch("node_modules", "pkg", "index.js");
+    expect(listFiles(cwd)).toEqual(["b.txt", "sub/a.txt"]);
+  });
+
+  test("the list is kept for 10 s, then read again", () => {
+    touch("a.txt");
+    const t = 1_000_000_000;
+    expect(listFiles(cwd, t)).toEqual(["a.txt"]);
+    touch("b.txt");
+    expect(listFiles(cwd, t + 5_000)).toEqual(["a.txt"]);
+    expect(listFiles(cwd, t + 10_000).sort()).toEqual(["a.txt", "b.txt"]); // a folder's entries come in the system's order
+  });
+
+  test.if(Bun.which("git") !== null)("in a git work tree: git's list, so ignored files stay out and dot-files tracked in it show", () => {
+    const git = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd, stdout: "ignore", stderr: "ignore" });
+    git("init", "-q");
+    writeFileSync(join(cwd, ".gitignore"), "build/\n");
+    touch("src", "a.ts");
+    touch("build", "out.js");
+    touch(".github", "ci.yml");
+    expect(listFiles(cwd).sort()).toEqual([".github/ci.yml", ".gitignore", "src/a.ts"]);
+  });
+
+  test("a missing folder gives [], it never throws", () => {
+    expect(listFiles(join(cwd, "nope"))).toEqual([]);
+  });
+
+  test("a folder with more files than the cap stops at the cap", () => {
+    const big = folder("big");
+    for (let i = 0; i < 20_050; i++) writeFileSync(join(big, `f${i}`), "");
+    expect(listFiles(cwd).length).toBeLessThanOrEqual(20_000);
+  });
+});
+
 describe("grapheme cursor helpers", () => {
   const FAMILY = `👨${String.fromCharCode(0x200d)}👩${String.fromCharCode(0x200d)}👧`; // 8 UTF-16 units, one character
   const ACCENT = `e${String.fromCharCode(0x301)}`; // 2 units, one character
@@ -472,20 +594,78 @@ describe("PromptBox", () => {
     await m.waitForText("── /permissions");
   });
 
-  test("@ and Tab complete a path in the folder", async () => {
+  test("@ opens the file menu, filtered as you type, and Tab takes the pick", async () => {
     const m = await open();
     mkdirSync(join(app!.deps.cwd, "notes"));
     writeFileSync(join(app!.deps.cwd, "notes", "todo list.md"), "x");
-    await m.type("Read @no");
-    await m.press(KEYS.tab);
-    await m.waitFor(() => promptLine(m.screen()) === "Read @notes/");
+    await m.type("Read @");
+    await m.waitForText("  @notes/todo list.md");
+    await m.type("todo");
+    await m.waitFor(() => m.screen().includes("  @notes/todo list.md") && !m.screen().includes("  @a.txt"));
     await m.press(KEYS.tab);
     await m.waitFor(() => promptLine(m.screen()) === 'Read @"notes/todo list.md"');
-    await m.type(" and @a");
-    await m.press(KEYS.tab);
+    expect(m.screen()).not.toContain("  @notes/todo list.md"); // the space after the pick closed the menu
+    await m.type("and @a");
+    await m.press(KEYS.enter); // Enter takes the pick too
     await m.waitFor(() => promptLine(m.screen()) === 'Read @"notes/todo list.md" and @a.txt');
+    expect(app!.startCalls).toHaveLength(0);
     await m.press(KEYS.enter);
     await m.waitFor(() => app!.startCalls.length === 1);
     expect(app!.startCalls[0]!.inputs).toEqual([join(app!.deps.cwd, "notes", "todo list.md"), join(app!.deps.cwd, "a.txt")]);
+  });
+
+  test("in the file menu Up and Down move the pick, and a mention that already names a file submits", async () => {
+    const m = await open();
+    for (const name of ["one.md", "two.md"]) writeFileSync(join(app!.deps.cwd, name), "x");
+    await m.type("Read @.md");
+    await m.waitForText("  @two.md");
+    await m.press(KEYS.down);
+    await m.press(KEYS.tab);
+    await m.waitFor(() => promptLine(m.screen()) === "Read @two.md");
+    await m.press(KEYS.backspace); // back into the mention: the menu opens on two.md, which it names, so Enter submits
+    await m.waitForText("  @two.md");
+    await m.press(KEYS.enter);
+    await m.waitFor(() => app!.startCalls.length === 1);
+    expect(app!.startCalls[0]!.inputs).toEqual([join(app!.deps.cwd, "two.md")]);
+  });
+
+  test("Enter keeps a mention that already names a file, though the menu's first pick is another", async () => {
+    const m = await open();
+    writeFileSync(join(app!.deps.cwd, ".notes.md"), "x"); // a dot-file: not in the menu's list
+    writeFileSync(join(app!.deps.cwd, "my.notes.md"), "x");
+    await m.type("Read @.notes.md");
+    await m.waitForText("  @my.notes.md");
+    await m.press(KEYS.enter);
+    await m.waitFor(() => app!.startCalls.length === 1);
+    expect(app!.startCalls[0]!.inputs).toEqual([join(app!.deps.cwd, ".notes.md")]);
+  });
+
+  test("Esc's close lasts only until the text changes, even back to the same text", async () => {
+    const m = await open();
+    await m.type("Read @a");
+    await m.waitForText("  @a.txt");
+    await m.press(KEYS.esc);
+    await m.waitFor(() => !m.screen().includes("  @a.txt"));
+    await m.type(".");
+    await m.waitForText("  @a.txt");
+    await m.press(KEYS.backspace); // back to "Read @a": open, not closed again
+    await m.waitFor(() => promptLine(m.screen()) === "Read @a");
+    await Bun.sleep(100);
+    expect(m.screen()).toContain("  @a.txt");
+  });
+
+  test("Esc closes the file menu and keeps the text; typing opens it again; a second Esc clears", async () => {
+    const m = await open();
+    await m.type("Read @a");
+    await m.waitForText("  @a.txt");
+    await m.press(KEYS.esc);
+    await m.waitFor(() => !m.screen().includes("  @a.txt"));
+    expect(promptLine(m.screen())).toBe("Read @a");
+    await m.type(".");
+    await m.waitForText("  @a.txt");
+    await m.press(KEYS.esc);
+    await m.waitFor(() => !m.screen().includes("  @a.txt"));
+    await m.press(KEYS.esc);
+    await m.waitFor(() => promptLine(m.screen()).includes("Ask a question"));
   });
 });

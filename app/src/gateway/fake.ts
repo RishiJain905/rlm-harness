@@ -5,9 +5,19 @@
 import { readFileSync } from "node:fs";
 import type { FinishReason, ModelCompleteParams, ModelErrorKind, ToolCall } from "../protocol.ts";
 
+/** One scripted root-shaped reply: text, and a python tool call when `tool_call` is given. */
+export interface FakeTurn {
+  text?: string;
+  tool_call?: { code: string };
+}
+
 export interface FakeScript {
-  root?: { text?: string; tool_call?: { code: string } }[];
+  root?: FakeTurn[];
   sub?: { match?: string; text?: string }[];
+  /** rlm() children's turns (D-160), by child id ("1", "2", ...), or "*" for any child without a list of its own. A call
+   *  with `child` is served entry `child.turn - 1` of its list; past the end (or with no list) it fails as an exhausted
+   *  root script does. Child turns never move the root or sub counts, so `errors` never matches them. */
+  children?: Record<string, FakeTurn[]>;
   chunk_chars?: number;
   delay_ms?: number;
   errors?: { role: "root" | "sub"; at: number; kind: ModelErrorKind; status?: number | null }[];
@@ -54,6 +64,7 @@ export class FakeProvider {
   async complete(p: ModelCompleteParams, state: FakeRunState, onText: (text: string) => void, signal: AbortSignal): Promise<FakeReply> {
     state.script ??= this.load();
     const script = state.script;
+    if (p.child) return this.stream(script, childReply(script, p.child), onText, signal);
     const n = ++state.calls[p.role];
     const scripted = script.errors?.find((e) => e.role === p.role && e.at === n);
     if (scripted) throw new FakeError(scripted.kind, `fake script error: ${scripted.kind} at ${p.role} call ${n}`, scripted.status ?? null);
@@ -63,8 +74,7 @@ export class FakeProvider {
       const entry = script.root?.[state.rootServed];
       if (!entry) throw new FakeError("other", "fake script exhausted");
       state.rootServed += 1;
-      const toolCall = entry.tool_call ? { id: `call_${state.rootServed}`, name: "python", arguments: { code: entry.tool_call.code } } : null;
-      reply = { text: entry.text ?? "", tool_call: toolCall, finish_reason: toolCall ? "tool_call" : "stop" };
+      reply = turnReply(entry, `call_${state.rootServed}`);
     } else {
       const prompt = p.messages[p.messages.length - 1]?.content ?? "";
       const rules = script.sub ?? [];
@@ -72,7 +82,10 @@ export class FakeProvider {
       if (!rule) throw new FakeError("other", "fake script has no sub-call rule for this prompt");
       reply = { text: rule.text ?? "", tool_call: null, finish_reason: "stop" };
     }
+    return this.stream(script, reply, onText, signal);
+  }
 
+  private async stream(script: FakeScript, reply: FakeReply, onText: (text: string) => void, signal: AbortSignal): Promise<FakeReply> {
     const size = Math.max(1, script.chunk_chars ?? 16);
     const delay = script.delay_ms ?? 0;
     for (let i = 0; i < reply.text.length; i += size) {
@@ -94,6 +107,19 @@ export class FakeProvider {
       throw new FakeError("other", `fake script unreadable: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+}
+
+/** A child's turn k is entry k - 1 of `children["<id>"]`, else of `children["*"]` (D-160). */
+function childReply(script: FakeScript, child: NonNullable<ModelCompleteParams["child"]>): FakeReply {
+  const turns = script.children?.[String(child.id)] ?? script.children?.["*"];
+  const entry = turns?.[child.turn - 1];
+  if (!entry) throw new FakeError("other", "fake script exhausted");
+  return turnReply(entry, `call_c${child.id}_${child.turn}`);
+}
+
+function turnReply(entry: FakeTurn, id: string): FakeReply {
+  const toolCall = entry.tool_call ? { id, name: "python", arguments: { code: entry.tool_call.code } } : null;
+  return { text: entry.text ?? "", tool_call: toolCall, finish_reason: toolCall ? "tool_call" : "stop" };
 }
 
 function matches(pattern: string, prompt: string): boolean {

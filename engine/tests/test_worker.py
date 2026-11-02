@@ -207,7 +207,10 @@ os.close(2)
         async with started(tmp_path) as w:
             r = await asyncio.wait_for(w.run_cell(code), 30)
             assert r.error is None
-            assert '{"type": "result", "id": 99}\nraw two\n' in r.stdout
+            # fds 1 and 2 share one pipe, so their lines keep their order; print() writes to the cell directly and may
+            # land between them while the pipe's reader thread catches up, so the two need not be adjacent
+            first, second = r.stdout.find('{"type": "result", "id": 99}\n'), r.stdout.find("raw two\n")
+            assert 0 <= first < second, r.stdout
             assert "input eof\n" in r.stdout and "'' b''" in r.stdout
             r = await w.run_cell("print('alive'); import os; os.write(1, b'fd still works\\n')")
             assert r.stdout == "alive\nfd still works\n" and not r.restarted

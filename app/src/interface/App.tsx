@@ -17,11 +17,11 @@ import { COMMANDS, slashMatches } from "./commands/index.ts";
 import { envKeyVar } from "./commands/providers.tsx";
 import { layoutHeights } from "./format.ts";
 import { Lines } from "./Lines.tsx";
-import { parseQuestion } from "./mentions.ts";
+import { listFiles, mentionToken, parseQuestion, rankFiles, RUN_CHOICES, type RunChoice } from "./mentions.ts";
 import { HISTORY_MAX, PromptBox } from "./PromptBox.tsx";
 import { StatusLine } from "./StatusLine.tsx";
 import { engineStoppedMessage, isActive, RunStore, statusModel, type AppDeps } from "./store.ts";
-import { allRows, SubcallPanel, type PanelState } from "./SubcallPanel.tsx";
+import { allRows, blockOfRow, rowCellCode, SubcallPanel, type PanelState } from "./SubcallPanel.tsx";
 import { SubcallView } from "./SubcallView.tsx";
 import { makeTheme, paint, span, ThemeContext } from "./theme.ts";
 import { bannerLines, Transcript, transcriptLines } from "./Transcript.tsx";
@@ -31,7 +31,11 @@ export const MIN_ROWS = 12;
 const QUIT_WINDOW_MS = 2000;
 const MENU_MAX = 9; // every command fits: the eight with screens or not, /clear and /quit
 const DENY = { allow: false, remember_for_run: false };
-const HINT = "Ask a question. @file reads files; / for commands";
+const HINT: Record<RunChoice, string> = {
+  auto: "Ask a question. @file reads files; / for commands",
+  repo: "Repo mode (Shift+Tab changes): works on this folder; @file names files",
+  read: "Read mode (Shift+Tab changes): ask about @files",
+};
 const WELCOME_PROVIDERS = "Welcome to rlmh. Connect a provider: pick one, a adds a key; Esc when done.";
 const WELCOME_MODEL = "Pick the root model: Enter on root, then a provider and a model; Esc when done.";
 const NO_MODEL_YET = "No model picked yet: /model picks one, /providers adds a key.";
@@ -79,6 +83,12 @@ export function App(props: { deps: AppDeps }) {
   );
 
   const [text, setText] = useState("");
+  const [runChoice, setRunChoice] = useState<RunChoice>("auto"); // Shift+Tab (D-156); kept until /clear or quit
+  // the prompt text Esc closed the file menu on; any change to the text opens it again
+  const [filesClosedAt, setFilesClosedAt] = useState<string | null>(null);
+  useEffect(() => {
+    if (filesClosedAt !== null && text !== filesClosedAt) setFilesClosedAt(null);
+  }, [text, filesClosedAt]);
   const history = useRef<string[]>([]);
   const [screen, setScreen] = useState<string | null>(null);
   const [subview, setSubview] = useState<string | null>(null);
@@ -202,6 +212,7 @@ export function App(props: { deps: AppDeps }) {
     setScroll(0);
     setFull(false);
     setModeOverride(null);
+    setRunChoice("auto");
     store.clear();
     store.note("New session.", "info");
   };
@@ -222,7 +233,7 @@ export function App(props: { deps: AppDeps }) {
     const exited = store.snapshot().engineExit;
     if (exited) return store.note(engineStoppedMessage(exited.code), "error");
     if (isActive(store.live().phase)) return store.note("A run is active. Esc cancels it.", "warn");
-    const parsed = parseQuestion(typed, deps.cwd);
+    const parsed = parseQuestion(typed, deps.cwd, undefined, runChoice);
     if (!parsed.ok) return store.note(parsed.error, "error");
     const settings = deps.session.settings;
     if (settings.root.model === "") {
@@ -271,10 +282,13 @@ export function App(props: { deps: AppDeps }) {
   // -- layout --
 
   const tooSmall = size.columns < MIN_COLUMNS || size.rows < MIN_ROWS;
-  const menu = screen || subview || !keyboardFree || focus !== "prompt" ? [] : slashMatches(text);
+  const menusFree = !screen && !subview && keyboardFree && focus === "prompt";
+  const menu = menusFree ? slashMatches(text) : [];
+  const mention = menusFree && text !== filesClosedAt ? (mentionToken(text)?.typed ?? null) : null;
+  const files = useMemo(() => (mention === null ? [] : rankFiles(mention, listFiles(deps.cwd))), [mention, deps.cwd]);
   const showPanel = !screen && !subview && view.blocks.length > 0;
   const wantApproval = head ? approvalHeight(head, size.columns) : confirm ? 3 : 0;
-  const h = layoutHeights(size.rows, { panel: showPanel, approval: wantApproval, menu: Math.min(menu.length, MENU_MAX) });
+  const h = layoutHeights(size.rows, { panel: showPanel, approval: wantApproval, menu: Math.min(menu.length || files.length, MENU_MAX) });
   const mainHeight = h.transcript + h.panel;
   const lines = useMemo(() => {
     if (view.entries.length === 0 && view.phase === "idle") {
@@ -298,6 +312,7 @@ export function App(props: { deps: AppDeps }) {
       if (deps.approvals.head()) return deps.approvals.answer(DENY);
       if (screen || subview) return; // they close themselves
       if (focus === "panel") return setFocus("prompt");
+      if (files.length > 0) return setFilesClosedAt(text);
       const { phase } = store.live();
       if (phase === "starting" || phase === "running") return cancelRun();
       return setText("");
@@ -321,7 +336,7 @@ export function App(props: { deps: AppDeps }) {
   const row = subview === null ? undefined : rows.find((r) => r.key === subview);
   const command = screen === null ? undefined : COMMANDS.find((c) => c.name === screen);
   const engineGone = view.engineExit !== null;
-  const placeholder = engineGone ? engineStoppedMessage(view.engineExit!.code) : (hint ?? (isActive(view.phase) ? "A run is active; Esc cancels it." : HINT));
+  const placeholder = engineGone ? engineStoppedMessage(view.engineExit!.code) : (hint ?? (isActive(view.phase) ? "A run is active; Esc cancels it." : HINT[runChoice]));
 
   let main;
   if (command) {
@@ -343,8 +358,8 @@ export function App(props: { deps: AppDeps }) {
       <SubcallView
         key={row.key}
         row={row}
-        block={view.blocks.find((b) => b.id === row.batchId)}
-        cellCode={view.cellCode}
+        block={blockOfRow(view.blocks, row.key)}
+        cellCode={rowCellCode(view.blocks, row, view.cellCode)}
         now={view.now}
         width={size.columns}
         height={mainHeight}
@@ -410,14 +425,16 @@ export function App(props: { deps: AppDeps }) {
           active={keyboardFree && !screen && !subview && focus === "prompt"}
           width={size.columns}
           menu={menu}
+          files={files}
           menuHeight={h.menu}
           cwd={deps.cwd}
           history={history.current}
           onFocusPanel={() => {
             if (view.blocks.length > 0) setFocus("panel");
           }}
+          onCycleRunChoice={() => setRunChoice((c) => RUN_CHOICES[(RUN_CHOICES.indexOf(c) + 1) % RUN_CHOICES.length]!)}
         />
-        <StatusLine segments={statusModel(view, deps, nextMode)} width={size.columns} />
+        <StatusLine segments={statusModel(view, deps, nextMode, runChoice)} width={size.columns} />
       </Box>
     </ThemeContext.Provider>
   );

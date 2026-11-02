@@ -281,18 +281,18 @@ One JSON object per line. The worker keeps private dups of its original stdin an
 
 | Direction | `type` | Fields |
 |---|---|---|
-| engine → worker | `init` | `mode, context, workspace, scratch, base_tree, cell_timeout_s, subcall_max_chars, subcall_oversize, shell: {kind, argv}, repo_alias: "/work/repo"`, plus `cache_api: true, segment_chars` when the profile turns cache-shaped sub-calls on (D-119) |
+| engine → worker | `init` | `mode, context, workspace, scratch, base_tree, cell_timeout_s, subcall_max_chars, subcall_oversize, shell: {kind, argv}, repo_alias: "/work/repo"`, plus `cache_api: true, segment_chars` when the profile turns cache-shaped sub-calls on (D-119), and `agent_api: true, task, test_hint, input_files, tool_names` (`input_files`: read mode's `{name, start, end}` per input, D-165; `tool_names` null: all seven tools) when it turns the delegation helpers on (D-157), with `snapshot_objects` for a coding rlm() child (D-160) |
 | worker → engine | `ready` | `python, tools: "t1"\|null` |
 | engine → worker | `cell` | `id, code` |
 | worker → engine | `result` | `id, stdout, stdout_chars, stderr, error, submitted, answer, threads` (training's keys) |
 | engine → worker | `vars` | `id` |
 | worker → engine | `vars` | `id, vars` (answered from the reader thread, even mid-cell) |
-| worker → engine | `request` | `id, op: "llm"\|"llm_batch"\|"fetch"\|"approve", line`, plus `prompts` (llm ops) and, only when some prompt has one, `prefixes` (one string or null per prompt, D-119), `url` (fetch), or `kind, detail, inside_workspace` (approve) |
-| engine → worker | `reply` | `id`, plus `outputs` (llm ops), `text` (fetch) or `allow` (approve); or `error` (raised in the cell as `RuntimeError`, or `PermissionError` for a denied approve) |
+| worker → engine | `request` | `id, op: "llm"\|"llm_batch"\|"fetch"\|"approve"\|"rlm", line`, plus `prompts` (llm ops) and, only when some prompt has one, `prefixes` (one string or null per prompt, D-119), `url` (fetch), `kind, detail, inside_workspace` (approve), or `task, context, tools, max_turns` (rlm, agent_api only, D-160); llm ops may also carry `thinking` (agentapi's `thinking=`, D-164), and a request from an agentapi thread carries `cell` (the cell that started it; the manager adds that cell's `turn` before the bridge sees it, D-165) |
+| engine → worker | `reply` | `id`, plus `outputs` (llm ops), `text` (fetch), `answer, turns` (rlm) or `allow` (approve, with `reason: "unattended"` when a non-interactive run denied it, D-154, or `"read-only"` when a read-only rlm() child's permissions did, D-160); or `error` (raised in the cell as `RuntimeError`, or `PermissionError` for a denied approve) |
 | worker → engine | `protocol_error` | `error`: a `cell` without a string `code`; the manager logs it and ignores it (D-67) |
 
 - **Ids.** Cell ids and request ids are separate counters, and each side keys them by `type`.
-- **`line`** is the line of the innermost `<repl>` frame on the calling thread.
+- **`line`** is the line of the innermost `<repl>` frame on the calling thread; on a thread agentapi started (`llm_async` and the like, D-159), the line of the cell that started it.
 - **Time.** Time spent waiting on a `request` counts as blocked, not compute.
 - **Line limits (D-141).** A `request` line may be up to 64 MiB (`REQUEST_LINE_LIMIT`), every other line 4 MiB. The worker refuses a request over 64 MiB itself (the cell gets a `RuntimeError`); an over-long one that still arrives gets a `reply` with `error`, never silence.
 - **Ownership of processes (D-142).** On Windows the worker runs in a job object that kills everything in it when it closes or `kill_tree()` ends it; each process is started suspended and put in the job before it runs, and `taskkill /T` is the fallback when no job can be made. On POSIX each `shell()` process group is listed in `<scratch>/shell-groups`, and `kill_tree()` kills every group listed there too, after a timeout, a crash or a close.
@@ -428,7 +428,7 @@ export const LIMITS: { BATCH_COLLECT_MS; BATCH_LEADER_WAIT_MS; IDLE_TIMEOUT_MS; 
                        REFRESH_TIMEOUT_MS; REFRESH_MAX_PAGES; RUNS_KEPT; DETAIL_CHARS };   // tests shorten them
 export const RETRY: { DELAYS_S; RETRY_AFTER_MAX_S; MAX_FALLBACKS; sleep(ms, signal): Promise<void>; random(): number };
 export type AppEvents = {
-  "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number };
+  "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number; child?: ChildTurn };  // child: an rlm() child's root turn (D-160)
   "call.delta": { call_id: string; text?: string; reasoning?: string; reset?: true };  // reset: a broken stream is retried whole; drop this call's text so far
   "call.end":   { call_id: string; run_id: string; usage: Usage; finish_reason: string; seconds: number; error?: ModelErrorData; endpoint?: string | null };  // endpoint: OpenRouter's serving endpoint (D-120)
   "engine.event": { method: string; params: any };   // every run.* notification, as received
@@ -500,6 +500,7 @@ Built at step 5 (2026-10-31). What steps 6 and 7 can rely on, beyond the signatu
 - **Root replies** are served in order, and each run starts again at index 0. Past the end, the call fails with kind `other`, message `fake script exhausted`.
 - **Sub-calls** get the first rule whose `match` regex finds the prompt. A rule with no `match` is the default.
 - **`errors`** fails the `at`-th call (counting from 1) of that role with that kind.
+- **`children`** (optional, D-160) scripts the root turns of `rlm()` child runs: `{"<child id>": [entries], "*": [entries]}`, entries shaped like `root`'s. A `model.complete` that carries `child` is served entry `child.turn - 1` of `children["<child.id>"]`, else of `children["*"]`; past the end, or with no list, it fails like an exhausted root script (`fake script exhausted`). A child's tool call has id `call_c<id>_<turn>`. Child turns move neither the root nor the sub count, so `errors` never matches them. `FakeApp` reads the same key.
 - **Tokens** are counted as ⌈chars/4⌉.
 
 ### 7.6 Step 3 → 4, 6, 8: contract, call format, profiles
@@ -642,6 +643,7 @@ messages,                                    # exactly as the root saw them
 turns: [{turn, reply, tool_call, reasoning, finish_reason, usage, code, stdout, stdout_chars, error, stderr, observation,
          restarted, crash, repo_changed, root_s, compute_s, blocked_s, wall_s}],
 subcalls: [{subcall_id, origin, batch, prompt, output, error, seconds, usage}],
+children: [{child_id, subcall_id, parent_child, depth, task, tools, max_turns, turns, submitted, answer, error, usage, seconds}],   # rlm() runs (D-160); [] without agent_api
 fetches: [{url, status, chars, error, seconds}], permissions: [Permissions.log entries],
 submitted, answer, answer_valid, usage: {root, sub}, cost_usd, cache: {read_tokens, write_tokens, hit_rate},
 timeouts, crashes, restarts, diff, infra_error, infra_kind, host_traceback

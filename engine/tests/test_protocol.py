@@ -45,6 +45,7 @@ REQUIRED = [
     "model.complete:request:root",
     "model.complete:request:sub",
     "model.complete:request:sub-prefix",
+    "model.complete:request:child",
     "model.complete:result",
     "approval.request:request",
     "approval.request:result",
@@ -62,6 +63,7 @@ REQUIRED = [
     "run.reply:notification",
     "run.cell:notification",
     "run.subcall:notification",
+    "run.child:notification",
     "run.permission:notification",
     "run.budget:notification",
     "run.finished:notification",
@@ -81,6 +83,7 @@ METHODS = {
     "run.reply": "engine->app",
     "run.cell": "engine->app",
     "run.subcall": "engine->app",
+    "run.child": "engine->app",
     "run.permission": "engine->app",
     "run.budget": "engine->app",
     "run.finished": "engine->app",
@@ -101,7 +104,7 @@ PYTHON_TOOL = {
 
 # -- a small type language for §4 and §5 --
 
-STR, INT, NUM, BOOL, OBJECT = "str", "int", "num", "bool", "object"
+STR, INT, NUM, BOOL, OBJECT, ANY = "str", "int", "num", "bool", "object", "any"
 
 
 def obj(required: dict, optional: dict | None = None) -> tuple:
@@ -151,7 +154,7 @@ MODEL_ERROR_DATA = obj(
         "message": STR,
     }
 )
-ORIGIN = obj({"turn": INT, "line": nullable(INT)})
+ORIGIN = obj({"turn": INT, "line": nullable(INT)}, {"child": INT})  # child: a request an rlm() run made (D-160)
 BATCH = obj({"id": STR, "index": INT, "size": INT})
 MESSAGES = {
     "system": obj({"role": enum("system"), "content": STR}),
@@ -217,7 +220,8 @@ FIELDS = {
             "thinking": THINKING,
             "turn": INT,
         },
-        {"subcall_id": INT, "origin": ORIGIN, "batch": BATCH, "prefix": obj({"chars": INT, "key": STR})},
+        {"subcall_id": INT, "origin": ORIGIN, "batch": BATCH, "prefix": obj({"chars": INT, "key": STR}),
+         "child": obj({"id": INT, "turn": INT, "max_turns": INT, "depth": INT})},
     ),
     "model.complete:result": obj(
         {
@@ -301,6 +305,24 @@ FIELDS = {
             "seconds": nullable(NUM),
         }
     ),
+    "run.child:notification": obj(
+        {
+            "run_id": STR,
+            "child_id": INT,
+            "subcall_id": INT,
+            "depth": INT,
+            "status": enum("started", "turn", "done", "error"),
+            "task": STR,
+            "tools": enum("read", "edit", "none"),
+            "turn": INT,
+            "max_turns": INT,
+            "code": nullable(STR),
+            "output": nullable(STR),
+            "error": nullable(STR),
+            "answer": ANY,
+            "seconds": nullable(NUM),
+        }
+    ),
     "run.permission:notification": obj(
         {"run_id": STR, "turn": INT, "kind": APPROVAL_KIND, "detail": STR, "allowed": BOOL, "asked": BOOL, "remembered": BOOL}
     ),
@@ -338,6 +360,8 @@ def check(value: Any, spec: Any, path: str) -> None:
         assert isinstance(value, (int, float)) and not isinstance(value, bool), f"{path}: not a number: {value!r}"
     elif spec == BOOL:
         assert isinstance(value, bool), f"{path}: not a bool: {value!r}"
+    elif spec == ANY:  # any JSON value: a submitted answer
+        pass
     elif spec == OBJECT:
         assert isinstance(value, dict), f"{path}: not an object: {value!r}"
     elif spec == MESSAGE:

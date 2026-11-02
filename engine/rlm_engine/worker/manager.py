@@ -169,7 +169,7 @@ class Worker:
     def __init__(self, *, mode: str, context: str, workspace: Path, scratch: Path, limits: contract.Limits,
                  messages: contract.CellMessages, on_request: RequestHandler, shell: ShellSpec,
                  base_tree: str | None = None, python: str = sys.executable, wall_cap_s: float = 1800.0,
-                 cache_api: bool = False) -> None:
+                 cache_api: bool = False, init_extra: dict | None = None) -> None:
         if mode not in ("read", "repo"):
             raise ValueError(f"unknown mode {mode!r}")
         self.mode = mode
@@ -182,6 +182,7 @@ class Worker:
         self.shell = shell
         self.base_tree = base_tree
         self.cache_api = cache_api  # the profile's cache-shaped sub-calls (D-119)
+        self.init_extra = dict(init_extra or {})  # agent_api's init fields (D-157); empty under training-v4
         self.python = python
         # training's edit sandbox: the cap sits a full default cap above the cell's own limit
         self.wall_cap_s = wall_cap_s + (limits.cell_timeout_s if mode == "repo" else 0)
@@ -203,6 +204,7 @@ class Worker:
         self._requests: set[asyncio.Task] = set()
         self._vars_waiters: dict[int, asyncio.Future] = {}
         self._cell_id = 0
+        self._cell_turns: dict[int, int] = {}
         self._vars_id = 0
         self._inflight = 0
         self._blocked_since = 0.0
@@ -259,6 +261,7 @@ class Worker:
 
         self._cell_id += 1
         cell_id = self._cell_id
+        self._cell_turns[cell_id] = self.turn  # an async request names its cell, and so its turn (D-159)
         started, blocked_start = time.monotonic(), self.blocked_seconds()
         await self._write({"type": "cell", "id": cell_id, "code": code})  # a dead worker's EOF is on the way
 
@@ -423,6 +426,12 @@ class Worker:
 
     async def _restart(self) -> None:
         self.restarts += 1
+        # The old process's requests die with it: its replies would be dropped (generation check) and an rlm() child it
+        # started must not keep editing or spending for a REPL that is gone.
+        stale = [task for task in self._requests if not task.done()]
+        for task in stale:
+            task.cancel()
+        await asyncio.gather(*stale, return_exceptions=True)
         try:
             await self._launch()
         except InfraError:
@@ -461,7 +470,8 @@ class Worker:
                 "cell_timeout_s": self.limits.cell_timeout_s, "subcall_max_chars": self.limits.subcall_max_chars,
                 "subcall_oversize": self.limits.subcall_oversize,
                 "shell": {"kind": self.shell.kind, "argv": list(self.shell.argv)}, "repo_alias": REPO_ALIAS,
-                **({"cache_api": True, "segment_chars": segment_chars(self.limits)} if self.cache_api else {})}
+                **({"cache_api": True, "segment_chars": segment_chars(self.limits)} if self.cache_api else {}),
+                **self.init_extra}
 
     def _spawn(self) -> None:
         kwargs: dict[str, Any] = {}
@@ -668,6 +678,10 @@ class Worker:
         if self._inflight == 0:
             self._blocked_since = time.monotonic()
         self._inflight += 1
+        request = {k: v for k, v in request.items() if k != "turn"}  # only the manager says which turn
+        cell = request.get("cell")
+        if isinstance(cell, int) and not isinstance(cell, bool) and cell in self._cell_turns:
+            request["turn"] = self._cell_turns[cell]
         try:
             fields = await self.on_request(request)
         except InfraError as exc:

@@ -43,10 +43,13 @@ export function anthropicBreakpoints<B extends MarkableBody>(body: B, opts: { sp
  * The routing key that keeps a conversation on one backend and its warm cache (OpenAI's prompt_cache_key,
  * OpenRouter's session_id and endpoint pin): root calls use the run id, sub-calls `<run>-sub` so their bursts never
  * move the root (D-118), and a sub-call with a stable prefix the prefix's own key, the same in every run, so calls
- * that repeat a segment or preamble land where it is already cached (D-119).
+ * that repeat a segment or preamble land where it is already cached (D-119). An `rlm()` child's turns are one growing
+ * conversation of their own, role "sub" but shaped like the root's: `<run>-child-<id>`, so each child keeps its own
+ * backend (and OpenRouter pin) and never moves the root or the one-shot sub-calls (D-160).
  */
-export function routeKey(p: Pick<ModelCompleteParams, "run_id" | "role" | "prefix">): string {
+export function routeKey(p: Pick<ModelCompleteParams, "run_id" | "role" | "prefix" | "child">): string {
   if (p.role === "root") return p.run_id;
+  if (p.child) return `${p.run_id}-child-${p.child.id}`;
   return p.prefix ? `rlmh-${p.prefix.key}` : `${p.run_id}-sub`;
 }
 

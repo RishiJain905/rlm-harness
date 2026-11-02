@@ -94,7 +94,7 @@ export function bannerLines(info: { app: string; engine: string | null; folder: 
     `folder ${info.folder}`,
     `root ${info.root}   sub ${info.sub}`,
     "Each question is a new run.",
-    "@file reads those files; a question with no mention works on this folder. /help lists the commands.",
+    "@file reads those files; a question with no mention works on this folder (Shift+Tab: repo or read mode). /help lists the commands.",
   ];
   return text.flatMap((t, i) => wrapText(t, width).map((l) => [span(l, i === 0 ? { bold: true } : { dim: i > 2 })]));
 }

@@ -83,7 +83,7 @@ jobs:
         run: |
           out="$("$BIN" --version)"
           echo "$out"
-          test "$out" = "rlmh 0.1.1"
+          test "$out" = "rlmh 0.2.0"
       - name: Smoke info
         env:
           RLMH_ENGINE: uv run --project engine python -X utf8 -m rlm_engine serve
@@ -134,7 +134,7 @@ jobs:
             leg: linux-x64 (uv on PATH)
             target: linux-x64
             uv: "1"
-          - os: macos-14
+          - os: macos-15
             leg: darwin-arm64
             target: darwin-arm64
             uv: "0"
@@ -193,7 +193,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x64
-          - os: macos-14
+          - os: macos-15
             target: darwin-arm64
           - os: windows-latest
             target: windows-x64

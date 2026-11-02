@@ -23,7 +23,7 @@ jobs:
             output: rlmh-linux-x64
           - os: windows-latest
             output: rlmh-windows-x64.exe
-          - os: macos-14
+          - os: macos-15
             output: rlmh-darwin-arm64
           - os: macos-15-intel
             output: rlmh-darwin-x64

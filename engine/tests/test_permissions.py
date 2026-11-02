@@ -641,7 +641,9 @@ def test_end_to_end_per_mode(tmp_path: Path, git_repo: Path, mode: str, allow: b
             assert (listener.accepted > 0) == happened
             # every guarded decision is in the log and was sent as an event; scratch writes are in neither
             assert r.app.sent("run.permission") == [{"run_id": RUN_ID, **e} for e in r.permissions.log]
-            assert not [e for e in r.permissions.log if "scratch" in e["detail"]]
+            # (the scratch folder's own path, not the word: a checkout under a folder named "scratchpad" is fine)
+            roots = {shown(r.permissions.scratch).lower(), shown(Path(os.path.realpath(r.permissions.scratch))).lower()}
+            assert not [e for e in r.permissions.log if any(root in e["detail"].replace("\\", "/").lower() for root in roots)]
             for approval in r.app.approvals:
                 assert set(approval) == {"run_id", "kind", "detail", "turn", "inside_workspace"}
 
@@ -673,7 +675,9 @@ def test_non_interactive_denies_without_asking(tmp_path: Path, git_repo: Path) -
     async def main() -> None:
         async with real_run(tmp_path, "accept-edits", ALLOW, repo=git_repo, interactive=False) as r:
             result = await r.worker.run_cell(f"open({str(outside)!r}, 'w')")
-            assert DENIED in result.error
+            # D-154: the error says no one can approve it in this run, so the model stops retrying
+            assert "[Errno 13] Permission denied (no one can approve this in this run:" in result.error
+            assert DENIED not in result.error
             assert (await r.worker.run_cell("print(write_file('ok.txt', 'x'))")).error is None  # inside: allowed
             assert r.app.approvals == [] and not outside.exists()
             assert [(e["kind"], e["allowed"], e["asked"]) for e in r.permissions.log] == [

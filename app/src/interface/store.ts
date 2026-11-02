@@ -8,11 +8,13 @@ import type { AppEvents } from "../gateway/gateway.ts";
 import type { KeyStore } from "../gateway/keys.ts";
 import { requestChars } from "../gateway/usage.ts";
 import type {
+  ChildTurn,
   ModelCompleteParams,
   ModelRef,
   Origin,
   RunBudgetParams,
   RunCellParams,
+  RunChildParams,
   RunFinishedParams,
   RunLimits,
   RunPermissionParams,
@@ -24,7 +26,7 @@ import type {
 import type { Session } from "../session.ts";
 import { saveSettings, setSetting, type Settings } from "../settings.ts";
 import type { ApprovalQueue } from "./approvals.ts";
-import { cacheTone, contextTone, formatClock, formatCost, formatTokens, type StatusSegment } from "./format.ts";
+import { cacheTone, contextTone, formatClock, formatCost, formatTokens, unicodeSupported, type StatusSegment } from "./format.ts";
 
 /** Store changes reach React at most this often, so 20 streams don't repaint per chunk. */
 export const FLUSH_MS = 50;
@@ -74,13 +76,40 @@ export interface SubcallRow {
   /** Date.now() at call.start, for the live timer. */
   startedAt: number | null;
   error: string | null;
+  /** Set when the row is an rlm() child run (D-160): its text is every turn's reply after a `── turn k ──` line, and its
+   *  usage the sum of its turns. */
+  child: ChildInfo | null;
 }
 
-/** One llm_batch fan-out; a single llm() is a block of one. */
+/** One cell of an rlm() child, from run.child "turn". */
+export interface ChildCell {
+  turn: number;
+  code: string | null;
+  output: string | null;
+  error: string | null;
+}
+
+export interface ChildInfo {
+  id: number;
+  depth: number;
+  task: string;
+  tools: string;
+  /** The child's latest turn so far, and its limit. */
+  turn: number;
+  maxTurns: number;
+  cells: ChildCell[];
+  /** The submitted answer, once run.child "done" arrived. */
+  answer: unknown;
+  done: boolean;
+}
+
+/** One llm_batch fan-out; a single llm() is a block of one, and an rlm() child's row is a block of its own (`rlm<n>`). */
 export interface Block {
   id: string;
   size: number;
   origin: Origin;
+  /** The rlm() child whose cell made these calls (origin.child), or null for the root's. */
+  child: number | null;
   rows: SubcallRow[];
 }
 
@@ -186,7 +215,9 @@ export class RunStore {
   private readonly listeners = new Set<() => void>();
   private readonly off: (() => void)[] = [];
   /** Gateway call ids of this run: the root's live tail, or a sub-call row's key. */
-  private readonly calls = new Map<string, { role: "root" } | { role: "sub"; key: string }>();
+  private readonly calls = new Map<string, { role: "root" } | { role: "sub"; key: string; child?: ChildCall }>();
+  /** `── turn k ──` with box-drawing, or `-- turn k --` in ASCII mode, as the theme draws its rules. */
+  private readonly unicode: boolean;
   private lastReply: Usage | null = null;
   private rejected = 0;
   /** Engine events that came while starting with no run id yet, for startResolved() to replay. */
@@ -197,6 +228,7 @@ export class RunStore {
 
   constructor(deps: AppDeps) {
     this.deps = deps;
+    this.unicode = unicodeSupported(deps.env ?? process.env, process.platform);
     const bus = deps.session.bus;
     this.off.push(
       bus.on("engine.event", (e) => this.onEngine(e.method, e.params)),
@@ -325,6 +357,9 @@ export class RunStore {
       case "run.subcall":
         this.subcall(params as RunSubcallParams);
         break;
+      case "run.child":
+        this.child(params as RunChildParams);
+        break;
       case "run.permission":
         this.permission(params as RunPermissionParams);
         break;
@@ -385,8 +420,43 @@ export class RunStore {
     const row = this.row(p.subcall_id, p.batch.id, p.batch.index, p.batch.size, p.origin);
     row.promptChars = p.prompt_chars;
     row.origin = p.origin;
+    if (isChildBatch(p.batch.id)) {
+      // run.child may have made the child's block before this told where rlm() was called
+      const block = this.v.blocks.find((b) => b.id === p.batch.id);
+      if (block) {
+        block.origin = p.origin;
+        block.child = p.origin.child ?? null;
+      }
+    }
     if (p.seconds !== null) row.seconds ??= p.seconds;
     if (p.status === "done" && (row.status === "queued" || row.status === "streaming")) row.status = "done";
+    if (p.status === "error" && row.status !== "error") {
+      row.status = "error";
+      row.error ??= p.error;
+    }
+  }
+
+  /** run.child (D-160): the child's task, turn, cells and end, on its row. Its run.subcall events say sent/done/error too. */
+  private child(p: RunChildParams): void {
+    const row = this.row(p.subcall_id, `rlm${p.child_id}`, 0, 1, { turn: this.v.turns, line: null });
+    const c = ensureChild(row, { id: p.child_id, turn: p.turn, max_turns: p.max_turns, depth: p.depth });
+    if (p.task !== "") {
+      c.task = p.task;
+      row.prompt = p.task;
+      row.promptChars = p.task.length;
+    }
+    c.tools = p.tools;
+    c.maxTurns = p.max_turns;
+    c.turn = Math.max(c.turn, p.turn);
+    if (p.status === "turn") c.cells.push({ turn: p.turn, code: p.code, output: p.output, error: p.error });
+    if (p.status === "done" || p.status === "error") {
+      c.done = true;
+      if (p.seconds !== null) row.seconds ??= p.seconds;
+    }
+    if (p.status === "done") {
+      c.answer = p.answer;
+      if (row.status === "queued" || row.status === "streaming") row.status = "done";
+    }
     if (p.status === "error" && row.status !== "error") {
       row.status = "error";
       row.error ??= p.error;
@@ -425,6 +495,20 @@ export class RunStore {
       this.v.rootOpen = true;
       this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live));
       this.v.entries.push({ kind: "reply", turn: this.v.turns + 1, text: "", reasoning: "", live: true });
+    } else if (e.subcall_id !== undefined && e.child) {
+      // a child's turn adds to its row: a turn line, then this turn's reply; the row ends with run.child, not here
+      const batch = e.batch ?? { id: `rlm${e.child.id}`, index: 0, size: 1 };
+      const row = this.row(e.subcall_id, batch.id, batch.index, batch.size, e.origin ?? { turn: this.v.turns, line: null });
+      const c = ensureChild(row, e.child);
+      c.turn = Math.max(c.turn, e.child.turn);
+      c.maxTurns = e.child.max_turns;
+      row.status = row.status === "queued" ? "streaming" : row.status;
+      if (row.prompt === "") row.prompt = c.task;
+      row.model = e.model;
+      row.startedAt ??= e.started_at;
+      const sep = turnLine(e.child.turn, this.unicode);
+      row.text += `${row.text === "" || row.text.endsWith("\n") ? "" : "\n"}${sep}\n`;
+      this.calls.set(e.call_id, { role: "sub", key: row.key, child: { turn: e.child.turn, textFrom: row.text.length, reasoningFrom: row.reasoning.length } });
     } else if (e.subcall_id !== undefined) {
       const batch = e.batch ?? { id: `call${e.subcall_id}`, index: 0, size: 1 };
       const row = this.row(e.subcall_id, batch.id, batch.index, batch.size, e.origin ?? { turn: this.v.turns, line: null });
@@ -447,7 +531,13 @@ export class RunStore {
       const live = this.v.entries.find((x) => x.kind === "reply" && x.live);
       target = live?.kind === "reply" ? live : undefined;
     } else {
-      target = this.findRow(c.key);
+      const row = this.findRow(c.key);
+      target = row;
+      if (row && c.child) {
+        this.childDelta(row, c.child, e);
+        this.changed();
+        return;
+      }
     }
     if (!target) return;
     if (e.reset) {
@@ -457,6 +547,19 @@ export class RunStore {
     if (e.text) target.text += e.text;
     if (e.reasoning) target.reasoning += e.reasoning;
     this.changed();
+  }
+
+  /** A child turn's stream: a reset drops only this turn's text and reasoning; its reasoning gets the turn line too. */
+  private childDelta(row: SubcallRow, c: ChildCall, e: AppEvents["call.delta"]): void {
+    if (e.reset) {
+      row.text = row.text.slice(0, c.textFrom);
+      row.reasoning = row.reasoning.slice(0, c.reasoningFrom);
+    }
+    if (e.text) row.text += e.text;
+    if (e.reasoning) {
+      if (row.reasoning.length === c.reasoningFrom) row.reasoning += `${row.reasoning === "" || row.reasoning.endsWith("\n") ? "" : "\n"}${turnLine(c.turn, this.unicode)}\n`;
+      row.reasoning += e.reasoning;
+    }
   }
 
   private onCallEnd(e: AppEvents["call.end"]): void {
@@ -469,6 +572,14 @@ export class RunStore {
     } else {
       const row = this.findRow(c.key);
       if (!row) return;
+      if (c.child) {
+        // one turn of the child ended: its usage adds up; the row's status and time wait for run.child
+        this.calls.delete(e.call_id);
+        if (e.error) row.error ??= e.error.message;
+        else row.usage = sumUsage(row.usage, e.usage);
+        this.changed();
+        return;
+      }
       row.seconds = e.seconds;
       if (e.error) {
         row.status = "error";
@@ -498,17 +609,18 @@ export class RunStore {
   // -- rows and blocks --
 
   private blockFor(id: string, size: number, origin: Origin): Block {
-    let block = this.v.blocks.find((b) => b.id === id);
+    let block = findBlock(this.v.blocks, id, origin);
     if (!block) {
-      block = { id, size, origin, rows: [] };
+      block = { id, size, origin, child: origin.child ?? null, rows: [] };
       this.v.blocks.push(block);
     }
     return block;
   }
 
   private row(subcallId: number, batchId: string, index: number, size: number, origin: Origin): SubcallRow {
-    const key = `s${subcallId}`;
-    const found = this.findRow(key);
+    const key = rowKey(subcallId, origin);
+    // a child's own row is found by its block, whatever origin the first event about it gave
+    const found = this.findRow(key) ?? (isChildBatch(batchId) ? this.v.blocks.find((b) => b.id === batchId)?.rows.find((r) => r.subcallId === subcallId) : undefined);
     if (found) return found;
     const block = this.blockFor(batchId, size, origin);
     const row = newRow(key, subcallId, batchId, index, origin);
@@ -562,7 +674,7 @@ function copyView(v: RunView): RunView {
   return {
     ...v,
     entries: v.entries.map((e) => ({ ...e })),
-    blocks: v.blocks.map((b) => ({ ...b, rows: b.rows.map((r) => ({ ...r })) })),
+    blocks: v.blocks.map((b) => ({ ...b, rows: b.rows.map((r) => ({ ...r, child: r.child ? { ...r.child, cells: [...r.child.cells] } : null })) })),
     permissions: [...v.permissions],
     cellCode: { ...v.cellCode },
   };
@@ -585,6 +697,54 @@ function newRow(key: string, subcallId: number | null, batchId: string, index: n
     seconds: null,
     startedAt: null,
     error: null,
+    child: null,
+  };
+}
+
+/** Where a call of a child's turn has got to in the row: the text and reasoning before this turn stay through a reset. */
+interface ChildCall {
+  turn: number;
+  textFrom: number;
+  reasoningFrom: number;
+}
+
+/** `s<subcall_id>`, or `s<child>.<subcall_id>` for a call an rlm() child made, so ids a child counts apart never meet
+ *  the root's (D-160). */
+export function rowKey(subcallId: number, origin: Pick<Origin, "child">): string {
+  return origin.child === undefined ? `s${subcallId}` : `s${origin.child}.${subcallId}`;
+}
+
+/** An rlm() child's own block: batch `rlm<n>`, a block of one (D-160). */
+export function isChildBatch(batchId: string): boolean {
+  return /^rlm\d+$/.test(batchId);
+}
+
+/** A batch's block: by id within the same child (a child's batch ids may repeat the root's); a child's own block by id. */
+function findBlock(blocks: Block[], id: string, origin: Pick<Origin, "child">): Block | undefined {
+  if (isChildBatch(id)) return blocks.find((b) => b.id === id);
+  return blocks.find((b) => b.id === id && b.child === (origin.child ?? null));
+}
+
+function ensureChild(row: SubcallRow, t: ChildTurn): ChildInfo {
+  row.child ??= { id: t.id, depth: t.depth, task: "", tools: "", turn: 0, maxTurns: t.max_turns, cells: [], answer: null, done: false };
+  return row.child;
+}
+
+/** The line before each of a child's turns in its row's text and reasoning. */
+export function turnLine(turn: number, unicode: boolean): string {
+  const rule = unicode ? "──" : "--";
+  return `${rule} turn ${turn} ${rule}`;
+}
+
+function sumUsage(a: Usage | null, b: Usage): Usage {
+  if (!a) return { ...b };
+  return {
+    input_tokens: a.input_tokens + b.input_tokens,
+    output_tokens: a.output_tokens + b.output_tokens,
+    cache_read_tokens: a.cache_read_tokens + b.cache_read_tokens,
+    cache_write_tokens: a.cache_write_tokens + b.cache_write_tokens,
+    reasoning_tokens: a.reasoning_tokens + b.reasoning_tokens,
+    cost_usd: a.cost_usd + b.cost_usd,
   };
 }
 
@@ -635,7 +795,8 @@ function finishEntries(p: { answer: unknown; submitted: boolean; infra_error: st
  * The status line's segments, before layoutStatus drops what doesn't fit. With no run the models
  * come from settings, and the mode is the one the next run would use.
  */
-export function statusModel(view: RunView, deps: AppDeps, nextMode?: string): StatusSegment[] {
+/** `runChoice` is the next question's mode choice (D-156); it shows only when it is not `auto`. */
+export function statusModel(view: RunView, deps: AppDeps, nextMode?: string, runChoice?: string): StatusSegment[] {
   const settings = deps.session.settings;
   const segs: StatusSegment[] = [{ id: "state", ...stateText(view, deps) }];
   const root = view.root ?? settingsRef(settings.root.model);
@@ -664,6 +825,7 @@ export function statusModel(view: RunView, deps: AppDeps, nextMode?: string): St
   }
   const mode = isActive(view.phase) && view.permissionMode ? view.permissionMode : (nextMode ?? settings.permissions.mode);
   segs.push({ id: "mode", text: mode, tone: mode === "bypass" ? "high" : undefined });
+  if (runChoice && runChoice !== "auto") segs.push({ id: "run", text: `${runChoice} mode`, tone: "warn" });
   return segs;
 }
 
@@ -731,7 +893,7 @@ export function applySetting(deps: AppDeps, key: string, value: unknown): Settin
 // -- the run log --
 
 /** A run-log record (§7.8) as the same view a live run builds, read-only, for /runs. */
-export function viewFromRecord(record: Record<string, any>): RunView {
+export function viewFromRecord(record: Record<string, any>, opts: { unicode?: boolean } = {}): RunView {
   const v = emptyView();
   v.readOnly = true;
   v.runId = str(record.run_id);
@@ -788,12 +950,12 @@ export function viewFromRecord(record: Record<string, any>): RunView {
   for (const s of subcalls) {
     const batch = isObj(s.batch) ? s.batch : { id: `call${s.subcall_id}`, index: 0, size: 1 };
     const origin: Origin = isObj(s.origin) ? s.origin : { turn: 0, line: null };
-    let block = v.blocks.find((b) => b.id === batch.id);
+    let block = findBlock(v.blocks, batch.id, origin);
     if (!block) {
-      block = { id: batch.id, size: batch.size, origin, rows: [] };
+      block = { id: batch.id, size: batch.size, origin, child: origin.child ?? null, rows: [] };
       v.blocks.push(block);
     }
-    const row = newRow(`s${s.subcall_id}`, s.subcall_id ?? null, batch.id, batch.index ?? 0, origin);
+    const row = newRow(rowKey(s.subcall_id, origin), s.subcall_id ?? null, batch.id, batch.index ?? 0, origin);
     row.status = s.error ? "error" : "done";
     row.model = v.sub;
     row.prompt = str(s.prompt) ?? "";
@@ -804,6 +966,59 @@ export function viewFromRecord(record: Record<string, any>): RunView {
     row.seconds = typeof s.seconds === "number" ? s.seconds : null;
     row.error = str(s.error);
     block.rows.push(row);
+  }
+  // rlm() children (D-160): each child's row gets its turns, cells and answer
+  const children: any[] = Array.isArray(record.children) ? record.children : [];
+  for (const ch of children) {
+    if (typeof ch?.child_id !== "number") continue;
+    const id: number = ch.child_id;
+    const batchId = `rlm${id}`;
+    let block = v.blocks.find((b) => b.id === batchId);
+    if (!block) {
+      const origin: Origin = typeof ch.parent_child === "number" ? { turn: 0, line: null, child: ch.parent_child } : { turn: 0, line: null };
+      block = { id: batchId, size: 1, origin, child: origin.child ?? null, rows: [] };
+      v.blocks.push(block);
+    }
+    let row = block.rows[0];
+    if (!row) {
+      row = newRow(rowKey(typeof ch.subcall_id === "number" ? ch.subcall_id : 0, block.origin), typeof ch.subcall_id === "number" ? ch.subcall_id : null, batchId, 0, block.origin);
+      row.status = "done";
+      block.rows.push(row);
+    }
+    const turns: any[] = Array.isArray(ch.turns) ? ch.turns : [];
+    const cells: ChildCell[] = [];
+    let text = "";
+    let reasoning = "";
+    for (const t of turns) {
+      const turn = typeof t.turn === "number" ? t.turn : cells.length + 1;
+      const sep = turnLine(turn, opts.unicode ?? true);
+      text += `${text === "" ? "" : "\n"}${sep}\n${str(t.reply) ?? ""}`;
+      if (str(t.reasoning)) reasoning += `${reasoning === "" ? "" : "\n"}${sep}\n${t.reasoning}`;
+      if (t.code !== null || t.error !== null) cells.push({ turn, code: str(t.code), output: str(t.stdout), error: str(t.error) });
+    }
+    const task = str(ch.task) ?? row.prompt;
+    row.child = {
+      id,
+      depth: typeof ch.depth === "number" ? ch.depth : 1,
+      task,
+      tools: str(ch.tools) ?? "",
+      turn: turns.length,
+      maxTurns: typeof ch.max_turns === "number" ? ch.max_turns : turns.length,
+      cells,
+      answer: ch.answer ?? null,
+      done: true,
+    };
+    row.prompt = task;
+    row.promptChars = task.length;
+    row.text = text;
+    row.reasoning = reasoning;
+    row.model = v.root; // a child runs on the root's model
+    if (isObj(ch.usage)) row.usage = ch.usage as Usage;
+    if (typeof ch.seconds === "number") row.seconds = ch.seconds;
+    if (str(ch.error)) {
+      row.status = "error";
+      row.error = str(ch.error);
+    }
   }
   for (const b of v.blocks) b.rows.sort((a, z) => a.index - z.index);
 

@@ -17,7 +17,7 @@ export function HelpScreen(props: ScreenProps) {
     const lines = wrapText(what, Math.max(10, props.width - 22));
     lines.forEach((l, i) => body.push([span(i === 0 ? `  ${k}`.padEnd(22) : " ".repeat(22), { bold: i === 0 }), span(l)]));
   }
-  body.push([], [span("Each question is a new run: @file reads those files, and a question with no mention works on this folder.", { dim: true })]);
+  body.push([], [span("Each question is a new run: @file reads those files, and a question with no mention works on this folder. Shift+Tab picks repo or read mode instead.", { dim: true })]);
   const room = Math.max(1, props.height - 2);
   const max = Math.max(0, body.length - room);
   useInput(
