@@ -96,7 +96,7 @@ Shipping means the built-in `default` takes the tuned `guidance.md` and the tune
      - P_b and P_t, the passes for the baseline and the tuned profile;
      - C_b and C_t, the mean `cost_usd` per task.
    - **Ship** when P_t ≥ P_b + 1 and C_t ≤ 1.5 × C_b. Otherwise, don't ship.
-   - Report as well the mean `f2p_share`, the counts by kind and size, McNemar's p, `test_tamper` and `leak_suspect`. These are context: they never turn a "don't ship" into a ship.
+   - Report as well the mean `f2p_share`, the counts by track and size, McNemar's p, `test_tamper` and `leak_suspect`. These are context: they never turn a "don't ship" into a ship.
 8. [ ] **If it doesn't ship.**
    - Write the summary (task 10) and set row 8 to `blocked: waiting on Rishi`.
    - Send him the numbers and two options, in one line each, with the recommendation marked:
@@ -118,7 +118,7 @@ Shipping means the built-in `default` takes the tuned `guidance.md` and the tune
     - the `changed` list;
     - the held-out n, P_b and P_t, the pass-rate difference and McNemar's p;
     - mean `f2p_share`, C_b, C_t and their ratio;
-    - by kind and size;
+    - by track and size;
     - infra errors and reruns, the excluded ids, and the estimate against the actual cost;
     - the verdict.
 

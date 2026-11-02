@@ -56,12 +56,12 @@ Read these whole, before doing anything:
 1. **Setup.** The set (`harness-eval-v1`, `tasks_sha256`, `grades_sha256`, 48 tasks, 24 per split), the two models, every profile with its `profile_hash`, the harness commit of each run, one replicate per task.
 2. **Method.** One paragraph: Harness² (the paper and the repo, linked as above) and how v1 maps it (architecture §7.1); the accept rule on the tune split (D-173); the held-out split touched only at steps 5, 8 and 10.
 3. **What tuning changed.** Each changed `profile.toml` key with its old and new value, and the guidance's line and character counts before and after, linking step 8's commit for the text.
-4. **Held-out, DeepSeek** (step 5's `v1-baseline` held-out output against step 8's) and **held-out, Haiku 5.5** (this step). For each: pass counts by kind and size, pass rate, mean `f2p_share`, mean turns, sub-calls and compactions, cost per task, cache hit, both/A only/B only/neither, McNemar's exact p, and D-170's note.
+4. **Held-out, DeepSeek** (step 5's `v1-baseline` held-out output against step 8's) and **held-out, Haiku 5.5** (this step). For each: pass counts by track and size, pass rate, mean `f2p_share`, mean turns, sub-calls and compactions, cost per task, cache hit, both/A only/B only/neither, McNemar's exact p, and D-170's note.
 5. **Tune split, in-sample.** Step 5's tune half and step 7's rounds, each with its pass count and cost, labelled in-sample.
 6. **`training-v4`** on the held-out split from step 5, as context, not as a contender.
 7. **Integrity.** Infra errors and reruns, `test_tamper` and `leak_suspect` counts per run.
 8. **Spend.** Each step's estimate, cap and real cost, and the total against $30.
-9. **Limits.** One replicate; 24 held-out tasks; Python repos only (D-176); the editor sessions ran on the tuning model (D-174).
+9. **Limits.** One replicate; 24 held-out tasks; Web-Bench has been public since 2025, so a model may have seen its projects (D-222); kernel tasks need an NVIDIA GPU, so the set runs in full only on such a machine (D-223); the editor sessions ran on the tuning model (D-174).
 
 ## Tasks
 

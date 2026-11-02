@@ -1,6 +1,6 @@
 # v1 build architecture
 
-> Written 2026-11-02 for the threads that build v1. v1 adds to v0 rather than replacing it, so [../v0/architecture.md](../v0/architecture.md) still pins everything this file doesn't change. This file pins the names, paths, messages and signatures v1 adds, so threads working in parallel stay compatible. The design is the v1 alignment doc ([Claude Doc](https://claude.ai/artifact/LVWSoM6bRFk6kSoWZ1r71Z)), with Rishi's picks S-40 to S-47 in [../v0/decisions.md](../v0/decisions.md). v1's own calls are D-168 onwards in the same file. If this file and a spec disagree, the spec wins, and this file gets fixed.
+> Written 2026-11-02 for the threads that build v1. v1 adds to v0 rather than replacing it, so [../v0/architecture.md](../v0/architecture.md) still pins everything this file doesn't change. This file pins the names, paths, messages and signatures v1 adds, so threads working in parallel stay compatible. The design is the v1 alignment doc ([Claude Doc](https://claude.ai/artifact/LVWSoM6bRFk6kSoWZ1r71Z)), with Rishi's picks S-40 to S-48 in [../v0/decisions.md](../v0/decisions.md). v1's own calls are D-168 onwards in the same file. If this file and a spec disagree, the spec wins, and this file gets fixed.
 
 ## 1. What v1 adds
 
@@ -8,7 +8,7 @@ v1 makes the `default` profile measurably better, ships the better version, and 
 
 | Part | Where | Steps |
 |---|---|---|
-| Eval sets: about 48 tasks, mostly coding (S-46) | RLM repo, `scripts/harness_evalset.py`; data outside both repos | 1 |
+| Eval sets: 48 tasks, mostly coding: Python repos, websites, LLM-engine kernels, plus research (S-46, S-48) | RLM repo, `scripts/harness_evalset.py`; data outside both repos | 1 |
 | `rlmh eval`: run a set, grade it, report, compare | `app/src/eval/` | 2 |
 | Compaction inside a run | `engine/rlm_engine/compaction.py`, `[compaction]` in the profile | 3 |
 | Follow-ups: one REPL and conversation across questions | `loop.py`, `service.py`, the interactive app | 4 |
@@ -98,7 +98,7 @@ rlm-harness/
     interface/commands/tune.tsx      9          the /tune screen
   app/test/
     eval/*.test.ts                   2
-    fixtures/evalset/                2          a tiny set: two read tasks, two Python repo tasks with hidden tests
+    fixtures/evalset/                2          a tiny set: two read, two Python, one kernel and one web task, with hidden tests
     tune/*.test.ts                   6 +9
     interface/conversation.test.ts   4
     interface/tune.test.tsx          9
@@ -246,38 +246,49 @@ Step 1 writes it and step 2 reads it. The model never sees anything but the task
 ```
 <set>/
   manifest.json     {format: 1, name, created, builder: {repo: "RishiJain905/rlm", commit, dirty}, permission_mode,
-                     validated, counts: {"<split>/<kind>/<size>": n}, tasks_sha256, grades_sha256}
+                     validated, counts: {"<split>/<track>/<size>": n}, tasks_sha256, grades_sha256}
   tasks.jsonl       what rlmh is given, one task a line, never gold (§6.2)
   grades.jsonl      how each task is graded (§6.3); gold and test lists live only here
   ctx/<id>/...      read-mode inputs, written as bytes
   repos/<id>.tar    repo-mode base snapshot: the repo after the break, hidden tests removed, no .git
   hidden/<id>.tar.gz the hidden test files, restored only after the run ends
-  venvs/<key>.json  {python: "3.12", requirements: [pinned lines], import_root: "." | "src"} for each Python repo
+  venvs/<key>.json  {python: "3.12", requirements: [pinned lines], import_root: "." | "src"} for each Python repo and kernel task
+  nodeenvs/<key>.json {node: "22", pnpm: "<exact version>", playwright: "<exact version>"} for each web project; its pnpm-lock.yaml is in the repo tar
 ```
+
+The set has five tracks (D-176, S-48). Each split holds half of every cell:
+
+| Track | Kind | Source | S | M | L | R | Tests |
+|---|---|---|---|---|---|---|---|
+| `python` | repo | training's held-out edit tasks (bug, feature, real PR, spec, multi-bug) | 6 | 6 | 4 | | pytest in a uv venv |
+| `web` | repo | Web-Bench projects (ByteDance, Apache-2.0): build a site from its first 3, 6 or 12 feature requests (D-222) | 4 | 4 | 2 | | Playwright in Chromium |
+| `kernel` | repo | CUDA kernels for an LLM inference engine, written for this set; needs an NVIDIA GPU (D-223) | 4 | 4 | 2 | | pytest against NumPy, compiled at run time by CuPy's NVRTC |
+| `research` | read | training's `research_test`: multi-hop and list questions over 330K to 610K characters (D-224) | | | | 8 | `answer` grader |
+| `search` | read | training's `callgraph_heldout` and `needle_heldout` | | | | 4 | `answer` grader |
 
 ### 6.2 `tasks.jsonl`
 
 ```
-read: {"id", "kind": "read", "split": "tune"|"heldout", "size": "R", "family", "question", "input": ["ctx/<id>/<file>", ...]}
-repo: {"id", "kind": "repo", "split", "size": "S"|"M"|"L", "family", "task", "base": "repos/<id>.tar",
-       "venv": "<key>", "test_hint": "{python} -m pytest -q <paths>"}
+read: {"id", "kind": "read", "track": "research"|"search", "split": "tune"|"heldout", "size": "R", "question", "input": ["ctx/<id>/<file>", ...]}
+repo: {"id", "kind": "repo", "track": "python"|"kernel"|"web", "split", "size": "S"|"M"|"L", "task", "base": "repos/<id>.tar",
+       "venv": "<key>" (python, kernel) | "node_env": "<key>" (web), "test_hint", "requires": ["cuda"] (kernel only)}
 ```
 
-- **Ids** are `<set>-<family>-<size>-<nn>`, and reveal nothing about content.
-- **`{python}`** in `test_hint` becomes the absolute path of the task's venv interpreter. That interpreter is the one the model is told to test with, so the run needs no global Python packages.
+- **Ids** are `<set>-<track>-<size>-<nn>`, and reveal nothing about content.
+- **`test_hint`** is `{python} -m pytest -q <paths>` for `python` and `kernel` (a kernel task's `kernels.py` loads its `.cu` files with `cupy.RawModule`), and `{pnpm} exec playwright test` for `web`. `{python}` becomes the absolute path of the task's venv interpreter and `{pnpm}` the dev machine's pinned pnpm, so the run needs no global packages.
 - **Paths** are relative to the set folder.
 
 ### 6.3 `grades.jsonl`
 
 ```
-read: {"id", "grader": "answer", "gold", "grading": {...}}   # the RLM task's own grading fields; type int, float, count, entity or list
-repo: {"id", "grader": "tests", "runner": "pytest", "hidden": "hidden/<id>.tar.gz",
+read: {"id", "grader": "answer", "gold", "grading": {...}, "pass_score": 1.0}   # the RLM task's own grading fields; type int, float, count, entity, list or text
+repo: {"id", "grader": "tests", "runner": "pytest"|"playwright", "hidden": "hidden/<id>.tar.gz",
        "f2p": [test ids], "p2p": [test ids], "files": [test file paths to run], "timeout_s": int}
 ```
 
 Where each task came from stays in step 1's build cache (`sources.jsonl`), never in the set. `validated` is false only for a `--no-validate` test build, and `rlmh eval` refuses such a set.
 
-The read grader ports `rlm_rl/reward.py`'s `score_answer` for the types int, float, count, entity and list (`text` is not supported, so no set uses it). Expected test values come from running training's functions in a scratch copy. For the primary metric, a read task passes when its score is 1.0. For a repo task, `resolved` means every f2p test passes and no p2p test fails. `f2p_share` is the fraction of f2p tests that pass, a secondary metric that breaks ties (D-170).
+The read grader ports `rlm_rl/reward.py`'s `score_answer` for the types int, float, count, entity, list and text (an exact or alias match, else 0.8 × token F1; no judge model). Expected test values come from running training's functions in a scratch copy. For the primary metric, a read task passes when its score reaches its `pass_score`: 1.0, except 0.8 for research list questions, training's open-book bar (D-170, D-224). For a repo task, `resolved` means every f2p test passes and no p2p test fails. `f2p_share` is the fraction of f2p tests that pass, a secondary metric that breaks ties (D-170).
 
 ### 6.4 Running a set
 
@@ -287,17 +298,26 @@ The read grader ports `rlm_rl/reward.py`'s `score_answer` for the types int, flo
 2. **Repo tasks** each get a fresh work copy, `<home>/eval/work/<eval id>/<task id>/`:
    - `repos/<id>.tar` is extracted as bytes;
    - then `git init`, and one commit `base` by `rlmh-eval <eval@localhost>` with a fixed date, so the history gives nothing away;
+   - a web task then gets `pnpm install --offline --frozen-lockfile --store-dir <home>/eval/pnpm-store` (hard links from the shared store; `node_modules` is git-ignored in the copy);
    - `test_hint` is filled.
+
+   Web tasks run one at a time until their grading ends, because the model's own test runs serve the site on Web-Bench's default port. Kernel tasks run one at a time too, because they share one GPU. The two groups can overlap.
+   - **GPU check.** When the selection holds a task with `requires: ["cuda"]`, pre-flight runs `nvidia-smi`, and env prep has the kernel venv's Python count devices and compile a trivial `RawKernel`. Without a GPU, `rlmh eval` exits 2 and names those tasks, so nothing is spent.
 3. **Permission mode.** The run uses the manifest's `permission_mode`, `bypass` for this set (D-172), printed in the estimate. Without the model's own shell, a coding agent can't run tests.
 4. **Grading, after `run.finished`:**
-   - revert any change to a test path (`tests/`, `test_*.py`, `*_test.py`, `conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `pyproject.toml`'s pytest table), and set `test_tamper` if there was one;
+   - revert any change to a test path (`tests/`, `test/`, `test_*.py`, `*_test.py`, `*.spec.*`, `conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `pyproject.toml`'s pytest table, `playwright.config.*`, `package.json`, `pnpm-lock.yaml`, `vendor/`), and set `test_tamper` if there was one;
    - extract the hidden tests;
-   - run `{python} -c <PYTEST_BOOT> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<grade dir>/junit.xml --tb=short -q <files>` with `timeout_s` and key-like variables stripped (`PYTEST_BOOT` is training's, from `rlm_rl/grader.py`). When the venv's `import_root` is `"src"`, a `.pth` file points the venv at the work copy's `src/` for that run only;
+   - **pytest** (`python`, `kernel`): run `{python} -c <PYTEST_BOOT> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<grade dir>/junit.xml --tb=short -q <files>` with `timeout_s` and key-like variables stripped (`PYTEST_BOOT` is training's, from `rlm_rl/grader.py`). When the venv's `import_root` is `"src"`, a `.pth` file points the venv at the work copy's `src/` for that run only;
+   - **playwright** (`web`): run `{pnpm} exec playwright test --reporter=junit --retries=0 <files>` with `PLAYWRIGHT_JUNIT_OUTPUT_NAME=<grade dir>/junit.xml`, `EVAL_PROJECT_PORT` set to a free port the runner picks, `CI` unset (Web-Bench's config retries under it), `IS_EVAL_PRODUCTION=1` (Web-Bench's own grading timeouts), `PLAYWRIGHT_BROWSERS_PATH`, `timeout_s` and key-like variables stripped. A test id is the JUnit `classname` (with `/` separators) `::` its `name`;
    - parse the JUnit report.
 5. **Leak check.** `leak_suspect` is set when the run's messages contain the set folder's path or a hidden test's name.
 6. **Clean up.** The work copy is removed after grading, unless `--keep`.
 
-Venvs are made once per key, `<home>/eval/venvs/<key>/`, with `uv venv --python <python>` and `uv pip install -r`, before the first run that needs them. That is a developer action that touches PyPI, and the estimate says so.
+**Environments are made once, before the first run that needs them:**
+- venvs per key, `<home>/eval/venvs/<key>/`, with `uv venv --python <python>` and `uv pip install -r`. Kernel venvs pin `cupy-cuda12x[ctk]` (the `ctk` extra brings the pip CUDA toolkit, NVRTC included, so no nvcc or MSVC is needed), `numpy` and `pytest`, and need only the NVIDIA driver;
+- for web tasks, `node` 22 or later and the pinned `pnpm` must be on PATH. `pnpm fetch` fills `<home>/eval/pnpm-store/` from each project's lockfile, and `pnpm exec playwright install chromium` puts one Chromium in `<home>/eval/ms-playwright/`. `rlmh eval` sets `PLAYWRIGHT_BROWSERS_PATH` and `IS_EVAL_PRODUCTION=1` in the engine's environment, so the model's own Playwright runs find that browser.
+
+That is a developer action that touches PyPI (the CUDA toolkit wheels are large), the npm registry and Playwright's browser download, and the estimate says so.
 
 ### 6.5 Commands and output
 
@@ -314,29 +334,29 @@ rlmh eval ledger
 - **`--go`** spends. `--max-usd` is a hard stop, defaulting to 2× the estimate: once the gateway's billed cost passes it, no new run starts and the running ones are cancelled.
 - **`--out`** defaults to `<home>/eval/out/<eval id>/`, with eval id `<set>-<split>-<YYYYMMDD-HHMMSS>`. Spend steps pass `--out` into the RLM repo's `results/harness-eval/`.
 - **`--rerun OUT`** reruns only the tasks in `OUT` that ended with a transient infra error, into `OUT/rerun/`. `report` and `compare` prefer the rerun lines.
-- **`--sample K --seed S`** picks K tasks, stratified by kind and size, the same K for the same seed. It is the probe subset of §7.5.
+- **`--sample K --seed S`** picks K tasks, stratified by track and size, the same K for the same seed. It is the probe subset of §7.5.
 
 ```
 <out>/
   eval.json        set name, manifest hashes, split, models, profile, profile_hash, call_format, jobs, harness version and commit,
                    estimate, cap, capped, rerun_of, started, finished
   runs.jsonl       the engine's run log (logDir = <out>)
-  grades.jsonl     one line per task: id, kind, size, split, run_id, submitted, infra_kind, pass, score, f2p_share,
+  grades.jsonl     one line per task: id, track, kind, size, split, run_id, submitted, infra_kind, pass, score, f2p_share,
                    test_tamper, leak_suspect, turns, subcalls, compactions, cost_usd, cache_hit, wall_s
-  grade-logs/<id>/ pytest output and junit.xml (the tuner never reads this folder, §7.3)
-  report.json      totals by split, kind and size: n, pass rate, mean score, mean f2p_share, turns, sub-calls,
+  grade-logs/<id>/ the test runner's output and junit.xml (the tuner never reads this folder, §7.3)
+  report.json      totals by split, track, kind and size: n, pass rate, mean score, mean f2p_share, turns, sub-calls,
                    compactions, cost, cache hit, wall time, infra errors
   report.md        the same as tables
 ```
 
-- **`compare`** pairs the ids both outputs have. It gives both pass, A only, B only and neither; McNemar's exact p; the pass-rate difference; mean `f2p_share`; and the cost ratio.
+- **`compare`** pairs the ids both outputs have. It gives both pass, A only, B only and neither; McNemar's exact p; the pass-rate difference; pass counts per track; mean `f2p_share`; and the cost ratio.
 - **The ledger.** Every `--go` appends `{date, what: "eval"|"tune", set, split, root, profile, runs, cost_usd, out}` to `<home>/eval/ledger.jsonl`. `rlmh eval ledger` prints the lines and the total against S-44's $30.
 
 ### 6.6 The estimate
 
 `eval/estimate.ts` prices each planned run as `reference tokens × catalog price`.
 
-- **Reference tokens** are the mean `usage.root` and `usage.sub` by kind and size, from the run logs passed with `--tokens-from` (repeatable).
+- **Reference tokens** are the mean `usage.root` and `usage.sub` by track and size, from the run logs passed with `--tokens-from` (repeatable).
 - **Fallback.** With none, it uses these built-in reference figures, from v0's recorded runs (D-152, D-157):
 
 | Size | Root in (M) | Root out (K) | Sub in (M) | Sub out (K) |
@@ -549,7 +569,7 @@ Each run is one replicate. The paper's authors recommend repeats, and with 24 he
 ## 12. Tests and who writes them
 
 All offline, against fakes (v0 §11 still holds). Each step owns the tests in its spec. The shared fixtures are:
-- **`app/test/fixtures/evalset/`** (step 2): a set folder in §6.1's layout with two read tasks and two repo tasks. Each repo task is a pure-Python package with one hidden f2p test and one p2p test, so steps 2, 6 and 9 grade real pytest runs offline. Tests that need Python find it the way the engine does, and skip when none is found.
+- **`app/test/fixtures/evalset/`** (step 2): a set folder in §6.1's layout with six tasks: a search and a research read task, two pure-Python packages with one hidden f2p test and one p2p test each, one CUDA kernel task (its grading skips without a GPU) and one web task (its grading needs Node, pnpm and a Playwright Chromium, and runs on CI's Linux leg). Steps 2, 6 and 9 grade real pytest runs offline. Tests that need Python find it the way the engine does, and skip when none is found.
 - **`fake/scripted` scripts** for sessions (step 6): a session's submit is a scripted `tool_call` whose code calls `submit(json.dumps({...}))`.
 
 ## 13. v0 facts that v0/architecture.md doesn't list

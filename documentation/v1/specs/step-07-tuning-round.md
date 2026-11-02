@@ -108,7 +108,7 @@ rlmh tune D:\RLM-data\harness-eval\harness-eval-v1 ^
 6. [ ] **Check the output** ($0).
    - `tune.json` has every stage, and `final/` exists.
    - `rlmh eval report` on each `rounds/<r>/evals/*`: note pass counts, `infra`, `test_tamper` and `leak_suspect`. Any `leak_suspect` goes in the summary, with its task id.
-   - **`final/guidance.md` holds nothing task-specific.** Check it for every tune task's id and package name, and every hidden test path. Step 8 ships this text into a public repo, so report any hit and don't ship it silently.
+   - **`final/guidance.md` holds nothing task-specific.** Check it for every tune task's id, package, Web-Bench project or kernel function name, and every hidden test path. Step 8 ships this text into a public repo, so report any hit and don't ship it silently.
    - The real cost is at most the cap, and the ledger has one new `tune` line.
 7. [ ] **If no round was accepted**, report it with the accept numbers. Then offer a third round:
    - **The run:** `rlmh tune … --continue <out> --rounds 3 --max-usd <X>`, where X is step 7's unspent money, or more only if Rishi moves it from another row (D-179);

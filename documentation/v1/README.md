@@ -1,10 +1,10 @@
 # v1 build docs
 
-This folder lets a thread pick up one v1 step and build it without asking anyone. v1 is the Harness² release, and it ships as 1.0.0 (S-45). It makes the `default` profile measurably better, ships the better version, and lets users improve it on their own work. Alongside that, it adds follow-ups and compaction. The design is the v1 alignment doc ([Claude Doc](https://claude.ai/artifact/LVWSoM6bRFk6kSoWZ1r71Z)), which Rishi agreed on 2026-11-02 with one change: the eval suite is mostly agentic coding, because that's what he and his users run `rlmh` for (S-46).
+This folder lets a thread pick up one v1 step and build it without asking anyone. v1 is the Harness² release, and it ships as 1.0.0 (S-45). It makes the `default` profile measurably better, ships the better version, and lets users improve it on their own work. Alongside that, it adds follow-ups and compaction. The design is the v1 alignment doc ([Claude Doc](https://claude.ai/artifact/LVWSoM6bRFk6kSoWZ1r71Z)), which Rishi agreed on 2026-11-02 with one change: the eval suite is mostly agentic coding, because that's what he and his users run `rlmh` for (S-46): Python repos, website building and CUDA kernels for an LLM engine, plus research questions (S-48).
 
 ## How a thread uses it
 
-1. Read this README, then [architecture.md](architecture.md), which pins every path, message and signature v1 adds. Then read [../v0/decisions.md](../v0/decisions.md): v1's picks are S-40 to S-47, and its calls are D-168 onwards.
+1. Read this README, then [architecture.md](architecture.md), which pins every path, message and signature v1 adds. Then read [../v0/decisions.md](../v0/decisions.md): v1's picks are S-40 to S-48, and its calls are D-168 onwards.
 2. Read your spec in [specs/](specs/), and everything it lists under "Read first". Those lists name whole files on purpose; read them before you write code.
 3. Check the v1 table in [../v0/progress.md](../v0/progress.md): every step yours depends on must be `done`. Then set your row to `in progress`, with your thread's name. v0 and v1 share progress.md and decisions.md.
 4. Build exactly what the spec lists, and run its tests and the full verify gate (CLAUDE.md).
@@ -16,7 +16,7 @@ When a spec is silent, follow [architecture.md](architecture.md). When that is s
 
 | # | Spec | Type | Cost |
 |---|---|---|---|
-| 1 | [Eval sets: about 48 tasks, mostly coding](specs/step-01-eval-sets.md) (script in the RLM repo) | PC | $0 |
+| 1 | [Eval sets: 48 tasks across Python, web, kernels, research and search](specs/step-01-eval-sets.md) (script in the RLM repo) | PC | $0 |
 | 2 | [`rlmh eval`: run, grade, report, compare](specs/step-02-rlmh-eval.md) | PC | $0 |
 | 3 | [Compaction inside a run](specs/step-03-compaction.md) | PC | $0 |
 | 4 | [Follow-ups: one conversation across questions](specs/step-04-follow-ups.md) | PC | $0 |
