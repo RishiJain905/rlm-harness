@@ -116,6 +116,6 @@ jobs:
                 echo "$name@$version is already on npm"
                 continue
               fi
-              npm publish "$t" --access public --provenance --tag "$dist_tag"
+              npm publish "./$t" --access public --provenance --tag "$dist_tag"  # ./ so npm reads a file, not a GitHub user/repo (D-167)
             done
           done
