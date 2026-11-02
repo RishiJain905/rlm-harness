@@ -50,7 +50,7 @@ Deleting `<home>` plus the PATH entry removes everything. One exception: saved k
 |---|---|---|
 | `ubuntu-latest` | linux-x64 | `dist/rlmh-linux-x64` |
 | `windows-latest` | windows-x64 | `dist/rlmh-windows-x64.exe` |
-| `macos-14` | darwin-arm64 | `dist/rlmh-darwin-arm64` |
+| `macos-14` (`macos-15` since D-166) | darwin-arm64 | `dist/rlmh-darwin-arm64` |
 | `macos-15-intel` | darwin-x64 | `dist/rlmh-darwin-x64` |
 
   Steps: checkout; `oven-sh/setup-bun` 1.4.4; `bun install --frozen-lockfile` in `app/`; `bun run scripts/embed-engine.ts`; then, from `app/`:
