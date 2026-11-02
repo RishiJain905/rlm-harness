@@ -87,7 +87,16 @@ def test_prelude_names():
     text = (SHIM / "gpu_compat.h").read_text(encoding="utf-8")
     assert text.startswith("// KV cache: none.")
     for name in ("GPU_KERNEL", "LAUNCH_BOUNDS", "WARP_SIZE", "shfl_down", "shfl_xor", "warp_ballot", "GPU_INFINITY",
-                 "GPU_NAN", "h2f", "f2h", "GPU_BACKEND_HIP", "GPU_BACKEND_CUDA"):
+                 "GPU_NAN", "h2f", "f2h", "GPU_BACKEND_HIP", "GPU_BACKEND_CUDA", "GPU_WARP_SIZE"):
         assert name in text
+
+
+def test_hip_warp_size_from_the_device(gpu):
+    # D-237: ROCm 7 deprecates __AMDGCN_WAVEFRONT_SIZE, so gpu.py reads the warp size and passes GPU_WARP_SIZE
+    assert "hipDeviceGetAttribute" in gpu.CALLS["hip"]
+    src = (SHIM / "gpu.py").read_text(encoding="utf-8")
+    assert "-DGPU_WARP_SIZE=" in src
+    text = (SHIM / "gpu_compat.h").read_text(encoding="utf-8")
+    assert text.index("#define WARP_SIZE GPU_WARP_SIZE") < text.index("#define WARP_SIZE __AMDGCN_WAVEFRONT_SIZE")
     assert not re.search(r"^\s*#\s*include", text, re.M)  # the prelude needs no header on either compiler
     assert "\r" not in text

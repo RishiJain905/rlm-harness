@@ -12,8 +12,8 @@ v1 makes the `default` profile measurably better, ships the better version, and 
 | `rlmh eval`: run a set, grade it, report, compare | `app/src/eval/` | 2 |
 | Compaction inside a run | `engine/rlm_engine/compaction.py`, `[compaction]` in the profile | 3 |
 | Follow-ups: one REPL and conversation across questions | `loop.py`, `service.py`, the interactive app | 4 |
-| Harness² tuner, developer side | `app/src/tune/`, `rlmh tune` | 6 |
-| Harness² for users: `/tune` and the experience library | `app/src/tune/`, `/tune` | 9 |
+| Harness² tuner, developer side; skills and scripts in `default`-based profiles | `app/src/tune/`, `rlmh tune`; `profiles.py` and the worker | 6 |
+| Harness² for users: `/tune`, `/tuned` and the experience library | `app/src/tune/`, `/tune`, `/tuned` | 9 |
 | Three spend steps and the release | RLM repo results, `documentation/v1/results.md` | 5, 7, 8, 10 |
 
 The three processes of v0 §1 stay as they are. Nothing new talks to a provider except through the gateway, and nothing new holds a key.
@@ -23,7 +23,7 @@ flowchart LR
     subgraph app["rlmh (Bun)"]
         evalc["eval/ (step 2)"]
         tunec["tune/ (steps 6, 9)"]
-        ui["interface/ + /tune"]
+        ui["interface/ + /tune, /tuned"]
         session["session.ts"]
         gw["gateway/"]
     end
@@ -54,19 +54,26 @@ rlm-harness/
   engine/rlm_engine/
     __init__.py                      +3 +10     PROTOCOL_VERSION 2 (step 3); __version__ "1.0.0" (step 10)
     compaction.py                    3          trigger, compact(), the two pinned texts (§4)
-    loop.py                          +3 +4      calls compaction before each root call; conversations (§5)
-    child.py                         +3         calls compaction before each child turn
+    loop.py                          +3 +4 +6   calls compaction before each root call; conversations (§5); nudges.toml rules (gated, §7.2)
+    child.py                         +3 +6      calls compaction before each child turn; skills, scripts and agents in each child's worker init
+    bridge.py                        +6         llm(…, agent=) and rlm(…, agent=) look up agents/<name>/AGENT.md (gated, §7.2)
     runlog.py                        +3         FORMAT_VERSION 2, four new keys (§3.4)
     service.py                       +3 +4 +6   window and conversation on run.start; run.say, run.close; profile.check
     link.py                          +4         error -32013 RUN_BUSY beside -32010 to -32012
     followup.py                      4          the pinned follow-up texts: SUBMITTED_NOTE, UNANSWERED_NOTE, FOLLOW_UP (§5)
-    profiles.py                      +3 +6      the [compaction] table; TUNABLE and check_tunable (§7.2)
+    profiles.py                      +3 +6      the [compaction] table; TUNABLE, TUNABLE_GATED, FROZEN and check_tunable; skills/ and scripts/, and the gated agents/ and nudges.toml (§7.2)
+    worker/worker.py                 +6         under agent_api, the run's copy of the profile's scripts/ goes on sys.path
+    worker/agentapi.py               +6         skill(name); agent= on llm and rlm (gated)
     profiles/default/profile.toml    +3 +8      [compaction] (step 3); the tuned values (step 8)
     profiles/default/guidance.md     +8         the tuned text (step 8)
+    profiles/default/skills/         8          the tuned skills, if step 7's final/ has any (step 8)
+    profiles/default/scripts/        8          the tuned scripts, likewise; agents/ and nudges.toml too if step 7 kept them (D-234)
   engine/tests/
     test_compaction.py               3
     test_conversation.py             4
     test_profile_check.py            6
+    test_profile_files.py            6          skills and scripts: loading, the hash, skill(), imports, validation
+    test_gated.py                    6          agents and nudges behind the gate
   app/src/
     version.ts                       +3 +10     PROTOCOL_VERSION 2; APP_VERSION "1.0.0"
     protocol.ts                      +3 +4 +6   the §3 types
@@ -75,7 +82,8 @@ rlm-harness/
     paths.ts                         +2 +6 +9   evalDir, tuneDir, libraryDir (§9)
     main.ts                          +2 +6      eval, tune
     cli/eval.ts                      2          rlmh eval, eval report, eval compare, eval ledger
-    cli/tune.ts                      6          rlmh tune
+    cli/tune.ts                      6          rlmh tune, with --gated
+    cli/config.ts                    +9         refuses `config set tune.enabled true` (§7.6)
     eval/runner.ts                   2 +6 +9    runEval(): the one entry point for rlmh eval, rlmh tune and /tune; logDir (2), ledger: false (6), /tune's options (9)
     eval/set.ts                      2          read and check a set folder (§6)
     eval/tar.ts                      2          a small ustar reader, the same on every OS; refuses links and path escapes
@@ -87,15 +95,18 @@ rlm-harness/
     eval/ledger.ts                   2          <home>/eval/ledger.jsonl
     tune/evidence.ts                 6          the evidence folder, with the grader-leak guard (§7.3)
     tune/sessions.ts                 6          editor, composer and reflector sessions as rlmh runs (§7.4)
-    tune/prompts/*.md                6          stage prompts adapted from google-research/harness2 (Apache-2.0 notice kept)
-    tune/candidate.ts                6          write a candidate profile folder, check it with profile.check
+    tune/prompts/*.md                6          stage prompts adapted from google-research/harness2 (Apache-2.0 notice kept); surface-gated.md only with --gated
+    tune/candidate.ts                6          write a candidate profile folder (skills, scripts and the gated files too), diff it, check it with profile.check
     tune/offline.ts                  6          the set-based driver behind rlmh tune (§7.5)
-    tune/online.ts                   9          the per-task driver behind /tune (§7.6)
-    tune/worktree.ts                 9          throwaway git worktrees (or copies) of the user's folder
+    tune/online.ts                   9          the background driver behind /tune: queue, cap, delivery (§7.6)
+    tune/worktree.ts                 9          snapshots of the user's folder, and throwaway worktrees (or copies) from them
     tune/library.ts                  6 +9       the experience library (§7.7); step 9 adds user domains
-    interface/App.tsx, store.ts      +4 +9      follow-ups; /tune
+    interface/App.tsx, store.ts      +4 +9      follow-ups; the tune queue, the deferred profile switch, the status line's tune segment
     interface/conversation.ts        4          when a question continues the open conversation (§5)
-    interface/commands/tune.tsx      9          the /tune screen
+    interface/commands/index.ts      +9         tune and tuned in COMMANDS
+    interface/commands/tune.tsx      9          the /tune on/off screen, with the estimate
+    interface/commands/tuned.tsx     9          the /tuned picker
+    interface/commands/model.tsx     +9         the tuning model row (tune.model)
   app/test/
     eval/*.test.ts                   2
     fixtures/evalset/                2          a tiny set: two read, two Python, one kernel and one web task, with hidden tests
@@ -103,6 +114,7 @@ rlm-harness/
     tune/*.test.ts                   6 +9
     interface/conversation.test.ts   4
     interface/tune.test.tsx          9
+    interface/tuned.test.tsx         9
   documentation/v1/
     README.md, architecture.md       exists     this kit
     specs/step-01..10                exists
@@ -134,7 +146,7 @@ Step 3 bumps `PROTOCOL_VERSION` to 2 in `app/src/version.ts` and `engine/rlm_eng
 | `run.say` | `{run_id, text}` | `{prompt_index: int}`, returned before the prompt's first root call | -32010 no such open conversation; -32013 a prompt is still running | 4 |
 | `run.close` | `{run_id}` | `{}`, after `run.closed` was sent | -32010 no such open conversation; -32013 a prompt is still running (use `run.cancel`) | 4 |
 | `engine.info` | v0's params | each `profiles` entry gains `path`, `agent_api` and `limits: {read, repo}` (only added fields, so the protocol number doesn't change for it) | as v0 | 2, 6 |
-| `profile.check` | `{path: str (absolute folder), base: str \| null (a profile name)}` | `{ok: bool, errors: [str], prompt_hash, profile_hash, changed: [str]}`; `changed` lists the dotted keys that differ from `base`, plus `"guidance"` when its text differs | -32602 for a relative path | 6 |
+| `profile.check` | `{path: str (absolute folder), base: str \| null (a profile name), gated: bool (default false)}`; `gated` is D-234's | `{ok: bool, errors: [str], prompt_hash, profile_hash, changed: [str]}`; `changed` lists the dotted keys that differ from `base`, plus `"guidance"` when its text differs, plus each skill, script, agent or `nudges.toml` file added, removed or changed, by its path in the folder (`skills/<name>/SKILL.md`, `scripts/<name>.py`) | -32602 for a relative path | 6 |
 
 New error code: **-32013 `RUN_BUSY`**, in `link.py` (beside -32010 to -32012) and `protocol.ts`.
 
@@ -308,14 +320,14 @@ The read grader ports `rlm_rl/reward.py`'s `score_answer` for the types int, flo
 4. **Grading, after `run.finished`:**
    - revert any change to a test path (`tests/`, `test/`, `test_*.py`, `*_test.py`, `*.spec.*`, `conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `pyproject.toml`'s pytest table, `playwright.config.*`, `package.json`, `pnpm-lock.yaml`, `vendor/`; for kernel copies also `gpu.py`, `gpu_compat.h` and `kernels.py`), and set `test_tamper` if there was one;
    - extract the hidden tests;
-   - **pytest** (`python`, `kernel`): run `{python} -c <PYTEST_BOOT> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<grade dir>/junit.xml --tb=short -q <files>` with `timeout_s` and key-like variables stripped (`PYTEST_BOOT` is training's, from `rlm_rl/grader.py`). When the venv's `import_root` is `"src"`, a `.pth` file points the venv at the work copy's `src/` for that run only;
+   - **pytest** (`python`, `kernel`): run `{python} -c <PYTEST_BOOT> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<grade dir>/junit.xml --tb=short -q <files>` with `timeout_s`, key-like variables stripped, and `PYTHONUTF8=1` (D-230: the tasks were made on Linux, and on Windows a test that opens a data file with the default encoding would read it as cp1252) (`PYTEST_BOOT` is training's, from `rlm_rl/grader.py`). When the venv's `import_root` is `"src"`, a `.pth` file points the venv at the work copy's `src/` for that run only;
    - **playwright** (`web`): run `{pnpm} exec playwright test --reporter=junit --retries=0 <files>` with `PLAYWRIGHT_JUNIT_OUTPUT_NAME=<grade dir>/junit.xml`, `EVAL_PROJECT_PORT` set to a free port the runner picks, `CI` unset (Web-Bench's config retries under it), `IS_EVAL_PRODUCTION=1` (Web-Bench's own grading timeouts), `PLAYWRIGHT_BROWSERS_PATH`, `timeout_s` and key-like variables stripped. A test id is the JUnit `classname` (with `/` separators) `::` its `name`;
    - parse the JUnit report.
 5. **Leak check.** `leak_suspect` is set when the run's messages contain the set folder's path or a hidden test's name.
 6. **Clean up.** The work copy is removed after grading, unless `--keep`.
 
 **Environments are made once, before the first run that needs them:**
-- venvs per key, `<home>/eval/venvs/<key>/`, with `uv venv --python <python>` and `uv pip install -r`. Kernel venvs pin `numpy`, `pytest` and the pip NVRTC wheel (`nvidia-cuda-nvrtc-cu12`). The `cuda` backend needs only the NVIDIA driver; the `hip` backend needs the AMD HIP SDK on Windows or ROCm on Linux, installed by the machine's owner;
+- venvs per key, `<home>/eval/venvs/<key>/`, with `uv venv --python <python>` and `uv pip install -r`. A python venv's frozen requirements already hold `tzdata` (D-230), so `zoneinfo` works on Windows. Kernel venvs pin `numpy`, `pytest` and the pip NVRTC wheel (`nvidia-cuda-nvrtc-cu12`). The `cuda` backend needs only the NVIDIA driver; the `hip` backend needs the AMD HIP SDK on Windows or ROCm on Linux, installed by the machine's owner;
 - for web tasks, `node` 22 or later and the pinned `pnpm` must be on PATH. `pnpm fetch` fills `<home>/eval/pnpm-store/` from each project's lockfile, and `pnpm exec playwright install chromium` puts one Chromium in `<home>/eval/ms-playwright/`. `rlmh eval` sets `PLAYWRIGHT_BROWSERS_PATH` and `IS_EVAL_PRODUCTION=1` in the engine's environment, so the model's own Playwright runs find that browser.
 
 That is a developer action that touches PyPI, the npm registry and Playwright's browser download, and the estimate says so.
@@ -390,16 +402,16 @@ Read the paper and the code before building either step:
 
 | Harness² | v1 |
 |---|---|
-| The model is frozen and the harness evolves | Prompt v4, the call format and the one `python` tool are frozen (levers 1 and 2, S-14, S-09). `guidance.md` and the tunable TOML keys evolve (levers 3 and 4, §7.2) |
-| 8 harness components (C1–C8) | Only the text ones map: guardrails (C2), memory (C3) and tool guidance (C4) all become `guidance.md`. Skills, scripts, subagents and plugins have no counterpart, because the REPL's helpers are code, not profile text |
+| The model is frozen and the harness evolves | Prompt v4, the call format and the one `python` tool are frozen (levers 1 and 2, S-14, S-09). `guidance.md`, the tunable TOML keys, skills and scripts evolve (levers 3 and 4, §7.2) |
+| 8 harness components (C1–C8) | C1 to C4 are covered by `guidance.md`. Skills (C6) and scripts (C7) are tunable: `skills/<name>/SKILL.md`, printed by the REPL helper `skill(name)`, and `scripts/<name>.py`, imported in the REPL (D-233). Named subagents (C5) and declarative nudges (C8) are built behind a gate, off by default, and stay only if step 7 shows a tunable gain (D-234). Code plugins are out: tuned code in the engine's tool loop would run outside the worker's audit hooks |
 | Two scoped editors: INV ("how the agent works") and DOM ("what a practitioner knows") | The same two editors with the same scopes. INV may also change TOML limits; DOM changes text only |
 | Probe each candidate once | Probe each candidate on a fixed probe subset of the tune split (offline), or once on the task (online) |
 | Composer: merge, revise, adopt or KEEP_BASE, with notes "kept\|revised\|dropped -> edit -> evidence" | The same, as a composer session |
 | Editors and the composer never see a score or verdict (`context.py` guards) | The same: evidence holds trajectories and deliverables, never `grades.jsonl`, `grade-logs/` or gold (§7.3) |
-| Online and label-free: each task is re-run on itself | User `/tune` (§7.6) |
+| Online and label-free: each task is re-run on itself | User `/tune` (§7.6): an on/off switch; while on, each task the user finishes is tuned in the background, with the user's own run as the reference (D-231) |
 | Meta-Harness baseline: offline search, replicates, acceptance margin, a lessons file (paper Appendix C) | Developer `rlmh tune` (§7.5). It is offline, uses labels for acceptance only, and adds a held-out check against `v1-baseline` (step 8) |
 | The library: a reflector writes at most one lesson per task, NO_ENTRY by default, with cue lines in `INDEX.md` | The experience library (§7.7). It is read by later editor sessions and is not injected into ordinary runs (D-175) |
-| Editor and composer: Claude Opus 4.8 under OpenCode; Figure 8 shows the executor model can edit too | Every session runs on the tuning model, DeepSeek V4.1 Flash 1017 (S-43), as an rlmh read run over the evidence (§7.4) |
+| Editor and composer: Claude Opus 4.8 under OpenCode; Figure 8 shows the executor model can edit too | Every session runs on the tuning model, as an rlmh read run over the evidence (§7.4). Offline it is DeepSeek V4.1 Flash 1017 (S-43). For users it is `tune.model`, picked in `/model`, the root model when empty; the reference, probe and composed runs always use the user's root and sub models (D-232) |
 
 ### 7.2 What may change
 
@@ -421,6 +433,35 @@ Read the paper and the code before building either step:
 
 Every other key is frozen, and a candidate that changes one is invalid: `contract`, `cache_api`, `agent_api`, every `*_max_tokens`, `output_max_chars`, `cell_timeout_s`, `subcall_max_chars`, `subcall_oversize`, `rlm.max_depth`, `compaction.reserve` and `compaction.summary_max_tokens`. `training-v4` is never a base.
 
+**Skills and scripts** (D-233, step 6). A profile with `agent_api = true` may also hold:
+
+```
+<profile>/skills/<name>/SKILL.md    front matter `name` (equal to the folder) and `description` (one line), then the text
+<profile>/scripts/<name>.py         a deterministic helper module, standard library only
+```
+
+- **At run time.** `skill(name)` in the REPL prints the skill's text; nothing is loaded until the model calls it, so the root prompt doesn't grow. `skill()` prints each name and description. The engine copies `scripts/` into the run's scratch folder, and the worker puts that copy on `sys.path`, so `import <name>` works and a run never changes the profile. Scripts run inside the worker under the same audit hooks and permission mode as model-written code.
+- **Validation** (harness2's three rules, then the bounds), in `check_tunable` and `profile.check`:
+  - every skill's name appears verbatim in `guidance.md` (its trigger line);
+  - every script that `guidance.md` or a skill names as `scripts/<name>.py` ships in the profile;
+  - every script compiles, and imports only the standard library (`sys.stdlib_module_names`, checked on the AST);
+  - at most 16 skills of at most 8,000 characters each, and at most 16 scripts of at most 16,000 characters each (step 6 may change these with a logged reason);
+  - a skill name matches `[a-z0-9][a-z0-9-]{0,47}`; a script name is a lowercase Python identifier that is neither a standard-library module nor a REPL name;
+  - every file is UTF-8 with LF line ends and no NUL, and a candidate folder holds nothing else beside `profile.toml`, `guidance.md` and these folders.
+- **Never under `training-v4`.** A profile without `agent_api` that holds `skills/` or `scripts/` fails to load, so `training-v4` never gets either, and parity is unaffected.
+- **The hash.** A profile with none of these files hashes as before (`profile.toml`, a NUL, `guidance.md`), so `v1-baseline`'s and `training-v4`'s hashes don't move. Otherwise each such file (the gated files below included) is appended in sorted path order, as a NUL, its path with `/`, a NUL, and its bytes.
+
+**Named subagents and nudges, behind a gate** (D-234, step 6). Built and tested, but off by default: `profiles.GATED = False`. The gate is on only when that constant is true, or when the engine starts with `RLMH_TUNE_GATED=1`, which `rlmh tune --gated` sets for its own engine. With it off, a profile that holds either fails to load, and neither is in `TUNABLE`. Step 7 decides whether they stay (§7.5).
+
+```
+<profile>/agents/<name>/AGENT.md    front matter `name` and `description`, then a system prompt for a bounded job with a large input and a small answer
+<profile>/nudges.toml               [[nudge]] rules, declarative only: never code
+```
+
+- **`agents/`.** `llm(..., agent=name)` sends the agent's text as the sub-call's system message; `rlm(..., agent=name)` puts it ahead of the child's task. At most 8 agents of at most 4,000 characters each, and each name appears verbatim in `guidance.md`.
+- **`nudges.toml`.** Each `[[nudge]]` has `when` (`error`, `no_submit` or `long_output`), its threshold (`pattern`, a plain substring of a cell's output or error, at most 200 characters; `turns`, 1 to 200, for turns with no `submit`; `chars`, 1,000 to 1,000,000, for a cell's output length) and `hint` (at most 400 characters). `loop.py` appends a matching rule's hint to that turn's REPL output, at most once per rule per prompt. At most 8 rules.
+- **`TUNABLE_GATED`** lists both, with these bounds, beside `TUNABLE`. `check_tunable(base, candidate, gated=False)` refuses either file unless `gated` is true or `GATED` is; `rlmh tune --gated` passes `gated: true` to `profile.check`. These bounds are step 6's starting values, which it may change with a logged reason. Plugins as code are out (D-234).
+
 ### 7.3 Evidence
 
 `tune/evidence.ts` writes one folder for each session:
@@ -428,6 +469,7 @@ Every other key is frozen, and a candidate that changes one is invalid: `contrac
 ```
 evidence/
   harness/profile.toml, harness/guidance.md    the harness under review
+  harness/skills/, harness/scripts/            its skills and scripts, if any (and agents/, nudges.toml under the gate)
   tasks/<id>/task.md                           the task text, as rlmh gave it
   tasks/<id>/<run label>/trajectory.md         every turn: reply, code, output, error, sub-call summaries, compactions
   tasks/<id>/<run label>/deliverable.md        the diff (repo mode) or the submitted answer (read mode)
@@ -440,23 +482,26 @@ evidence/
 
 ### 7.4 Sessions
 
-Every session is an rlmh read run through `Session`. The question is a stage prompt, the inputs are the evidence files, the profile is the built-in `default` of the running harness (never a candidate), and the model is the tuning model. The model then reads the evidence through its REPL and sub-calls, which is the RLM idea applied to the paper's evidence folders (D-174). The session submits one JSON object as a string, `submit(json.dumps({...}))`, because `submit` refuses a dict:
+Every session is an rlmh read run through `Session`. The question is a stage prompt, the inputs are the evidence files, the profile is the built-in `default` of the running harness (never a candidate), and the model is the tuning model: `--root`/`--sub` for `rlmh tune`, and `tune.model` as root and sub for `/tune` (D-232). The model then reads the evidence through its REPL and sub-calls, which is the RLM idea applied to the paper's evidence folders (D-174). The session submits one JSON object as a string, `submit(json.dumps({...}))`, because `submit` refuses a dict:
 
 | Session | Prompt (adapted from `prompts.py`) | Submits |
 |---|---|---|
-| Editor INV, editor DOM | `propose()` with `GENERALIZE` and `_INV_TEMPLATE` or `_DOM_TEMPLATE` | `{decision: "EDIT"\|"KEEP_BASE", notes: [str], guidance: str \| null (null keeps the base's text), toml: {"<table>.<key>": value}}`; DOM's `toml` must be empty |
-| Composer | `aggregate()` | `{decision: "MERGE"\|"ADOPT"\|"REVISE"\|"KEEP_BASE", adopt: "inv"\|"dom"\|null, notes: [str], guidance, toml}` |
+| Editor INV, editor DOM | `propose()` with `GENERALIZE` and `_INV_TEMPLATE` or `_DOM_TEMPLATE` | `{decision: "EDIT"\|"KEEP_BASE", notes: [str], guidance: str \| null (null keeps the base's text), toml: {"<table>.<key>": value}, files: {"<path>": str \| null}}`; `files` holds only the skills and scripts it adds, changes (text) or removes (null), by path in the folder; DOM's `toml` must be empty |
+| Composer | `aggregate()` | `{decision: "MERGE"\|"ADOPT"\|"REVISE"\|"KEEP_BASE", adopt: "inv"\|"dom"\|null, notes: [str], guidance, toml, files}` |
 | Reflector | `experience()` | `{domain, entry: "NO_ENTRY" \| {cue, lesson, evidence, confidence}, edits: [...]}`, each edit with the fields `experience()` asks for, its verdict one of "helped", "hurt", "no observed effect", "confounded" |
 
 - **A bad session.** An invalid submission (wrong shape, or `profile.check` not ok) gets one retry with the errors appended to the question. After that, the stage keeps its base, as `recursion.py` does.
+- **Size.** `submit` refuses an answer over `SUBMIT_MAX_BYTES` (100,000), so `submit.md` asks for the few files an edit changes, never the whole folder.
 - **Licence.** The prompts in `tune/prompts/` keep harness2's Apache-2.0 notice and name the source file and commit.
 
 ### 7.5 `rlmh tune`, offline (step 6, run at step 7)
 
 ```
 rlmh tune SET --root M [--sub M] --base PROFILE --name NAME (--from EVAL_OUT | --continue OUT) [--rounds 2]
-              [--probe 10 --seed S] [--jobs N] [--tokens-from RUNS.jsonl]... [--out DIR] [--go] [--max-usd X]
+              [--probe 10 --seed S] [--jobs N] [--tokens-from RUNS.jsonl]... [--out DIR] [--go] [--max-usd X] [--gated]
 ```
+
+`--gated` turns on D-234's gate for this tune: its engine starts with `RLMH_TUNE_GATED=1`, the editors' prompts gain `surface-gated.md`, and `profile.check` gets `gated: true`. Step 7 runs round 1 with and without it, and C5 and C8 stay in the tunable surface only if a candidate using them is adopted and the gated round passes more tune tasks at no more mean cost per task than the round without it (D-234). When they stay, step 7 moves `TUNABLE_GATED`'s rows into `TUNABLE` and turns the gate on by default (`profiles.GATED = True`). Otherwise they stay out of `TUNABLE` and their code stays off. Either way the result is logged as a D-number.
 
 At step 7, `--base` is `v1-baseline`: the user profile step 5 creates as a byte copy of the built-in `default` after step 3, checked by its hash in steps 7, 8 and 10. Rounds are budget-driven. Round 1 always runs, and each later round runs only if its estimate (re-made from the runs so far, with `--tokens-from`) fits in what is left of `--max-usd`; `--rounds` is the maximum.
 
@@ -482,23 +527,30 @@ The output folder `<out>/` holds:
 
 ### 7.6 `/tune`, online, for users (step 9)
 
-This is Harness²'s own setting, at k = 1, run sequentially over the user's tasks as `schedule.py` does.
+This is Harness²'s own setting, at k = 1, run over the stream of the user's real tasks in order, as `schedule.py` runs a domain's tasks (D-231).
 
-- **Tasks.** One to five tasks the user types, or a `tasks.jsonl` in D-28's shape plus an optional `test` command. There is no gold.
-- **Per task:**
-  - one reference run;
+- **Two switches.** Which harness is active is the `profile` setting. Whether Harness² runs is `tune.enabled`, `false` by default. A user can stay on a tuned profile with tuning off, and spend nothing on it.
+- **`/tuned`** lists the built-in `default` first, then every `tuned-<YYYYMMDD-HHMM>` profile newest first, and marks the active one. Enter sets `profile` to it. It never spends, and the choice stays across sessions until the user switches again.
+- **`/tune`** shows the state (on or off, the spend against the cap, the tune in flight and the task waiting) and toggles it. `/tune on` first shows the estimate and the cap, and turns on only after a yes. `/tune off` cancels the tune in flight and drops the waiting task. `tune.enabled` can be set to `false` anywhere, but to `true` only through `/tune on`: `/settings` and `rlmh config set` refuse it with a hint.
+- **A task** is the first prompt of a conversation (`prompt_index` 0) that the user runs in the interactive app with tuning on, and that ends with a submit and no infra error, under a profile that can be a base (not `training-v4`). Follow-up prompts aren't tuned, because they rely on REPL state a fresh run doesn't have. `rlmh run`, `rlmh batch` and `rlmh eval` are never tuned.
+- **Per task**, in the background, from the task's `run.finished`:
+  - the user's own run is the reference (D-231), so no reference run is made;
   - the INV and DOM editors;
-  - two probe runs;
+  - a probe run of each candidate that differs from the base;
   - the composer;
-  - one composed run;
-  - the reflector.
+  - one composed run, unless it equals the base;
+  - the reflector, with `tune.library` on.
 
-  That is at most four rollouts and four sessions: a stage whose profile equals its base isn't run, and the harness each task delivers is the next task's base, so `/tune` ends with one profile.
-- **Isolation.** Repo tasks run in a throwaway `git worktree` of the user's folder at `HEAD`, never in the folder itself. A folder outside git gets a copy.
-- **Delivery.** At k = 1 the composed harness is delivered as the paper does, except when the task has a test command: then it is kept unless the reference run's test exits 0 and the composed run's doesn't. Test output never reaches the evidence.
-- **Cost first.** Before anything runs, `/tune` shows an estimate: per task, 4 × the median cost of the user's last 20 runs in that mode with that model, plus 4 sessions (3 with the library off) at the median cost of earlier `/tune` sessions, or §6.6's figures when there is no history (D-221). It runs only after an explicit yes, and stops at `tune.max_usd` (§8).
-- **Output.** A user profile `<home>/profiles/tuned-<YYYYMMDD-HHMM>/` plus library entries. `/tune` then offers to set `profile` to it.
-- **Runs.** Every `/tune` run and session is a normal run with `conversation: false` and a `tag` of `tune:<id>:t<i>-<stage>`, logged under `<home>/runs/tune-<id>/`, so `/runs` shows them.
+  That is at most three runs and four sessions (three with the library off). A stage whose profile equals its base isn't run (D-216).
+- **Models.** The sessions run on `tune.model`, the root model when it is empty. The probes and the composed run use the user's root and sub models, because the harness is fitted to that executor (D-232).
+- **Snapshot.** With tuning on, each repo task's starting state is recorded before its run begins (a task is defined above). In git, it is a commit of the working tree, untracked files included and ignored ones not, built through a temporary index (`GIT_INDEX_FILE`) with `add -A`, `write-tree` and `commit-tree`, with hooks and filters off as D-219 has them. No ref is made, and the user's index, branch and files are untouched. Outside git, it is a copy under D-219's limits in `<home>/tune/snapshots/`. A folder over the limits isn't tuned, with a note. The probes and the composed run start from the snapshot, in a throwaway `git worktree add --detach` at that commit, or in a copy of the copy. Read tasks re-read the same input paths, and a missing one skips the task.
+- **No approval prompts.** Background runs are non-interactive, so anything that would ask is denied, as in every non-interactive run (D-15). Otherwise they use the user's next-run permission mode. This replaces D-217.
+- **Order.** One tune runs at a time. A task that finishes while one runs waits; at most one waits, and a later one is skipped with a note. A waiting task whose run used a profile that is no longer active is skipped. Quitting cancels the tune in flight and drops the waiting task.
+- **Delivery.** At k = 1 the composed harness is delivered as the paper does, except that it is dropped when its run had an infra error or delivered nothing, or when `tune.test` is set, the reference's test exits 0 and the composed run's doesn't (D-218, D-231). The reference's test runs in a throwaway worktree (or copy) of the snapshot with the run's recorded `diff` applied (`git apply`); if the diff doesn't apply, the test rule is skipped and `tune.json` says so. Test output never reaches the evidence.
+- **Becoming active.** A kept harness is written as `<home>/profiles/tuned-<YYYYMMDD-HHMM>/` (`-2`, `-3` and so on when the name is taken), with a line in `<home>/tune/tuned.jsonl`, and becomes the active profile: at once when no conversation is open, otherwise when the open one ends, so tuning never closes a conversation under the user (D-178). If the user switched profiles in the meantime, the switch is dropped, and the profile is still in `/tuned`. The next task's base is the profile its own run used, so the harness each task delivers is the next one's base (D-215).
+- **Cost first.** `/tune on` shows the estimate per task, for read and for repo: up to 3 runs at the median cost of the user's last 20 runs in that mode with the root model, plus 4 sessions (3 with the library off) at the median cost of earlier `/tune` sessions on `tune.model`, each falling back to §6.6's figures (D-221, D-231, D-232). The screen says that the runs, on the root model, are most of the cost. It turns on only after an explicit yes.
+- **The cap.** `tune.max_usd` counts every `/tune` run and session since `/tune on`; the user's own runs don't count. `<home>/tune/online.json` holds `on_since`, and the spend is summed from the `tune-*` run logs since then, so it survives a restart. When the cap trips, the tune in flight is cancelled, `tune.enabled` turns itself off, and the transcript says so. While tuning is on, the status line shows `tune on` and the spend against the cap.
+- **Runs.** Every `/tune` run and session is a normal run with `conversation: false`, `interactive: false` and a `tag` of `tune:<id>:<stage>`, logged under `<home>/runs/tune-<id>/`, so `/runs` shows them. `<id>` is `t_<YYYYMMDD-HHMMSS>`, one per tuned task.
 
 ### 7.7 The experience library
 
@@ -520,8 +572,11 @@ Added to `SCHEMA` in `settings.ts`, in this order after v0's keys. `rlmh config 
 | Key | Type | Default | Step | Meaning |
 |---|---|---|---|---|
 | `conversation.follow_ups` | bool | `true` | 4 | a question in the interactive app continues the open conversation (§5); `false` gives v0's fresh run every time |
-| `tune.max_usd` | number | `1.00` | 9 | `/tune`'s hard stop, in USD |
+| `tune.enabled` | bool | `false` | 9 | Harness² runs in the background after each task (§7.6); set to `true` only through `/tune on`, after its estimate (D-231) |
+| `tune.model` | string | empty | 9 | the model for `/tune`'s editor, composer and reflector sessions, picked in `/model`; empty means the root model (D-232) |
+| `tune.max_usd` | number | `1.00` | 9 | `/tune`'s hard stop, in USD, counting every `/tune` run and session since `/tune on`; when it trips, tuning turns off |
 | `tune.library` | bool | `true` | 9 | write and read the experience library during `/tune` |
+| `tune.test` | string | empty | 9 | a test command run in the reference's and the composed run's work copies; when set, a composed harness whose test fails where the reference's passed is dropped (D-218, D-231) |
 
 ## 9. Folders at run time added
 
@@ -532,7 +587,11 @@ Added to `SCHEMA` in `settings.ts`, in this order after v0's keys. `rlmh config 
   eval/work/<eval id>/<task id>/    throwaway work copies, removed after grading unless --keep
   eval/venvs/<key>/                 per-repo test venvs (§6.4)
   profiles/<name>/                  candidates from rlmh tune; tuned-* profiles from /tune (loaded since v0, D-144)
-  tune/<tune id>/                   rlmh tune's default output (step 6); /tune's stages and evidence (step 9)
+  tune/<tune id>/                   rlmh tune's default output (step 6); one tuned task's stages, evidence and tune.json (step 9)
+  tune/online.json                  /tune's on_since, the start of what tune.max_usd counts (step 9)
+  tune/tuned.jsonl                  one line per tuned-* profile: name, base, task run id, changed (step 9)
+  tune/snapshots/<id>/              copies of folders outside git, while their task waits or is tuned (step 9)
+  tune/work/<id>/                   throwaway worktrees and copies for /tune's runs; leftovers are removed at start-up (step 9)
   library/<domain>/                 /tune's experience library (§7.7)
 ```
 
@@ -544,7 +603,8 @@ Added to `SCHEMA` in `settings.ts`, in this order after v0's keys. `rlmh config 
 |---|---|
 | `rlmh eval SET …`, `rlmh eval report OUT`, `rlmh eval compare A B`, `rlmh eval ledger` | 2 |
 | `rlmh tune SET …` | 6 |
-| `/tune` in the interactive app, a tenth slash command. Step 9 raises `App.tsx`'s `MENU_MAX` from 9 to 10 | 9 |
+| `rlmh tune SET … --gated` (D-234) | 6 |
+| `/tune` and `/tuned` in the interactive app, the tenth and eleventh slash commands. Step 9 raises `App.tsx`'s `MENU_MAX` from 9 to 11 | 9 |
 
 ## 11. Spending (S-44)
 
@@ -559,7 +619,7 @@ Steps that come in under budget leave the rest for later rows.
 | Step | What | Ceiling |
 |---|---|---|
 | 5 | Baseline: `v1-baseline` (v0.2.0's `default` plus step 3's `[compaction]`) on all 48 tasks, `training-v4` on the 24 held-out tasks, DeepSeek | $9 |
-| 7 | Tuning on the tune split, DeepSeek: round 1, then round 2 if its estimate fits | $9 |
+| 7 | Tuning on the tune split, DeepSeek: round 1 with and without D-234's gate, then round 2 on the kept arm if its estimate fits | $9 |
 | 8 | The tuned profile on the held-out split, DeepSeek | $3 |
 | 10 | `v1-baseline` and the tuned `default` on the held-out split, Haiku 5.5 | $6 |
 | any | Reruns of infra errors, and the step 9 live check | $3 |

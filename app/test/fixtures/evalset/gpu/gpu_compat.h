@@ -14,8 +14,12 @@
 #define GPU_KERNEL extern "C" __global__
 #define LAUNCH_BOUNDS(n) __launch_bounds__(n)
 
-// A warp is not always 32 threads: AMD's wavefront is 64 on most GPUs.
-#if defined(GPU_BACKEND_HIP)
+// A warp is not always 32 threads: AMD's wavefront is 64 on CDNA and 32 or 64 on RDNA. On HIP, gpu.py reads
+// the device's warp size and passes it as GPU_WARP_SIZE, because ROCm 7's clang deprecates
+// __AMDGCN_WAVEFRONT_SIZE (D-237); that macro is only the fallback for a compile without gpu.py.
+#if defined(GPU_BACKEND_HIP) && defined(GPU_WARP_SIZE)
+#define WARP_SIZE GPU_WARP_SIZE
+#elif defined(GPU_BACKEND_HIP)
 #define WARP_SIZE __AMDGCN_WAVEFRONT_SIZE
 #else
 #define WARP_SIZE 32

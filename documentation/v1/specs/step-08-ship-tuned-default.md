@@ -7,7 +7,7 @@
 | **Depends on** | 7 (and through it 5) |
 | **Unblocks** | 10 |
 | **Parallel with** | 9 |
-| **Decisions it uses** | S-14 (prompt v4 frozen), S-43 (DeepSeek tunes, Haiku checks), S-44 ($30 cap), S-19 (data stays out of this repo); D-144 (user profiles), D-150 (parity verdict), D-152 (`default`'s limits), D-162 (guidance text test), D-170 (one replicate), D-172 (`bypass` in eval), D-173 (acceptance), D-179 (spend split). New here: D-214 |
+| **Decisions it uses** | S-14 (prompt v4 frozen), S-43 (DeepSeek tunes, Haiku checks), S-44 ($30 cap), S-19 (data stays out of this repo); D-144 (user profiles), D-150 (parity verdict), D-152 (`default`'s limits), D-162 (guidance text test), D-170 (one replicate), D-172 (`bypass` in eval), D-173 (acceptance), D-179 (spend split), D-233 and D-234 (skills, scripts, and step 7's result on subagents and nudges). New here: D-214 |
 
 ## Goal
 
@@ -15,7 +15,7 @@ Step 7 produced a tuned profile from the tune split. This step checks it on the 
 - it passes strictly more held-out tasks than the baseline;
 - its mean cost per task is at most 1.5 times the baseline's.
 
-Shipping means the built-in `default` takes the tuned `guidance.md` and the tuned TUNABLE values, and every frozen key stays byte for byte. When the rule fails, nothing ships. Rishi gets the numbers and two options, and the step waits for him. Nothing ships silently in either direction.
+Shipping means the built-in `default` takes the tuned `guidance.md`, the tuned TUNABLE values and the tuned skills and scripts (D-233), and every frozen key stays byte for byte. The held-out check covers everything `changed` lists, skills and scripts included, and `agents/` and `nudges.toml` if step 7 kept them (D-234). When the rule fails, nothing ships. Rishi gets the numbers and two options, and the step waits for him. Nothing ships silently in either direction.
 
 ## Read first
 
@@ -38,6 +38,7 @@ Shipping means the built-in `default` takes the tuned `guidance.md` and the tune
 ## Starting state
 
 - Rows 5 and 7 of progress.md's v1 table are `done`. `<baseline out>` below means step 5's held-out output for `v1-baseline`, `F:\Personal\RLM\RLM\results\harness-eval\<date>-baseline-default\heldout\`, as step 5's log line names it (step 5 writes the tune and held-out halves as two folders). Step 7's output is `…\results\harness-eval\<date>-tune\`, with `tune.json` and `final/`.
+- **Which tuned profile.** If step 7 kept C5 and C8 (its D-234 D-number), the tuned profile is `v1-tuned-gated` and step 7's output is `…\<date>-tune-gated\`; read every `v1-tuned` and `<date>-tune` below as those. Step 7 then also turned the gate on in the code, so `rlmh eval` loads its `agents/` and `nudges.toml`.
 - `<home>\profiles\v1-baseline\` exists (step 5). Its `profile_hash` is the one in `<baseline out>\eval.json`, and the built-in `default` still has the same bytes.
 - `rlmh eval`, `eval compare`, `eval ledger` and `profile.check` work as steps 2 and 6 built them. Step 5 reran its infra errors once into `<out>\rerun\`, and `report` and `compare` prefer the rerun's grade by id.
 - `rlmh eval ledger` shows what v1 has spent. Money that rows 5 and 7 didn't spend carries over (D-179). This step still takes $3 unless Rishi says otherwise.
@@ -52,6 +53,7 @@ Shipping means the built-in `default` takes the tuned `guidance.md` and the tune
 **In this repo, only when the rule holds:**
 - `engine/rlm_engine/profiles/default/guidance.md`: step 7's tuned text, byte for byte.
 - `engine/rlm_engine/profiles/default/profile.toml`: the TUNABLE values that differ, edited in place. Comments and every frozen key stay byte for byte.
+- `engine/rlm_engine/profiles/default/skills/` and `scripts/` (and `agents/` and `nudges.toml`, if step 7 kept them): `v1-tuned`'s files, byte for byte, when `changed` lists any.
 - `engine/tests/test_profiles.py`: the assertions that pin `default`'s values, plus a new frozen-keys test (see Tests).
 - Any other test that pins a value the tuned profile changed. Only the expected value changes, never what the test checks.
 - `CLAUDE.md` line 53, if a number it states changed.
@@ -74,6 +76,7 @@ Shipping means the built-in `default` takes the tuned `guidance.md` and the tune
    - Call `profile.check {path: "<home>/profiles/v1-tuned", base: "v1-baseline"}` by hand (CLAUDE.md, "Engine by hand", with the same `RLMH_HOME`). It must return `ok: true`, and `changed` must lie within `TUNABLE` plus `"guidance"`. Keep its `changed` list, because the summary and the D-line name it.
 3. [ ] **The guidance still names the tools.**
    - The tuned `guidance.md` must still contain `{shell}`, `fetch(url) -> str`, `200,000` and the eight helper names that `test_default_guidance_text` checks.
+   - Every skill the tuned profile holds is named in its guidance, and `profile.check` (task 2) already proves the script rules; skills and scripts get the same task-specific-text check step 7 gave the guidance.
    - If one is missing, the tuned default would hide a tool from the model. Report which names are missing, and ask Rishi before going on.
 4. [ ] **The estimate ($0).** Use the same models, call format and `--jobs` as step 5's `eval.json`:
 
@@ -105,6 +108,7 @@ Shipping means the built-in `default` takes the tuned `guidance.md` and the tune
    - Change nothing in this repo.
 9. [ ] **If it ships**, in this repo (D-214):
    - Copy the bytes of `v1-tuned\guidance.md` over `profiles\default\guidance.md`.
+   - If `changed` lists skill, script or gated files, make `profiles\default\skills\` and `scripts\` (and `agents\` and `nudges.toml`) equal `v1-tuned`'s, byte for byte, removing what `v1-tuned` doesn't have. `app/scripts/embed-engine.ts` walks the whole package, so a compiled binary carries them; check that a compiled build's `rlmh info` shows the same `default` hash as the source.
    - In `profiles\default\profile.toml`, change only the values that `changed` lists, on their own lines, keeping the comments.
    - Check the result with two `profile.check` calls on the built-in folder:
      - `{base: "v1-tuned"}` gives `ok: true` and `changed: []`, and the same `prompt_hash` as `v1-tuned`;
@@ -184,4 +188,4 @@ Engine tests only change when the profile ships. All are offline.
 - **D-173 counts a tie as a win** (P_t ≥ P_b with a higher mean `f2p_share`): task 7's rule changes to match. This spec changes nothing else. With 24 tasks, a tie says nothing about which profile is better, so this is not recommended.
 - **Rishi ships a tuned default that didn't beat the baseline:** run task 9 as written, and say it plainly in the D-line, the summary and step 10's write-up.
 - **Two replicates (D-170):** run task 5 twice into `-r1` and `-r2`, and compare per-task majorities, as step 2's repeat option describes. That costs about another $3, and it must come from the reserve row.
-- **Ship only the guidance, not the TOML values:** task 9 skips the TOML edit, and `profile.check {base: "v1-tuned"}` is expected to list the TUNABLE keys. The held-out result then no longer describes what shipped, so the profile would need a new held-out run.
+- **Ship only the guidance, not the TOML values or the skills and scripts:** task 9 skips those edits, and `profile.check {base: "v1-tuned"}` is expected to list the TUNABLE keys. The held-out result then no longer describes what shipped, so the profile would need a new held-out run.

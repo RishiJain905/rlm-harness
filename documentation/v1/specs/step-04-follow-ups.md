@@ -228,7 +228,7 @@ WHERE = {"read": ", and `context` is unchanged", "repo": ", and the repository k
 
 ## Hand-off
 
-- **Step 9 relies on:** `run.say` and `run.closed`, and `continues()`, so `/tune` can close an open conversation before it runs, and its own runs never use one (`conversation: false`).
+- **Step 9 relies on:** `run.say` and `run.closed`, and `continues()`, so a tuned profile `/tune` keeps waits until no conversation is open before it becomes active (D-231), and `/tune`'s own runs never use one (`conversation: false`).
 - **Step 10's release notes** describe follow-ups and the `conversation.follow_ups` setting.
 - **progress.md:** set row 4 to `review`, with the date, the Windows Terminal check's result (or "not yet run on the PC"), and the parity verdict.
 

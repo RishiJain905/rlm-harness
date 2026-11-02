@@ -24,7 +24,7 @@ When a spec is silent, follow [architecture.md](architecture.md). When that is s
 | 6 | [Harness² tuner, developer side](specs/step-06-tuner.md) | PC | $0 |
 | 7 | [Tuning round](specs/step-07-tuning-round.md) | Spend | ≤ $9 |
 | 8 | [Ship the tuned default](specs/step-08-ship-tuned-default.md) | Spend | ≤ $3 |
-| 9 | [Harness² for users: `/tune` and the experience library](specs/step-09-user-tune.md) | PC | $0 |
+| 9 | [Harness² for users: `/tune`, `/tuned` and the experience library](specs/step-09-user-tune.md) | PC | $0 |
 | 10 | [Experiment write-up and the 1.0.0 release](specs/step-10-results-release.md) | Spend | ≤ $6 |
 
 ```mermaid

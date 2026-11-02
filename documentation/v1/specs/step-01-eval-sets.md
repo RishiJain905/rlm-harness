@@ -143,7 +143,8 @@ Every cell is split × track × size, and each split gets half: per split, `pyth
   - **Resolve.** With uv's `--exclude-newer` set to the commit's date (from `edit/repos.json`, or the SWE-smith row; when neither holds it, the newest mtime in the snapshot, logged as approximate), install into a build venv, in order:
     - the snapshot's test dependencies: the extras named `test`, `tests`, `testing` or `dev` in `pyproject.toml`/`setup.cfg`/`setup.py`, then `requirements*test*.txt`, `requirements-dev.txt` and `tox.ini`'s `[testenv] deps`;
     - pytest, if it isn't there yet;
-    - the snapshot's own runtime dependencies, never the package itself.
+    - the snapshot's own runtime dependencies (including a plain `requirements.txt`), never the package itself;
+    - every other extra the package declares, dropped again if they don't resolve at the commit's date, and `tzdata` for `zoneinfo` on Windows (D-230).
   - **Freeze.** Freeze the result with `uv pip freeze --python <venv>`, dropping the package's own line.
   - **Python version.** Try Python `3.12`, then `3.11`, then `3.10`, and keep the first under which every task of that repository that is drawn passes its gold check.
   - **Fallback.** If resolution fails and Docker answers, freeze the image instead: `docker run --rm <entry tag> python -m pip freeze`. Log which way each key went.
@@ -193,7 +194,7 @@ Ten GPU kernel tasks, written for this set in task 9 and kept in the build cache
 If an op can't get a test suite that passes the mutant rule below, swap in one of the same split's spares (tune: `gelu_tanh`, `int4_pack`; heldout: `layernorm`, `transpose_tiled`), and log it.
 
 **The shared files.** Step 2 owns them, at `app/test/fixtures/evalset/gpu/` in rlm-harness, where CI tests their no-GPU path. This step copies them into `kernels/_shared/`, then byte for byte into every task's base. What they do:
-- **`gpu_compat.h`**, the prelude the loader puts in front of every kernel file, so no include path is needed. It defines `GPU_BACKEND_CUDA` or `GPU_BACKEND_HIP`; `WARP_SIZE` (32 on CUDA, `__AMDGCN_WAVEFRONT_SIZE` on HIP); `shfl_down`, `shfl_xor` and `warp_ballot` wrappers (D-226: CUDA already declares a legacy `ballot`) (`__shfl_down_sync(0xffffffff, …)` on CUDA, `__shfl_down(…)` on HIP); `LAUNCH_BOUNDS(n)`; and `h2f`/`f2h`, so fp16 values travel as raw 16-bit storage and no vendor fp16 header is needed. Kernels are declared `extern "C" __global__`, so both compilers keep their names.
+- **`gpu_compat.h`**, the prelude the loader puts in front of every kernel file, so no include path is needed. It defines `GPU_BACKEND_CUDA` or `GPU_BACKEND_HIP`; `WARP_SIZE` (32 on CUDA; on HIP `GPU_WARP_SIZE`, the device's warp size, which `gpu.py` reads and passes to hiprtc, D-237); `shfl_down`, `shfl_xor` and `warp_ballot` wrappers (D-226: CUDA already declares a legacy `ballot`) (`__shfl_down_sync(0xffffffff, …)` on CUDA, `__shfl_down(…)` on HIP); `LAUNCH_BOUNDS(n)`; and `h2f`/`f2h`, so fp16 values travel as raw 16-bit storage and no vendor fp16 header is needed. Kernels are declared `extern "C" __global__`, so both compilers keep their names.
 - **`gpu.py`**, pure ctypes and numpy, no CuPy:
   - `backend() -> "cuda" | "hip"`, `load(paths) -> Module`, `Module.launch(name, grid, block, args, shared=0)`, `to_device(ndarray) -> DeviceArray` and `DeviceArray.to_host()`.
   - **`cuda`:** NVRTC from the `nvidia-cuda-nvrtc-cu12` wheel in the venv, compiling for the device's own `sm_XX`, and the driver API from `nvcuda.dll` or `libcuda.so.1`.
@@ -259,8 +260,8 @@ All bytes, LF, never through text mode:
 
 For each candidate, on the PC, in its own temp folder under the build cache. The runs are exactly step 2's grading commands (architecture §6.4).
 
-- **pytest** (`python`, `kernel`): `<python> -c <grader.PYTEST_BOOT_TEMPLATE filled for the work folder> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<tmp>/junit.xml --tb=short -q <scope files>`, with the build venv. Test ids are `grader.pytest_key(file, classname, name)` from the JUnit report. Kernel runs go one at a time, on the GPU, with the backend `gpu.backend()` picks.
-- **playwright** (`web`): `pnpm install --offline --frozen-lockfile --store-dir <cache>\pnpm-store`, then `pnpm exec playwright test --reporter=junit --retries=0 <spec files>` with `PLAYWRIGHT_JUNIT_OUTPUT_NAME=<tmp>\junit.xml`, `IS_EVAL_PRODUCTION=1`, `PLAYWRIGHT_BROWSERS_PATH=<cache>\ms-playwright`, a free `EVAL_PROJECT_PORT` per job, and `CI` unset. Test ids follow D-184 exactly as step 2's `playwrightKey` builds them: the testcase's `classname` (the spec file relative to `testDir`, with `\` turned into `/`), `::`, then its `name`.
+- **pytest** (`python`, `kernel`): `<python> -c <grader.PYTEST_BOOT_TEMPLATE filled for the work folder> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<tmp>/junit.xml --tb=short -q <scope files>`, with the build venv and `PYTHONUTF8=1` (D-230). Test ids are `grader.pytest_key(file, classname, name)` from the JUnit report. Kernel runs go one at a time, on the GPU, with the backend `gpu.backend()` picks.
+- **playwright** (`web`): `pnpm install --offline --frozen-lockfile --store-dir <web cache>\pnpm-store` (the web cache is `--web-cache`'s folder, else the build cache; D-235), then `pnpm exec playwright test --reporter=junit --retries=0 <spec files>` with `PLAYWRIGHT_JUNIT_OUTPUT_NAME=<tmp>\junit.xml`, `IS_EVAL_PRODUCTION=1`, `PLAYWRIGHT_BROWSERS_PATH=<web cache>\ms-playwright`, a free `EVAL_PROJECT_PORT` per job, and `CI` unset. Test ids follow D-184 exactly as step 2's `playwrightKey` builds them: the testcase's `classname` (the spec file relative to `testDir`, with `\` turned into `/`), `::`, then its `name`.
 
 The steps:
 1. **Base:** extract the base and restore the hidden files. Every f2p test must fail or be missing. A test that passes is p2p if it also passes on gold, and is dropped if not.
@@ -273,7 +274,7 @@ The steps:
 5. **kernel only, the mutant rule:** for each of the four mutants, run the hidden suite once. At least 3 of the 4 must fail at least one f2p test. If not, the tests are too weak: strengthen them and validate again. The gold also compiles with no warnings on the validating backend.
 6. **Leaks:**
    - python and kernel: `editdata.leaks(task_text, gold_patch, f2p + p2p)` must be empty, and for kernel the same holds for `REQUIREMENTS.md` and the stubs' doc comments;
-   - web: no spec title or spec file name appears in the task text or `FEATURES.md` (Web-Bench's requests name class names and texts on purpose, so gold-line overlap is allowed);
+   - web: no spec title of three or more words (D-236; file-path titles excepted, D-229) or spec file name appears in the task text or `FEATURES.md` (Web-Bench's requests name class names and texts on purpose, so gold-line overlap is allowed);
    - read: a question must not contain its gold, or any gold list item, as a string of 4 or more characters.
 
 The results go to the build cache, one line per candidate: `{id, track, source, kept, why, f2p, p2p, dropped_p2p, gold_seconds, env, mutants_caught}`.
@@ -358,7 +359,7 @@ The results go to the build cache, one line per candidate: `{id, track, source, 
   - the set folder at `D:\RLM-data\harness-eval\harness-eval-v1\` with `check` passing;
   - the manifest hashes;
   - `permission_mode: "bypass"`;
-  - the build cache's `pnpm-store\` and `ms-playwright\`, which step 2's environment setup can copy instead of downloading again;
+  - the web cache's `pnpm-store\` and `ms-playwright\` (`F:\RLM-cache\harness-eval\build\harness-eval-v1\` on Rishi's PC, D-235), which step 2's environment setup can copy instead of downloading again;
   - the PC's GPU and HIP SDK, which the kernel tasks need while step 5 runs.
 - Step 2's tests can rely on the exact §6 layout: `track` on every task line, `"grader": "answer"` and `pass_score` on read grade lines, `runner` on repo grade lines, `requires: ["gpu"]` on kernel task lines (run one at a time), `kernel_validated_on` in the manifest, the `gpu.py` API, `import_root` in the venv JSON, `nodeenvs/`, pytest node ids from JUnit xunit1, and Playwright ids as `<spec file relative to testDir>::<title>`, e.g. `task-1.spec.js::<title>` (D-227).
 - progress.md v1 row 1: set `review`, with the date, the counts per cell, the drops by reason, environments by kind and method, and the manifest's two hashes. Add a log line. Note anything later steps should know: a repository whose tests need longer than 300-second cells (the default profile's `cell_timeout_s`), a web project whose specs run long, or a kernel op that was swapped for a spare.

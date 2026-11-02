@@ -35,7 +35,7 @@ Read these whole, before doing anything:
 
 ## Starting state
 
-- Rows 1 to 9 of the v1 table are `done`. Step 5 made the user profile `<home>/profiles/v1-baseline/` and wrote its outputs to `<date>-baseline-default\{tune,heldout}\` and `<date>-baseline-training-v4\heldout\`. Step 8 shipped the tuned values in `engine/rlm_engine/profiles/default/`, kept `v1-tuned`, and wrote `<date>-heldout-tuned\`. Step 9 shipped `/tune` and the library.
+- Rows 1 to 9 of the v1 table are `done`. Step 5 made the user profile `<home>/profiles/v1-baseline/` and wrote its outputs to `<date>-baseline-default\{tune,heldout}\` and `<date>-baseline-training-v4\heldout\`. Step 8 shipped the tuned values in `engine/rlm_engine/profiles/default/`, kept `v1-tuned` (or `v1-tuned-gated`, when step 7 kept the gated arm, D-234), and wrote `<date>-heldout-tuned\`. Step 9 shipped `/tune` (on/off), `/tuned`, `tune.model` and the library.
 - `<home>/eval/ledger.jsonl` (the home steps 5 to 8 used, where the OpenRouter key is saved) holds every v1 spend so far, and the progress.md spend line agrees with it.
 - The version is still `0.2.0`. v0.2.0 is the latest release on GitHub.
 - The eval set is `D:\RLM-data\harness-eval\harness-eval-v1\`. Eval outputs go to `F:\Personal\RLM\RLM\results\harness-eval\` (git-ignored, D-46).
@@ -93,7 +93,7 @@ Read these whole, before doing anything:
    These stay: `npm/*/package.json` (`0.0.0`; `npm-pack.sh` stamps the version), the example `"version": "0.1.0"` in `protocol/examples.json`, and the `0.2.0` test inputs in `app/test/update.test.ts` and `app/test/setup.test.ts`. Afterwards `git grep -n "0\.2\.0" -- . ':!documentation'` shows only those test lines.
 10. [ ] **Docs.**
     - **`results.md`**, as listed above. Its tables come from `report.json` and the compare files through a scratch script outside both repos, never typed, and are read against `report.md` afterwards.
-    - **`documentation/releases/v1.0.0.md`**: the tuned `default` (one line of headline numbers and a link to `results.md`), `rlmh eval`, `rlmh tune`, `/tune` and the library, follow-ups and the `conversation.follow_ups` setting, compaction, and protocol 2 (an installed 0.x engine is not reused; `rlmh update` sets up the new one).
+    - **`documentation/releases/v1.0.0.md`**: the tuned `default` (one line of headline numbers and a link to `results.md`), `rlmh eval`, `rlmh tune`, `/tune` (an on/off switch, off by default), `/tuned`, the `tune.model` setting, skills and scripts in profiles (D-233), and the library, follow-ups and the `conversation.follow_ups` setting, compaction, and protocol 2 (an installed 0.x engine is not reused; `rlmh update` sets up the new one).
     - **`release.yml`**: in the Release step, write `documentation/releases/$GITHUB_REF_NAME.md` and a blank line into `notes.md` when that file exists, then append the fixed text (`cat >>`).
     - **`README.md`**: the status paragraph says 1.0.0, what v1 added, and links `results.md` and `documentation/v1/README.md`.
     - **`CLAUDE.md`**: `**Status: v1 built.**`, with one sentence per v1 step and its date, as v0's status has.

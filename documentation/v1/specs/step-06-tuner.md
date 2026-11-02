@@ -7,7 +7,7 @@
 | **Depends on** | 2 |
 | **Unblocks** | 7, and with 4, step 9 |
 | **Parallel with** | 3, 4, 5 |
-| **Decisions it uses** | S-09, S-14, S-43, S-44, S-47; D-34, D-121, D-144, D-170, D-173, D-174, D-175, D-179; step 2's D-192 and D-193. New here: D-204 to D-212 |
+| **Decisions it uses** | S-09, S-14, S-43, S-44, S-47; D-15, D-34, D-121, D-144, D-157, D-160, D-170, D-173, D-174, D-175, D-179; step 2's D-192 and D-193; D-233 (skills and scripts) and D-234 (subagents and nudges behind a gate). New here: D-204 to D-212 |
 
 ## Goal
 
@@ -16,6 +16,8 @@
 - each candidate is probed on a fixed subset of the tune tasks;
 - a composer merges what the trajectories support;
 - a reflector writes at most one lesson to an experience library.
+
+What an editor may change is `guidance.md`, the tunable TOML keys, and, on `default`-based profiles, skills and scripts (D-233): `skills/<name>/SKILL.md`, which the model reads on demand with the REPL helper `skill(name)`, and `scripts/<name>.py`, standard-library helpers it imports in the REPL. This step builds both in the engine and the worker, under `agent_api` only, so `training-v4` and parity are unaffected. It also builds named subagents and declarative nudges (C5, C8) behind a gate that is off by default, with `rlmh tune --gated` to turn it on for one tune; step 7 decides whether they stay (D-234).
 
 Unlike the paper's online loop, a composed profile becomes the incumbent only when it passes D-173's labelled check on the whole tune split, as the paper's Meta-Harness baseline accepts only above a margin (Appendix C). Every session is an `rlmh` read run on the tuning model over an evidence folder that never holds a grade (D-174). The command prints a priced estimate of every stage and spends only with `--go`. Round 1 always runs, and each later round runs only if its fresh estimate fits under what is left of `--max-usd`, which covers the whole tune. Step 7 runs it for real.
 
@@ -29,7 +31,8 @@ Read these whole, before writing code:
   - §2.3, harnessing-level recursion, which is the library;
   - §4, Figure 8, the executor model as its own editor;
   - Appendix C, the Meta-Harness baseline: offline search, acceptance margin, lessons file;
-  - Appendices D.2 and H, the cost accounting and the prompts.
+  - Appendices D.2 and H, the cost accounting and the prompts;
+  - Appendix E.1 and E.2, the component ablation and the edit counts behind D-233, and Figure 19, the richest harness, with subagents and nudges (D-234).
 - **The code.** [google-research/harness2](https://github.com/google-research/harness2) at `6868817518876de8fd170c6a8354daca273b6191`, Apache-2.0. Clone it with `git clone --depth 1` outside both repos and read these files whole:
   - `harness2/core/prompts.py`:
     - `_tidy` L33, `ANSWER_FREE` L38, `EVIDENCE_BOUNDARY` L56, `_SURFACE_OPENCODE` L95
@@ -40,18 +43,19 @@ Read these whole, before writing code:
   - `harness2/core/library.py`: `Library.add` L106, `rebuild_index` L154.
   - `harness2/core/selection.py`: `reflect_adoption` L402, `_distil` L454.
   - `harness2/core/ledger.py`: `expected_rollouts` L26, `expected_sessions` L31, `Ledger` L50.
-  - `harness2/core/tree.py`: `validate` L336, `diff_summary` L393.
+  - `harness2/core/tree.py`: `validate` L336 (the skill and script rules D-233 adapts), `diff_summary` L393.
   - `harness2/core/schedule.py`: `stream_order` L130.
   - `scripts/split_tasks.py`: L29 to L50, the seeded shuffle within each stratum.
-- [../architecture.md](../architecture.md): §1, §2, §3.1, §6.4 to §6.6, §7 (all of it), §9, §11, §12.
+- [../architecture.md](../architecture.md): §1, §2, §3.1, §6.4 to §6.6, §7 (all of it; §7.2 pins the skill, script and gated surfaces), §9, §11, §12.
 - [../../v0/architecture.md](../../v0/architecture.md): §7.5 (the fake provider), §7.8 (`Session` and the run-log record), §9.
-- [../../v0/decisions.md](../../v0/decisions.md): S-09, S-14, S-43, S-44, S-47, D-34, D-121, D-144, D-170, D-173 to D-175, D-179.
+- [../../v0/decisions.md](../../v0/decisions.md): S-09, S-14, S-43, S-44, S-47, D-15, D-34, D-121, D-144, D-157 to D-165, D-170, D-173 to D-175, D-179, D-233, D-234.
 - [step-02-rlmh-eval.md](step-02-rlmh-eval.md): Deliverables, task 6 (`runEval`) and Hand-off.
 - This repo, whole files:
   - `engine/rlm_engine/profiles.py`, `profiles/default/profile.toml` and `profiles/default/guidance.md`;
   - `engine/rlm_engine/service.py` and `link.py` (`RpcError`);
   - `engine/rlm_engine/contract.py` (`valid_answer`, `SUBMIT_MAX_BYTES`) and `worker/worker.py` (`normalize_answer` L242, `submit` L255);
-  - `engine/rlm_engine/runlog.py` (`RECORD_KEYS`), `bridge.py` (`SubcallRecord`) and `loop.py` (the turn entry);
+  - `engine/rlm_engine/runlog.py` (`RECORD_KEYS`), `bridge.py` (`SubcallRecord`) and `loop.py` (the turn entry, and where `pace_nudge` is appended);
+  - `engine/rlm_engine/child.py` (`init_extra`), `worker/agentapi.py`, `worker/codeapi.py`, `worker/hooks.py` and `worker/manager.py`: where `agent_api`'s helpers enter the worker, and the audit hooks scripts run under;
   - `engine/tests/fakeapp.py` and `protocol/examples.json`;
   - `app/src/session.ts`, `protocol.ts`, `main.ts`, `paths.ts`, `cli/run.ts`, `cli/batch.ts` and `gateway/fake.ts`;
   - step 2's `app/src/eval/{runner,set,estimate,report,ledger}.ts`, `app/test/eval/fixture.ts`, `app/test/cli/eval.test.ts` and `app/test/cli/helpers.ts`.
@@ -60,7 +64,7 @@ Read these whole, before writing code:
 
 - **Step 2 is `done`.** `runEval`, `loadSet`, `selectTasks`, `estimate`, `buildReport`, `CostCap`, `appendLedger` and `buildFixtureSet` exist, and `rlmh eval` runs the fixture set on `fake/scripted`.
 - **Step 3 may not be done yet.** If it isn't, `Profile` has no `compaction`. The two `compaction.*` rows of `TUNABLE` exist anyway, and `effective()` reads them with `getattr(profile, "compaction", None)`. Their bounds test is skipped until step 3 lands, with the reason `step 3`, and the log says so. Step 7 needs step 3 (through step 5), so the gap closes before any spend.
-- **What doesn't exist yet:** `app/src/tune/`, `cli/tune.ts` and `profile.check`.
+- **What doesn't exist yet:** `app/src/tune/`, `cli/tune.ts` and `profile.check`. No profile holds `skills/`, `scripts/`, `agents/` or `nudges.toml`, and `skill()` and `agent=` don't exist.
 
 ## Deliverables
 
@@ -68,8 +72,11 @@ Every module opens with its cache note (`KV cache: none` for all of them).
 
 | Path | What it holds |
 |---|---|
-| `engine/rlm_engine/profiles.py` + | `TUNABLE` (architecture §7.2's table; the only copy in code), `FROZEN`, `effective(profile) -> dict[str, object]` (every dotted key, defaults filled), `check_tunable(base, candidate) -> list[str]` |
-| `engine/rlm_engine/service.py` + | the `profile.check` method; each profile in `contract_info` gains `path`, next to step 2's `agent_api` and `limits` (D-208) |
+| `engine/rlm_engine/profiles.py` + | `TUNABLE` (architecture §7.2's table; the only copy in code), `TUNABLE_GATED`, `FROZEN`, `GATED = False`, `effective(profile) -> dict[str, object]` (every dotted key, defaults filled), `check_tunable(base, candidate, gated=False) -> list[str]`; `Profile.skills`, `.scripts` and, under the gate, `.agents` and `.nudges`; the file hash rule of §7.2 |
+| `engine/rlm_engine/service.py` + | the `profile.check` method (with `gated`); each profile in `contract_info` gains `path`, next to step 2's `agent_api` and `limits` (D-208) |
+| `engine/rlm_engine/loop.py`, `child.py` + | the run's copy of `scripts/` in its scratch folder; `skills` and the scripts path in the worker's init under `agent_api`, for the run and each child; the nudge rules (gated) |
+| `engine/rlm_engine/bridge.py` + | `agent=` on `llm` and `rlm` requests (gated) |
+| `engine/rlm_engine/worker/worker.py`, `worker/agentapi.py` + | the scripts path on `sys.path`; `skill(name)`; `agent=` (gated). Standard library only, never `rlm_engine` |
 | `protocol/examples.json` + | a `profile.check` request and result, and `path` on `engine.info`'s profiles |
 | `app/src/protocol.ts`, `session.ts` + | `ProfileCheckParams`, `ProfileCheckResult` and `ProfileInfo.path`; `Session.checkProfile(path, base)` |
 | `app/src/eval/runner.ts` + | the `runEval` option `ledger?: boolean`, `true` by default (D-211) |
@@ -79,8 +86,8 @@ Every module opens with its cache note (`KV cache: none` for all of them).
 | `app/src/tune/sessions.ts` | `parseSubmission`, `runSession` |
 | `app/src/tune/library.ts` | `addEntry`, `rebuildIndex`, `copyLibrary` |
 | `app/src/tune/offline.ts` | `runTune`, `accept`, `tuneEstimate` |
-| `app/src/cli/tune.ts`, `main.ts`, `paths.ts` + | `tuneCommand` and `preflightTune`; `tune` in the dispatch and `--help`; `tuneDir(h) = <h>/tune` |
-| `engine/tests/test_profile_check.py`, `app/test/tune/*.test.ts`, `app/test/cli/tune.test.ts`, `app/test/fixtures/tune/*.json` | below |
+| `app/src/cli/tune.ts`, `main.ts`, `paths.ts` + | `tuneCommand` (with `--gated`, D-234) and `preflightTune`; `tune` in the dispatch and `--help`; `tuneDir(h) = <h>/tune` |
+| `engine/tests/test_profile_check.py`, `test_profile_files.py`, `test_gated.py`, `app/test/tune/*.test.ts`, `app/test/cli/tune.test.ts`, `app/test/fixtures/tune/*.json` | below |
 
 ## Tasks
 
@@ -88,13 +95,14 @@ Every module opens with its cache note (`KV cache: none` for all of them).
    - a key outside `TUNABLE` whose value differs: `<key> is frozen`;
    - a tunable value out of bounds: `<key> = <value>: must be <lo> to <hi>`;
    - guidance over 12,000 characters, or holding a CR or a NUL;
-   - a base named `training-v4`.
+   - a base named `training-v4`;
+   - a skill, script or gated file that breaks architecture §7.2's rules or bounds (tasks 11 and 12 build them; `check_tunable` reports them here).
 
    `{shell}` stays the only text `system_prompt` substitutes; nothing new is substituted.
 2. [ ] **`profile.check`** in `service.py`, as architecture §3.1 pins it.
    - A `path` that isn't an absolute string, or a `base` that is neither a string nor null, gives -32602.
    - The folder loads with `profiles._load(folder.name, folder, "user")`, so the name rule applies. A `ProfileError` gives `ok: false` with that error, null hashes and `changed: []`. An unknown `base` does the same.
-   - `changed` is the sorted dotted keys whose effective values differ, then `"guidance"` when the text differs. `errors` is `check_tunable`.
+   - `changed` is the sorted dotted keys whose effective values differ, then `"guidance"` when the text differs, then the sorted paths of skill, script and gated files added, removed or changed (`skills/<name>/SKILL.md`, `scripts/<name>.py`, `agents/<name>/AGENT.md`, `nudges.toml`). `errors` is `check_tunable`, with `gated` from the params (default `false`).
    - Profile content never raises.
    - `contract_info` adds `path` (the profile's absolute folder) to each profile, beside step 2's `agent_api` and `limits`, so the tuner can read a built-in base's files.
 3. [ ] **Wiring.**
@@ -108,11 +116,14 @@ Every module opens with its cache note (`KV cache: none` for all of them).
 
      Values are written as TOML: bools, integers, floats with a `.`, and strings JSON-quoted. Comments and key order are otherwise untouched.
    - **`writeCandidate(dir, base, edit)`** writes `profile.toml` and `guidance.md` as LF UTF-8 bytes with no BOM. `guidance: null` means the base's text.
-   - **`diffProfiles(a, b)`** returns `git diff --no-index --no-color --no-ext-diff` of the two folders' files, run through `stripKeys`; exit 1 means "differs".
-   - **Where candidates live.** Each is written under `<out>/rounds/<r>/profiles/<name>/`. `installProfile` copies it to `<home>/profiles/<name>/` only while runs need it, refusing an existing folder. `uninstallProfiles` removes only the folders this tune installed.
+     - It copies the base's `skills/` and `scripts/` (and, under the gate, `agents/` and `nudges.toml`), then applies `edit.files`: a string writes that file, `null` removes it, and a skill folder left empty is removed.
+     - A path other than `skills/<name>/SKILL.md` or `scripts/<name>.py` (or, with `gated`, `agents/<name>/AGENT.md` or `nudges.toml`) is refused before anything is written: `..`, an absolute path, a backslash, and `profile.toml` or `guidance.md` through `files`.
+   - **`diffProfiles(a, b)`** returns `git diff --no-index --no-color --no-ext-diff` of the two folders, subfolders included, run through `stripKeys`; exit 1 means "differs".
+   - **Where candidates live.** Each is written under `<out>/rounds/<r>/profiles/<name>/`. `installProfile` copies the whole folder to `<home>/profiles/<name>/` only while runs need it, refusing an existing folder. `uninstallProfiles` removes only the folders this tune installed.
 5. [ ] **`evidence.ts`** (D-204, D-205). `writeEvidence(dir, spec)` writes architecture §7.3's layout, plus `stage.md` and `harness/system_prompt.md`.
    - **`stage.md`** holds `stage: inv|dom|compose|reflect`, `round: <r>` and `attempt: <n>`.
    - **`harness/system_prompt.md`** is prompt v4, read-only.
+   - **`harness/skills/` and `harness/scripts/`** are copies of the harness's own (and, under the gate, `harness/agents/` and `harness/nudges.toml`), so an editor reads what it is changing.
    - **`tasks/<id>/task.md`** holds the task text. A read task's input file names and sizes are listed, never their contents. For a repo task: `test_hint` with `{python}` left as is, and the file count.
    - **`tasks/<id>/<label>/`** holds one folder per run, labelled `ref`, `inv`, `dom` or `composed`:
      - `trajectory.md` is `trajectoryText(record)`: a header (turns, sub-calls, submitted, infra kind), then per turn the reply, code, output as recorded and error. Each sub-call is one line under the turn its `origin` names: id, prompt characters, `ok` or the error, and the first 200 characters of its answer. Children and `compactions` follow. Reasoning is left out.
@@ -140,10 +151,10 @@ Every module opens with its cache note (`KV cache: none` for all of them).
      - `reflect.md` (experience, all sections);
      - `mission.md` (`mission`'s evidence pointer, with "on disk, in `context/`" becoming "in your `context`, one part per file").
    - **Changed:**
-     - `inv.md` and `dom.md` keep the dimension, the scope split and the rules. Scripts, skills, hooks and subagents become what our harness has: always-on `guidance.md` text, short REPL recipes written in it, and (INV only) the TOML levers.
+     - `inv.md` and `dom.md` keep the dimension, the scope split and the rules. Skills and scripts keep harness2's guidance, with rlmh's paths: an on-demand skill (`skills/<name>/SKILL.md`, named on a trigger line in `guidance.md` and read with `skill(name)`) or a script (`scripts/<name>.py`, standard library only, imported in the REPL) is preferred to always-on `guidance.md` prose (D-233). Hooks become nothing, and subagents become `agents/` only in `surface-gated.md`. INV alone has the TOML levers.
      - `generalize.md` keeps "procedure for the domain" and the library paragraph. It drops "write the workspace fact itself", because an offline profile serves every task, so a fact from one tune task is overfitting; step 9's online prompt keeps it.
      - `work.md` is our THE WORK and DOMAIN AND TASK LENS: `rlmh`, repo tasks with tests (Python packages, websites under Playwright, GPU kernels for an LLM engine), and long-input research and search tasks.
-   - **Ours:** `surface.md` (WHAT YOU CAN CHANGE: the §7.2 table and the frozen list, replacing `_SURFACE_OPENCODE`) and `submit.md` (task 7's shapes).
+   - **Ours:** `surface.md` (WHAT YOU CAN CHANGE: the §7.2 table, the skill and script rules and bounds, and the frozen list, replacing `_SURFACE_OPENCODE`), `surface-gated.md` (the `agents/` and `nudges.toml` rules and bounds, added to the editors' and the composer's prompts only under `--gated`) and `submit.md` (task 7's shapes, `files` included, with a line asking for only the files an edit changes, since `submit` refuses more than 100,000 bytes).
    - **Dropped:** `select()` and its `*_SELECT` blocks, because offline acceptance uses labels (D-173); the `_tts_*` pack (JobBench); and `_SURFACE_CODEX`.
 7. [ ] **`sessions.ts`** (D-210). `runSession(stage, …)` starts one read run through the tune's `Session`:
    - question `stagePrompt(stage, round)`; `inputs` the evidence files, sorted;
@@ -151,8 +162,8 @@ Every module opens with its cache note (`KV cache: none` for all of them).
    - `tag` and `logDir` are arguments: `rlmh tune` passes `tune:<tune id>:r<r>-<stage>` and `<out>/rounds/<r>/sessions/`, and `/tune` (step 9) passes its own.
 
    Sessions submit one JSON object as a string, `submit(json.dumps({...}))`, because `valid_answer` refuses a dict and `normalize_answer` turns one into its `str()`. `parseSubmission` takes the `answer` string, `JSON.parse`s it and checks the shape:
-   - **Editors:** `{decision: "EDIT"|"KEEP_BASE", notes: [str], guidance: str|null, toml: {}}`. DOM's `toml` must be empty.
-   - **Composer:** `{decision: "MERGE"|"ADOPT"|"REVISE"|"KEEP_BASE", adopt: "inv"|"dom"|null, notes, guidance, toml}`. `adopt` is set exactly when the decision is ADOPT.
+   - **Editors:** `{decision: "EDIT"|"KEEP_BASE", notes: [str], guidance: str|null, toml: {}, files: {"<path>": str|null}}`. DOM's `toml` must be empty. `files` may be missing or empty, and its paths follow task 4's rule.
+   - **Composer:** `{decision: "MERGE"|"ADOPT"|"REVISE"|"KEEP_BASE", adopt: "inv"|"dom"|null, notes, guidance, toml, files}`. `adopt` is set exactly when the decision is ADOPT.
    - **Reflector:** `{domain: "read"|"repo", entry: "NO_ENTRY"|{cue, lesson, evidence, confidence: "high"|"medium"|"low"}, edits: [{component, candidates, change, observed, verdict}]}`, where the verdict is `helped`, `hurt`, `no observed effect` or `confounded`.
 
    Any `GRADE_MARKERS` string is an error, as `assert_tree_has_no_grader_verdicts` refuses one.
@@ -196,8 +207,9 @@ Every module opens with its cache note (`KV cache: none` for all of them).
     ```
     rlmh tune SET --root P/M [--sub P/M] --base PROFILE --name NAME (--from EVAL_OUT | --continue OUT)
                   [--rounds 2] [--probe 10] [--seed 0] [--jobs 4] [--tokens-from RUNS.jsonl]... [--out DIR]
-                  [--go] [--max-usd X] [--json]
+                  [--go] [--max-usd X] [--gated] [--json]
     ```
+    - **`--gated`** (D-234) starts the tune's engine with `RLMH_TUNE_GATED=1`, adds `surface-gated.md` to the session prompts, and passes `gated: true` to every `profile.check`. `tune.json` records `gated`. `--continue` keeps the first run's value and refuses a different one.
     - **`--from` is required unless `--continue`**, because the tuner never runs the base itself; make it with `rlmh eval SET --split tune|all --profile BASE --go`.
     - **`--continue OUT`** resumes a finished tune (`stopped: null`): its incumbent, reference, probe ids, history and library. The rounds go on up to the new `--rounds` total, into the same `OUT`.
     - **`--out`** defaults to `<home>/tune/<NAME>-<YYYYMMDD-HHMMSS>/`.
@@ -217,18 +229,36 @@ Every module opens with its cache note (`KV cache: none` for all of them).
       It exits 0 and writes nothing.
     - **Output.** Plain mode prints one stdout line per stage and per accept, then a final line. `--json` prints `tune.stage`, `tune.round` and `tune.finished` lines.
     - **Exit codes:** 0 when every round ran, accepted or not; 1 when stopped; 2 for usage; 130 for Ctrl-C (the first cancels and stops, as in batch).
-11. [ ] **Docs.** CLAUDE.md's command table gains `rlmh tune` (estimate, `--go`) and `bun test test/tune`. architecture.md gets the edits D-204 to D-212 imply (§2, §3.1, §7.3 to §7.5, §12), named in the progress log.
+11. [ ] **Skills and scripts** (D-233, architecture §7.2), on profiles with `agent_api = true` only.
+    - **Loading, in `profiles.py`.** `_load` reads `skills/*/SKILL.md` into `Profile.skills` (name to description and text) and lists `scripts/*.py` in `Profile.scripts` (name to path). It raises `ProfileError` for a profile without `agent_api` that holds either folder, for a SKILL.md without front matter or whose `name` isn't its folder's, and for a file that isn't UTF-8. The rest of §7.2's rules (trigger lines, named scripts, standard-library imports, names, bounds) are `check_tunable`'s, so a user's own profile that breaks one still loads and runs.
+    - **The hash.** §7.2's rule. It is unchanged for a profile with none of these files, so `default`'s, `v1-baseline`'s and `training-v4`'s hashes don't move.
+    - **The rules in `check_tunable`:**
+      - every skill's name appears verbatim in `guidance.md`;
+      - every `scripts/<name>.py` that `guidance.md` or a SKILL.md names exists;
+      - every script compiles (`compile(source, path, "exec")`), and every `import` and `from` in its AST names a module in `sys.stdlib_module_names`, or `__future__`;
+      - §7.2's names and bounds, and no other file in the folder.
+
+      A bound changed from §7.2's figures gets a D-number and a log line.
+    - **The run.** At run start, the engine copies the profile's `scripts/` into the run's scratch folder (`<home>/scratch/<run_id>/scripts/`). `child.init_extra` adds `skills` (name, description and text) and `scripts_dir` (that copy) to the worker's init, for the run's worker and each child's. Under `training-v4`, or any profile without `agent_api`, the init stays byte for byte as it is.
+    - **The worker.** `worker.py` appends `scripts_dir` to `sys.path` when the init has it. `agentapi.py` adds `skill(name=None)`: with a name it prints that skill's text; with none, or an unknown name, it prints each name and description, one per line. Both modules stay standard-library only and never import `rlm_engine` (CLAUDE.md). Scripts run under the same audit hooks and permission mode as any cell.
+    - **Cache notes.** `skill()` only adds REPL output, and scripts never enter the prompt; the module notes say so.
+12. [ ] **Subagents and nudges behind the gate** (D-234, architecture §7.2). `profiles.GATED = False`, and the gate is on when it is true or when the engine's environment has `RLMH_TUNE_GATED=1`. With the gate off, a profile that holds `agents/` or `nudges.toml` raises `ProfileError`, and `check_tunable` refuses both unless `gated` is passed.
+    - **`agents/<name>/AGENT.md`** loads into `Profile.agents`. `llm(prompt, agent=name)` sends its text as the sub-call's system message (`bridge.py`; the same bytes on every call, so the cache prefix holds), and `rlm(task, agent=name)` puts it ahead of the child's task. An unknown name is an error in the REPL, as any bad argument is.
+    - **`nudges.toml`** loads into `Profile.nudges`: a list of `[[nudge]]` tables with exactly the keys §7.2 names. Any other key, or a value of the wrong type, raises `ProfileError`. It is data only: nothing in it is run or evaluated, and patterns are plain substrings, never regular expressions. `loop.py` checks the rules after each cell, beside `pace_nudge`, and appends a matching rule's `hint` at the end of that turn's REPL output, at most once per rule per prompt.
+    - **The bounds** in `TUNABLE_GATED` are §7.2's: at most 8 agents of at most 4,000 characters, each named in `guidance.md`; at most 8 nudge rules, with `pattern` up to 200 characters, `turns` 1 to 200, `chars` 1,000 to 1,000,000 and `hint` up to 400 characters.
+    - **Test C5 and C8 thoroughly** (Tests below), but don't put them into `TUNABLE` or turn the gate on here. They go into the shipped tunable surface only if step 7 shows a tunable improvement with them (D-234). This step only makes that test possible.
+13. [ ] **Docs.** CLAUDE.md's command table gains `rlmh tune` (estimate, `--go`, `--gated`) and `bun test test/tune`. architecture.md gets the edits D-204 to D-212 imply (§2, §3.1, §7.3 to §7.5, §12), and any bound tasks 11 and 12 changed, named in the progress log.
 
 ## Tests
 
 All offline. Engine tests use the link as `test_service` does. App tests use `buildFixtureSet`, a temp `RLMH_HOME`, the real engine on `fake/scripted`, and the fixture venvs `ensureVenv` builds with `UV_OFFLINE=1`, as step 2's tests do. `app/test/fixtures/tune/stage-script.json` is one root tool call whose code branches on `context`:
-- `stage: inv` submits an EDIT that adds one guidance line and `read.max_turns = 60`;
+- `stage: inv` submits an EDIT that adds one guidance line naming the skill `fixture-recipe`, `read.max_turns = 60`, and in `files` that skill and `scripts/fixture_tool.py`, which the skill names;
 - `stage: dom` submits KEEP_BASE;
 - `stage: compose` submits ADOPT `inv`;
 - `stage: reflect` submits one entry;
 - with no `stage:`, it acts as step 2's eval script: a fix in `fx-repo-S-01`, the line count in read mode.
 
-`fail-script.json` is the same script without the fixes. Test files:
+`fail-script.json` is the same script without the fixes. `gated-script.json` is `stage-script.json` with an INV edit that also adds `agents/fixture-reader/AGENT.md` (named in the guidance) and a one-rule `nudges.toml`. Test files:
 
 - **`engine/tests/test_profile_check.py`:**
   - `default` against itself is ok with `changed: []`;
@@ -238,26 +268,45 @@ All offline. Engine tests use the link as `test_service` does. App tests use `bu
   - a `training-v4` base and broken TOML give `ok: false`;
   - a relative path gives -32602;
   - `engine.info`'s profiles carry `path`;
-  - **drift:** the bounds table in `app/src/tune/prompts/surface.md` equals `TUNABLE` and `FROZEN`.
+  - each skill and script rule, one failing case each: a skill not named in the guidance; a guidance line naming a missing `scripts/x.py`; a script that doesn't compile; a script that imports `numpy` (while `import json` and `from __future__ import annotations` pass); 17 skills; a skill of 8,001 characters; 17 scripts; a script of 16,001 characters; a bad skill name; a script named `json`, and one named `llm`; a stray file; a CR in a script;
+  - `changed` lists `skills/<name>/SKILL.md` and `scripts/<name>.py` when they are added, changed or removed;
+  - `agents/` and `nudges.toml` are errors without `gated`, ok with it, and each bound of `TUNABLE_GATED` at and just past its limit;
+  - **drift:** the bounds table in `app/src/tune/prompts/surface.md` equals `TUNABLE` and `FROZEN` and the skill and script bounds, and `surface-gated.md`'s equals `TUNABLE_GATED`.
+- **`engine/tests/test_profile_files.py`:**
+  - a `default`-based user profile with one skill and one script loads, and `profile_hash` changes when either file's bytes change, but not with the order the files were written in;
+  - `default`'s, `training-v4`'s and a plain copy of `default`'s hashes are what they were before this step (pinned literals);
+  - a profile without `agent_api` that holds `skills/` or `scripts/` fails to load, and so does a SKILL.md whose `name` isn't its folder's;
+  - in a real worker: `skill("x")` prints the text, `skill()` lists names and descriptions, an unknown name lists them too; `import <script>` works; a script that starts a subprocess asks as a cell would, so a non-interactive run denies it (D-15); a cell that writes to the scripts copy leaves the profile's file unchanged;
+  - an `rlm()` child has the same `skill()` and scripts;
+  - under `training-v4` the worker's init has no `skills` or `scripts_dir`, and `skill` is not defined in the REPL.
+- **`engine/tests/test_gated.py`:**
+  - with the gate off, a profile holding `agents/` or `nudges.toml` fails to load; with `RLMH_TUNE_GATED=1` it loads;
+  - `llm(…, agent="x")` sends the agent's text as the system message, and the same bytes on a second call (`FakeApp.requests`); `rlm(…, agent="x")` starts the child's task with it; an unknown agent is a REPL error;
+  - each nudge kind fires on its trigger (an error substring, N turns with no submit, an output over N characters), appends its hint at the end of that turn's output, and fires once per prompt; a profile with no `nudges.toml` gets no hint;
+  - a `nudges.toml` with an unknown key, a `pattern` given a list, or a 401-character hint fails to load;
+  - `training-v4` gets neither, gate on or off.
 - **`candidate.test.ts`:**
   - `editToml` keeps comments and order, replaces a value, inserts a missing key into its table and appends a missing table;
+  - `writeCandidate` copies the base's skills and scripts, applies `files` (a new skill, a changed script, a removed script) and refuses `../x`, an absolute path, `profile.toml` through `files`, and `agents/…` without `gated`;
   - the result passes `checkProfile`;
   - the bytes are LF;
-  - `diffProfiles` shows the change;
+  - `diffProfiles` shows the change, a new skill included;
+  - `installProfile` copies the subfolders;
   - uninstall leaves a folder the tune didn't make.
 - **`evidence.test.ts`:**
-  - each stage's layout;
+  - each stage's layout, with `harness/skills/` and `harness/scripts/` when the harness has them;
   - a `trajectoryText` snapshot from a hand-made record;
   - planted leaks: reading `grades.jsonl`, `grade-logs/x` or `hidden/x.tar.gz` throws; a record with `gold` throws; a marker in a file name throws from `scanTree`;
   - a run naming a hidden test path, or the set path written with `\`, is withheld while the others stay; all withheld throws;
   - with an `all`-split `--from`, no held-out id appears anywhere.
 - **`prompts.test.ts`:**
   - each stage renders, with ANSWER_FREE and EVIDENCE_BOUNDARY, no comment, no markers and no `{{`;
+  - `inv.md` and `dom.md` carry the line that prefers an on-demand skill or a script to always-on prose; `surface-gated.md` appears only with `gated`;
   - round 2 adds the two round paragraphs;
   - every file's notice names `prompts.py` (or `context.py`) and `6868817`;
   - a snapshot per stage.
 - **`sessions.test.ts`:**
-  - `parseSubmission` accepts each shape and rejects: a Python dict `str()` (its error suggests `json.dumps`), DOM `toml`, ADOPT without `adopt`, a bad verdict and a marker;
+  - `parseSubmission` accepts each shape, with and without `files`, and rejects: a Python dict `str()` (its error suggests `json.dumps`), DOM `toml`, ADOPT without `adopt`, a bad verdict, a marker, and a `files` value that is neither a string nor null;
   - with the real engine: a frozen-key edit then a valid one gives `attempts: 2` and a question with the rejection header; two bad attempts give `fell_back`.
 - **`library.test.ts`:**
   - NO_ENTRY writes nothing;
@@ -279,37 +328,44 @@ All offline. Engine tests use the link as `test_service` does. App tests use `bu
     - exit 0.
   - **Rejected round.** The same run from a passing `--from` is rejected, with `final/` equal to the base and no `<NAME>` installed.
   - **Continue.** `--continue` adds round 2.
+  - **Skills and scripts.** The accepted round's `final/` holds `skills/fixture-recipe/SKILL.md` and `scripts/fixture_tool.py`, and `profile.check` lists both in `changed`.
+  - **The gate.** Under `gated-script.json`, `--gated` accepts the round with the agent and the nudge in `final/`, and `tune.json` has `gated: true`; without `--gated`, the same script's INV edit is rejected twice and falls back, and with DOM at KEEP_BASE the round ends as `no_candidates`.
   - **Without `--go`:** the estimate prints, nothing is written, $0.
   - **Exit 2** for: `--base training-v4`, `--name default`, another set's `--from`, a `--from` with another `profile_hash`, and a non-empty `--out`.
 
 ## Done when
 
-- The full verify gate passes, including `test_profile_check.py`, `test/tune` and `test/cli/tune.test.ts`.
+- The full verify gate passes, including `test_profile_check.py`, `test_profile_files.py`, `test_gated.py`, `test/tune` and `test/cli/tune.test.ts`.
 - CI is green on macOS, Windows and Linux. The `git diff --no-index`, profile install and path-folding tests are the Windows-sensitive ones.
 - In a temp home, the cli test's rehearsal (`rlmh tune <fixture> --root fake/scripted … --go`) costs $0.00 and exits 0.
-- Parity is unaffected: `training-v4` and its files are unchanged, and `test_contract` passes.
+- Parity is unaffected: `training-v4` and its files are unchanged, and `test_contract` passes. Because the worker changed, parity is re-run from the RLM repo (CLAUDE.md), and its verdict matches D-150's.
+- The gate is off in the committed code (`profiles.GATED = False`), and `TUNABLE` holds neither `agents/` nor `nudges.toml`.
 
 ## Out of scope
 
 - The real run (step 7), the held-out check and shipping (step 8), and `/tune`, `online.ts` and user domains (step 9).
 - Injecting the library into ordinary runs (D-175).
 - Repeats per task (D-170).
-- Prompt v4, the call format and the `python` tool, which are frozen (S-09, S-14).
+- Prompt v4, the call format and the `python` tool, which are frozen (S-09, S-14). Skills, scripts, agents and nudges reach the model through the REPL, never as a new tool.
+- Turning the gate on, or moving `TUNABLE_GATED` into `TUNABLE` (step 7, only if D-234's rule holds).
+- Plugins as code (D-234).
 
 ## Hand-off
 
 - **Step 7 relies on:**
-  - the command line above, with `--base` a user profile (step 5's `v1-baseline`, a byte copy of the built-in `default`);
+  - the command line above, with `--base` a user profile (step 5's `v1-baseline`, a byte copy of the built-in `default`), and `--gated` for the comparison D-234 asks for;
+  - `profiles.GATED` and `TUNABLE_GATED`, which step 7 flips and merges only if the gated round wins;
   - budget-driven rounds;
   - the estimate's stage table;
   - `--max-usd` across the whole tune;
   - `tune.json`, `final/` and the one ledger line;
   - `--continue` for a third round.
 - **Step 9 relies on:**
-  - `evidence.ts`, `sessions.ts`, `library.ts`, `candidate.ts` and `prompts.ts`;
+  - `evidence.ts`, `sessions.ts`, `library.ts`, `candidate.ts` (skills and scripts included) and `prompts.ts`;
   - `stagePrompt` gains an online variant whose `generalize.md` keeps the workspace-fact paragraph;
   - `profile.check`.
-- **progress.md row 6:** `review`, with the CI run and the D-numbers given to D-204 to D-212.
+- **Step 8 relies on:** `profile.check`'s `changed` naming skill and script files, and the hash rule, so shipping can copy them and prove the built-in matches `v1-tuned`.
+- **progress.md row 6:** `review`, with the CI run, the D-numbers given to D-204 to D-212, any bound changed under D-233 or D-234, and the parity verdict.
 
 ## If a decision goes the other way
 
@@ -322,3 +378,6 @@ All offline. Engine tests use the link as `test_service` does. App tests use `bu
 - **D-205, fail the stage instead of withholding** (harness2's behaviour): `writeEvidence` throws where it now withholds, and the stage keeps its base.
 - **D-212, fixed rounds:** drop the re-estimate check, and `--rounds` runs exactly, with the cap as the only stop.
 - **D-210:** if the contract ever accepts dict answers, `parseSubmission` takes either form, and `submit.md` keeps `json.dumps`, so prompt bytes don't change.
+- **D-233, no skills or scripts:** drop task 11, `files` and their tests; the editors go back to guidance text and the TOML levers. The paper's ablation says this costs the most of any component.
+- **D-234, C5 and C8 straight into `TUNABLE`:** task 12 sets `GATED = True` and merges the rows, `--gated` goes, and step 7 runs one arm. Their gain is then untested.
+- **D-234, don't build C5 and C8:** drop task 12, `--gated`, `surface-gated.md` and `test_gated.py`; step 7 runs one arm.

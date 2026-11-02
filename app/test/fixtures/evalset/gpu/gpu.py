@@ -10,9 +10,10 @@ Pure ctypes, standard library at import; numpy is imported only when arrays move
 
 `python gpu.py --probe [--backend cuda|hip]` prints one line, `backend=<cuda|hip|none> devices=<n>`.
 
-Detection loads a runtime and counts devices. The only device property read is the compile target
-(compute capability; hiprtc picks the gfx target itself). Never a device name, UUID, serial or driver
-version: every C function goes through _bind, which accepts only the names in CALLS.
+Detection loads a runtime and counts devices. The only device properties read are the compile target
+(compute capability; hiprtc picks the gfx target itself) and, on HIP, the warp size, which every compile
+gets as GPU_WARP_SIZE (D-237). Never a device name, UUID, serial or driver version: every C function goes
+through _bind, which accepts only the names in CALLS.
 """
 
 from __future__ import annotations
@@ -36,12 +37,13 @@ CALLS = {
               "nvrtcGetCUBINSize", "nvrtcGetCUBIN", "nvrtcDestroyProgram", "nvrtcGetErrorString"),
     "hip": ("hipInit", "hipGetDeviceCount", "hipSetDevice", "hipDeviceSynchronize", "hipModuleLoadData",
             "hipModuleGetFunction", "hipModuleLaunchKernel", "hipMalloc", "hipFree", "hipMemcpyHtoD",
-            "hipMemcpyDtoH", "hipMemset", "hipGetErrorName"),
+            "hipMemcpyDtoH", "hipMemset", "hipGetErrorName", "hipDeviceGetAttribute"),
     "hiprtc": ("hiprtcCreateProgram", "hiprtcCompileProgram", "hiprtcGetProgramLogSize", "hiprtcGetProgramLog",
                "hiprtcGetCodeSize", "hiprtcGetCode", "hiprtcDestroyProgram", "hiprtcGetErrorString"),
 }
 
 CU_COMPUTE_MAJOR, CU_COMPUTE_MINOR = 75, 76
+HIP_ATTR_WARP_SIZE = 87  # hipDeviceAttributeWarpSize in ROCm 7.1's hip_runtime_api.h
 CU_FUNC_MAX_DYNAMIC_SHARED = 8
 
 
@@ -252,6 +254,7 @@ class _Hip(_Runtime):
         self.fn["hipGetErrorName"].restype = ctypes.c_char_p
         self.rtc: dict | None = None
         self.ready = False
+        self.warp = 0
 
     def check(self, code: int, what: str) -> None:
         if code != 0:
@@ -270,6 +273,12 @@ class _Hip(_Runtime):
             return
         self.check(self.fn["hipInit"](0), "hipInit")
         self.check(self.fn["hipSetDevice"](0), "hipSetDevice")
+        # ROCm 7's clang deprecates __AMDGCN_WAVEFRONT_SIZE, so WARP_SIZE comes from the device (D-237)
+        warp = ctypes.c_int(0)
+        self.check(self.fn["hipDeviceGetAttribute"](ctypes.byref(warp), HIP_ATTR_WARP_SIZE, 0), "warp size")
+        if warp.value not in (32, 64):
+            raise GpuError(f"unexpected warp size {warp.value}")
+        self.warp = warp.value
         lib = _open(_hip_paths("hiprtc"))
         if lib is None:
             raise GpuError("hiprtc not found: install the AMD HIP SDK (HIP_PATH) or ROCm")
@@ -286,7 +295,7 @@ class _Hip(_Runtime):
             raise CompileError(f"hiprtcCreateProgram: {f['hiprtcGetErrorString'](code).decode()}")
         try:
             # Without --offload-arch, hiprtc compiles for the current device's own gfx target.
-            opts = [b"-std=c++17"]
+            opts = [b"-std=c++17", f"-DGPU_WARP_SIZE={self.warp}".encode()]
             if os.environ.get("RLMH_GPU_ARCH"):
                 opts.append(f"--offload-arch={os.environ['RLMH_GPU_ARCH']}".encode())
             arr = (ctypes.c_char_p * len(opts))(*opts)
