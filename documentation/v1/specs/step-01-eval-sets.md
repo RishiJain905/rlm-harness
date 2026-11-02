@@ -136,7 +136,7 @@ The results go to the build cache, one line per candidate: `{id, record_id, kept
 
 ## Tasks
 
-1. [ ] Set row 1 of the v1 table in progress.md to `in progress`. Ask Rishi before creating anything in the RLM repo: the script, the test, and the summary are new files there (CLAUDE.md, "The RLM repo is outside this repo").
+1. [ ] Set row 1 of the v1 table in progress.md to `in progress`. Rishi OK'd on 2026-11-02 that this step creates its script, its test and its summary in the RLM repo on `dev_rishi`. Anything else there, and every commit or push there, still needs his OK (CLAUDE.md, "The RLM repo is outside this repo").
 2. [ ] Check that `git -C F:\Personal\RLM\RLM check-ignore -v private/seeds/harness-eval-v1-read.json` prints `private/`. The set folder is outside the repo, so it needs no rule.
 3. [ ] Write the plan constants, the CLI and the outside-the-repo guard.
 4. [ ] Write the read builder and the files it writes. Test with `--only R --no-validate`.
