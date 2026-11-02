@@ -43,7 +43,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
 
       - name: Engine tests
         run: uv run --locked --project engine pytest engine/tests
@@ -155,7 +155,7 @@ jobs:
           name: rlmh-${{ matrix.target }}
           path: served
       - if: matrix.uv == '1'
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       - name: Lint install.sh
         if: matrix.os == 'ubuntu-latest' && matrix.uv == '0'
         run: |
