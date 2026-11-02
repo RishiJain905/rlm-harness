@@ -61,6 +61,12 @@ jobs:
       - name: Embed the engine
         working-directory: app
         run: bun run scripts/embed-engine.ts
+      - name: Warm uv's cache for the fixture venvs
+        # The eval tests build the fixture's venvs with UV_OFFLINE=1 (v1 step 2). uv sync installs from the lockfile's
+        # URLs and caches no index entry, so an unpinned "pytest" can't resolve offline until one online install.
+        run: |
+          uv venv "$RUNNER_TEMP/fx-warm" --python 3.12
+          uv pip install --python "$RUNNER_TEMP/fx-warm" pytest
       # v1 step 2: the web fixture's grading tests need Node, the pinned pnpm, a filled pnpm store and a
       # Playwright Chromium. Linux only; elsewhere those tests skip and say why (the folders stay empty).
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

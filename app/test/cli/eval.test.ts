@@ -370,6 +370,68 @@ describe("the pool's exclusive groups (stub session, grader and probe)", () => {
   );
 });
 
+describe("the pool's stops (stub session)", () => {
+  /** A session whose every run costs `usd` in one call.end, then finishes after 30 ms. */
+  function costly(usd: number, started: string[]): EvalSession {
+    const bus = new Bus<AppEvents>();
+    let n = 0;
+    return {
+      bus,
+      start: async (r) => {
+        const id = `r_${n++}`;
+        started.push(r.tag!);
+        bus.emit("call.end", { call_id: `${id}-c`, run_id: id, usage: { ...zero(), cost_usd: usd }, finish_reason: "stop", seconds: 0 });
+        setTimeout(() => {
+          const f: RunFinishedParams = {
+            run_id: id, tag: r.tag ?? null, answer: 5, submitted: true, answer_valid: true, turns: 1, subcalls: 0,
+            usage: { root: zero(), sub: zero() }, cost_usd: usd, infra_error: null, infra_kind: null, wall_s: 0.03, log_path: "",
+          };
+          bus.emit("engine.event", { method: "run.finished", params: f });
+        }, 30);
+        return { run_id: id, log_path: "" };
+      },
+      cancel: async () => {},
+      close: async () => {},
+    };
+  }
+  const base = (out: string, home: string, ids: string[], maxUsd: number | null) => {
+    const s = loadSet(set);
+    return { home, set: s, tasks: s.tasks.filter((x) => ids.includes(x.id)), split: "all" as const, root: { provider: "fake", model: "scripted", thinking: null }, profile: "default", jobs: 1, out, maxUsd };
+  };
+
+  test("once the cap trips no task starts, and the rest get capped lines", async () => {
+    const home = join(t.dir, "home-cap");
+    const started: string[] = [];
+    const r = await runEval(base(join(t.dir, "out-cap"), home, ["fx-search-R-01", "fx-research-R-01"], 0.5), { session: costly(1, started), onInterrupt: () => () => {} });
+    expect(started).toEqual(["fx-search-R-01"]);
+    expect(r.capped).toBe(true);
+    expect(r.lines.map((l) => [l.id, l.infra_kind])).toEqual([["fx-search-R-01", null], ["fx-research-R-01", "capped"]]);
+    expect(JSON.parse(readFileSync(join(t.dir, "out-cap", "eval.json"), "utf8"))).toMatchObject({ capped: true, cost_usd: 1 });
+    expect(records(join(home, "eval", "ledger.jsonl"))[0]).toMatchObject({ runs: 1, cost_usd: 1 });
+  });
+
+  test("a grader that throws stops that task only; the ledger, eval.json and the reports are still written", async () => {
+    const home = join(t.dir, "home-throw");
+    const out = join(t.dir, "out-throw");
+    const r = await runEval(base(out, home, ["fx-python-S-01", "fx-search-R-01"], null), {
+      session: costly(0, []),
+      uv: "uv-fake",
+      run: fakeRunner(home),
+      gradeRepo: async () => {
+        throw new Error("fatal: Unable to create '.git/index.lock'");
+      },
+      onInterrupt: () => () => {},
+    });
+    const py = r.lines.find((l) => l.id === "fx-python-S-01")!;
+    expect(py).toMatchObject({ pass: false, infra_kind: null });
+    expect(py.grade_error).toContain("index.lock");
+    expect(r.lines.find((l) => l.id === "fx-search-R-01")).toMatchObject({ pass: true });
+    expect(records(join(home, "eval", "ledger.jsonl"))).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(out, "eval.json"), "utf8")).finished).not.toBeNull();
+    expect(existsSync(join(out, "report.md"))).toBe(true);
+  });
+});
+
 function zero() {
   return { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0 };
 }

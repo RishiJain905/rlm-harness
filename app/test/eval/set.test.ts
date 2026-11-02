@@ -109,6 +109,13 @@ describe("loadSet", () => {
     expect(all).toContain('requires must be a list whose only value is "gpu"');
   });
 
+  test("a set name that isn't one plain path part is refused", () => {
+    const dir = fresh();
+    const m = JSON.parse(require("node:fs").readFileSync(join(dir, "manifest.json"), "utf8"));
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify({ ...m, name: "x/../../.." }));
+    expect(() => loadSet(dir)).toThrow("name must be letters, digits");
+  });
+
   test("an unvalidated set is refused", () => {
     const dir = fresh();
     const m = JSON.parse(require("node:fs").readFileSync(join(dir, "manifest.json"), "utf8"));

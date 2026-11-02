@@ -6,7 +6,7 @@
 import { parseArgs } from "node:util";
 import { batchCommand, preflightBatch } from "./cli/batch.ts";
 import { configCommand } from "./cli/config.ts";
-import { evalCommand, preflightEval } from "./cli/eval.ts";
+import { evalCommand, evalSubcommand, preflightEval } from "./cli/eval.ts";
 import { preflightRun, runCommand, type CliIO } from "./cli/run.ts";
 import { ensureEngine, runSetup } from "./cli/setup.ts";
 import { isCompiledBinary, runUpdate, sweepOldBinaries, type UpdateOptions } from "./cli/update.ts";
@@ -167,8 +167,7 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<number>
     // report, compare and ledger start no engine
     const refused = await preflightEval(own, io);
     if (refused !== null) return refused;
-    const sub = own.find((a) => !a.startsWith("-"));
-    if (sub !== "report" && sub !== "compare" && sub !== "ledger") {
+    if (evalSubcommand(own) === null) {
       const stop = await (deps.engineReady ?? engineReady)();
       if (stop !== null) return stop;
     }

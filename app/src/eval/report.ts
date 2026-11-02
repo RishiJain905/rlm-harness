@@ -18,7 +18,7 @@ export interface GradeLine {
   infra_kind: string | null;
   pass: boolean;
   score: number;
-  /** Repo tasks only; null for read tasks and for runs that weren't graded. */
+  /** null for read tasks; 0 for a repo run that wasn't graded (an infra error, or never started). */
   f2p_share: number | null;
   test_tamper: boolean;
   leak_suspect: boolean;

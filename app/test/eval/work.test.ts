@@ -23,6 +23,7 @@ import {
   parseProbe,
   pyLiteral,
   removeSrcPth,
+  revertTestPaths,
   SRC_PTH,
   writeSrcPth,
   type Runner,
@@ -57,6 +58,20 @@ describe("makeWorkCopy", () => {
     const entries = readTar(new Uint8Array(readFileSync(join(set.dir, task("fx-kernel-S-01").base))));
     expect(entries.length).toBeGreaterThan(4);
     for (const e of entries.filter((x) => x.type === "file")) expect(readFileSync(join(dir, ...e.path.split("/"))).equals(Buffer.from(e.data))).toBe(true);
+  });
+});
+
+describe("revertTestPaths", () => {
+  test("a .gitignore the run wrote can't hide a new conftest.py; the base's own ignores still hold", async () => {
+    const dir = join(tmp, "copy-ignore");
+    const base = await makeWorkCopy(set, task("fx-python-S-01"), dir);
+    writeFileSync(join(dir, ".gitignore"), "conftest.py\n__pycache__/\n");
+    writeFileSync(join(dir, "conftest.py"), "import pytest\n");
+    writeFileSync(join(dir, "tests", "test_basic.py"), "def test_mul():\n    assert True\n");
+    const reverted = await revertTestPaths(dir, { track: "python", base });
+    expect(reverted).toEqual(["conftest.py", "tests/test_basic.py"]);
+    expect(existsSync(join(dir, "conftest.py"))).toBe(false);
+    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("conftest.py\n__pycache__/\n"); // put back as the run left it
   });
 });
 
@@ -105,7 +120,7 @@ function fakeTools(dir: string, versions: { node: string; pnpm: string }): { PAT
   const log = join(dir, "calls.log");
   for (const [name, version] of Object.entries(versions)) {
     if (process.platform === "win32") {
-      writeFileSync(join(dir, `${name}.cmd`), `@echo off\r\necho ${name} %*>>"${log}"\r\nif "%1"=="--version" echo ${version}\r\nexit /b 0\r\n`);
+      writeFileSync(join(dir, `${name}.cmd`), `@echo off\r\necho ${name} %*>>"${log}"\r\nif "%~1"=="--version" echo ${version}\r\nexit /b 0\r\n`);
     } else {
       writeFileSync(join(dir, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n[ "$1" = "--version" ] && echo ${version}\nexit 0\n`, { mode: 0o755 });
     }
@@ -133,13 +148,29 @@ describe("node envs", () => {
     await ensureBrowser("1.57.0", { home, tools, copy, browsersDir: browsers });
     await ensureBrowser("1.57.0", { home, tools, copy, browsersDir: browsers });
     expect(browserReady("1.57.0", { home, browsersDir: browsers })).toBe(true);
-    const calls = readFileSync(log, "utf8").split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.endsWith("--version"));
+    // Windows: the fake .cmd echoes the quotes toolCommand puts around each argument
+    const calls = readFileSync(log, "utf8").split(/\r?\n/).map((l) => l.replace(/"/g, "").trim()).filter((l) => l !== "" && !l.endsWith("--version"));
     expect(calls).toEqual([
       `pnpm fetch --store-dir ${store}`,
       `pnpm install --offline --frozen-lockfile --store-dir ${store}`,
       "pnpm exec playwright install chromium",
     ]);
     expect(existsSync(join(home, "eval", "env-logs"))).toBe(true);
+  });
+
+  test("pnpm in a folder with a space, and arguments with a space and an &", async () => {
+    const home = join(tmp, "home node spaced");
+    const { PATH, log } = fakeTools(join(tmp, "Program Files", "nodejs"), { node: "v22.11.0", pnpm: "10.34.7" });
+    const tools = await findNodeTools({ PATH });
+    expect(tools.ok).toBe(true);
+    if (!tools.ok) return;
+    const copy = join(tmp, "copy & web");
+    await makeWorkCopy(set, task("fx-web-S-01"), copy);
+    const store = join(home, "store dir");
+    await installNodeModules(copy, { home, tools, storeDir: store });
+    const calls = readFileSync(log, "utf8").split(/\r?\n/).filter((l) => l.includes("install"));
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toContain(store);
   });
 
   test("node 20 and a pnpm off the pin are refused with their fix", async () => {

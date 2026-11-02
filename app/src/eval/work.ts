@@ -47,11 +47,24 @@ export function killTree(pid: number): void {
   }
 }
 
+/** Every child spawnRunner has running, so a second Ctrl-C can end them (killChildren). */
+const live = new Set<number>();
+
+/** Kills every child spawnRunner still has running, with its tree. */
+export function killChildren(): void {
+  for (const pid of live) killTree(pid);
+}
+
+/** A command line built by toolCommand for cmd.exe: passed to it as is, not re-quoted. */
+const CMD_LINE = Symbol("cmd line");
+type CmdArgv = string[] & { [CMD_LINE]?: true };
+
 export const spawnRunner: Runner = async (argv, opts) => {
   let proc;
   try {
     proc = Bun.spawn({
       cmd: argv,
+      ...((argv as CmdArgv)[CMD_LINE] ? { windowsVerbatimArguments: true } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
       env: opts.env,
       stdin: opts.stdin !== undefined ? new Blob([opts.stdin]) : "ignore",
@@ -64,15 +77,38 @@ export const spawnRunner: Runner = async (argv, opts) => {
     return { code: 127, stdout: "", stderr: `could not start ${argv[0]}: ${(err as Error).message}\n`, timedOut: false };
   }
   let timedOut = false;
+  live.add(proc.pid);
   const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => ((timedOut = true), killTree(proc.pid)), opts.timeoutMs);
-  const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-  clearTimeout(timer);
-  return { code, stdout, stderr, timedOut };
+  try {
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { code, stdout, stderr, timedOut };
+  } finally {
+    clearTimeout(timer);
+    live.delete(proc.pid);
+  }
 };
 
-/** A command for a tool path: `.cmd` and `.bat` files go through `cmd /c` on Windows, as findEngine runs them. */
+/**
+ * A command for a tool path. On Windows a `.cmd` or `.bat` file goes through `cmd /d /s /c "<line>"`, every part
+ * double-quoted and passed verbatim, so a path or an argument with a space, `&` or `|` stays one argument (a plain
+ * `cmd /c` splits `C:\Program Files\nodejs\pnpm.cmd`). `%` still expands inside cmd's quotes; no argument here holds one.
+ */
 export function toolCommand(path: string, args: string[]): string[] {
-  return process.platform === "win32" && /\.(cmd|bat)$/i.test(path) ? [process.env.ComSpec ?? "cmd", "/c", path, ...args] : [path, ...args];
+  if (process.platform !== "win32" || !/\.(cmd|bat)$/i.test(path)) return [path, ...args];
+  const line = [path, ...args].map((a) => `"${a.replace(/"/g, '""')}"`).join(" ");
+  const argv: CmdArgv = [process.env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", `"${line}"`];
+  argv[CMD_LINE] = true;
+  return argv;
+}
+
+/** rmSync that never throws: on Windows a folder a dying process still holds answers EBUSY. Returns whether it went. */
+export function removeQuietly(path: string): boolean {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** The env every child of the eval gets: process.env (or `base`) through stripKeys. */
@@ -150,13 +186,43 @@ export const WORK_EXCLUDES = ["node_modules/", "test-results/", "playwright-repo
  * Executable entries are marked in the index from the tar's own modes, so the commit's hash is the same on
  * every OS for the same tar. Returns the base commit's hash.
  */
+/**
+ * Untracked files, listed under the base's ignore rules (D-243): every `.gitignore` the run added or changed is put
+ * back for the listing and then restored, and `.git/info/exclude` is rewritten, so a model can't hide a new
+ * conftest.py behind an ignore line. Files the base's own rules ignore (caches, a venv) stay out.
+ */
+async function untracked(dir: string, base: string, changed: Map<string, string>, run?: Runner): Promise<string[]> {
+  writeFileSync(join(dir, ".git", "info", "exclude"), `${WORK_EXCLUDES.join("\n")}\n`);
+  const ignores = [
+    ...[...changed.keys()].filter((p) => p.split("/").pop() === ".gitignore"),
+    ...zSplit((await git(dir, ["ls-files", "-z", "--others", "--", "*.gitignore", ".gitignore"], run ? { run } : {})).stdout),
+  ];
+  const saved = new Map<string, Uint8Array | null>();
+  for (const p of new Set(ignores)) {
+    const full = join(dir, ...p.split("/"));
+    saved.set(p, existsSync(full) ? new Uint8Array(readFileSync(full)) : null);
+    const before = await git(dir, ["cat-file", "blob", `${base}:${p}`], { allowFail: true, ...(run ? { run } : {}) });
+    if (before.code === 0) writeFileSync(full, before.stdout);
+    else rmSync(full, { force: true });
+  }
+  try {
+    return zSplit((await git(dir, ["-c", `core.excludesFile=${devNull}`, "ls-files", "-z", "--others", "--exclude-standard"], run ? { run } : {})).stdout);
+  } finally {
+    for (const [p, bytes] of saved) {
+      const full = join(dir, ...p.split("/"));
+      if (bytes === null) rmSync(full, { force: true });
+      else writeFileSync(full, bytes);
+    }
+  }
+}
+
 export async function makeWorkCopy(set: EvalSet, task: RepoTask, dir: string, opts: { run?: Runner } = {}): Promise<string> {
   const entries = extractTar(new Uint8Array(readFileSync(join(set.dir, task.base))), dir);
   await git(dir, ["init", "-q"], opts);
   const info = join(dir, ".git", "info");
   mkdirSync(info, { recursive: true });
   writeFileSync(join(info, "exclude"), `${WORK_EXCLUDES.join("\n")}\n`);
-  await git(dir, ["add", "-A"], opts);
+  await git(dir, ["add", "-A", "--force"], opts); // every file of the tar, even one its own .gitignore names (D-243)
   const exec = entries.filter((e) => e.type === "file" && e.mode & 0o111).map((e) => e.path);
   for (let i = 0; i < exec.length; i += 200) await git(dir, ["update-index", "--chmod=+x", "--", ...exec.slice(i, i + 200)], opts);
   await git(dir, ["commit", "-q", "-m", "base", "--no-verify", "--allow-empty"], opts);
@@ -177,7 +243,7 @@ export async function revertTestPaths(dir: string, opts: { track: Track; base: s
   const status = zSplit((await git(dir, ["diff", "--name-status", "--no-renames", "-z", opts.base], opts)).stdout);
   const changed = new Map<string, string>(); // path -> A, D, M, T
   for (let i = 0; i + 1 < status.length; i += 2) changed.set(status[i + 1]!, status[i]!.charAt(0));
-  for (const p of zSplit((await git(dir, ["ls-files", "-z", "--others", "--exclude-standard"], opts)).stdout)) changed.set(p, "?");
+  for (const p of await untracked(dir, opts.base, changed, opts.run)) changed.set(p, "?");
   const reverted: string[] = [];
   for (const [path, how] of [...changed].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const full = join(dir, ...path.split("/"));
@@ -470,9 +536,8 @@ export async function probeGpu(venv: Venv, shimDir: string, o: { backend?: Backe
 export function extractShim(set: EvalSet, task: RepoTask, dir: string): string {
   mkdirSync(dir, { recursive: true });
   for (const e of readTar(new Uint8Array(readFileSync(join(set.dir, task.base))))) {
-    const name = e.path.split("/").pop();
-    if (e.type === "file" && (name === "gpu.py" || name === "gpu_compat.h") && !existsSync(join(dir, name))) writeFileSync(join(dir, name), e.data);
+    if (e.type === "file" && (e.path === "gpu.py" || e.path === "gpu_compat.h")) writeFileSync(join(dir, e.path), e.data);
   }
-  if (!existsSync(join(dir, "gpu.py")) || !existsSync(join(dir, "gpu_compat.h"))) throw new EnvError(`${task.base} has no gpu.py and gpu_compat.h`);
+  if (!existsSync(join(dir, "gpu.py")) || !existsSync(join(dir, "gpu_compat.h"))) throw new EnvError(`${task.base} has no gpu.py and gpu_compat.h at its root`);
   return dir;
 }

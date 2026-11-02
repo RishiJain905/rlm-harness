@@ -5,7 +5,7 @@
 // nobody is asked anything, and every grade line is written as soon as its run is graded. A CostCap
 // stops it at `maxUsd` of billed cost (D-193).
 
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Bus } from "../bus.ts";
 import { message, onInterrupt as defaultOnInterrupt, RunWatcher } from "../cli/run.ts";
@@ -30,9 +30,11 @@ import {
   fillHint,
   findNodeTools,
   installNodeModules,
+  killChildren,
   makeWorkCopy,
   nodeToolsProblem,
   probeGpu as defaultProbeGpu,
+  removeQuietly,
   removeSrcPth,
   writeSrcPth,
   type Backend,
@@ -78,11 +80,14 @@ export class CostCap {
     bus: Bus<AppEvents>,
     private readonly maxUsd: number | null,
     private readonly cancel: (runId: string) => void,
+    /** Called once when the cap trips, before the cancels: the pool stops starting tasks. */
+    private readonly onCap: () => void = () => {},
   ) {
     this.off = bus.on("call.end", (c) => {
       this.total += c.usage.cost_usd;
       if (!this.capped && this.maxUsd !== null && this.total > this.maxUsd) {
         this.capped = true;
+        this.onCap();
         for (const id of this.running) this.cancelOnce(id);
       }
     });
@@ -243,16 +248,18 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
   }
   let backend: Backend | null = null;
   const kernels = o.tasks.filter(needsGpu) as RepoTask[];
-  if (kernels.length > 0 && o.gpu !== "none") {
-    const venv = venvs.get(kernels[0]!.venv!);
-    if (venv !== undefined) {
+  // the probe runs under the first kernel venv that was built; kernel tasks whose venv failed are host_bug anyway
+  const probeTask = kernels.find((t) => venvs.has(t.venv!));
+  if (probeTask !== undefined && o.gpu !== "none") {
+    const venv = venvs.get(probeTask.venv!)!;
+    {
       const shimDir = join(evalDir(o.home), "work", `${id}.gpu-shim`);
       let probe;
       try {
-        const shim = extractShim(o.set, kernels[0]!, shimDir);
+        const shim = extractShim(o.set, probeTask, shimDir);
         probe = await (deps.probeGpu ?? defaultProbeGpu)(venv, shim, { ...(o.gpu !== undefined ? { backend: o.gpu } : {}), ...(run ? { run } : {}) });
       } finally {
-        rmSync(shimDir, { recursive: true, force: true });
+        removeQuietly(shimDir);
       }
       if (probe.devices === 0 || probe.backend === "none") throw new GpuMissing(kernels.map((t) => t.id), probe.backend);
       backend = probe.backend;
@@ -318,7 +325,10 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
   let abort!: () => void;
   const aborted = new Promise<"abort">((r) => (abort = () => r("abort")));
   const cancel = (runId: string) => void session.cancel(runId).catch(() => {});
-  const cap = new CostCap(session.bus, o.maxUsd, cancel);
+  const cap = new CostCap(session.bus, o.maxUsd, cancel, () => {
+    stopping = true;
+    say(`the cost passed --max-usd ($${o.maxUsd}): no new task starts, and the running ones are cancelled`);
+  });
   const offInterrupt = (deps.onInterrupt ?? defaultOnInterrupt)(() => {
     interrupts += 1;
     stopping = true;
@@ -330,7 +340,9 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
     }
   });
   const workRoot = join(evalDir(o.home), "work", id);
+  let closed = false; // after a second Ctrl-C the output is final: a grading still going writes nothing
   const write = (line: GradeLine) => {
+    if (closed) return;
     lines.push(line);
     appendFileSync(join(out, "grades.jsonl"), `${JSON.stringify(line)}\n`);
     o.onTask?.(line);
@@ -414,13 +426,13 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
           tag: t.id,
         };
       }
-      if (stopping) return write(blank(t, cap.capped ? "capped" : "cancelled"));
+      if (stopping) return write(blank(t, notStarted()));
       let runId: string;
       try {
         ({ run_id: runId } = await session.start(request));
       } catch (err) {
         if (watcher.exit) stopping = true;
-        return write(blank(t, "host_bug", { grade_error: `run.start failed: ${message(err)}` }));
+        return write(blank(t, watcher.exit ? "other" : "host_bug", { grade_error: `run.start failed: ${message(err)}` }));
       }
       running.add(runId);
       cap.track(runId);
@@ -433,12 +445,17 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
         stopping = true;
         return write(blank(t, "other", { run_id: runId, grade_error: "the engine exited before the run finished" }));
       }
-      write(await gradeOne(t, grade, f, { dir, base, venv, cappedNow: cap.capped }));
+      const line = await Promise.race([gradeOne(t, grade, f, { dir, base, venv, cappedNow: cap.capped }), aborted]);
+      if (line === "abort") return;
+      // a first Ctrl-C reaches the test runner too (Windows shares the console), so a failure then is no verdict
+      write(interrupts > 0 && line.infra_kind === null && !line.pass ? { ...line, infra_kind: "cancelled" } : line);
     } finally {
       if (srcVenv) removeSrcPth(venv!);
-      if (t.kind === "repo" && !o.keep) rmSync(dir, { recursive: true, force: true });
+      if (t.kind === "repo" && !o.keep) removeQuietly(dir);
     }
   };
+  /** The kind of a task that never started: the engine died (transient, D-197), the cap tripped, or Ctrl-C. */
+  const notStarted = () => (watcher.exit ? "other" : cap.capped ? "capped" : "cancelled");
 
   const gradeOne = async (t: EvalTask, grade: AnswerGrade | TestsGrade, f: RunFinishedParams, w: { dir: string; base: string; venv: Venv | undefined; cappedNow: boolean }): Promise<GradeLine> => {
     const record = readRecord(logDir, f.run_id);
@@ -464,16 +481,22 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
       return { ...line, score: s.score, pass: readPassed(s.score, grade) };
     }
     const repoTask = t as RepoTask;
-    const g = await (deps.gradeRepo ?? defaultGradeRepo)(repoTask, grade, {
-      dir: w.dir,
-      base: w.base,
-      set: o.set,
-      logDir: join(out, "grade-logs", t.id),
-      ...(w.venv ? { python: w.venv.python } : {}),
-      ...(tools?.ok ? { pnpm: tools.pnpm } : {}),
-      browsersDir,
-      ...(backend ? { env: { RLMH_GPU_BACKEND: backend } } : {}),
-    });
+    let g;
+    try {
+      g = await (deps.gradeRepo ?? defaultGradeRepo)(repoTask, grade, {
+        dir: w.dir,
+        base: w.base,
+        set: o.set,
+        logDir: join(out, "grade-logs", t.id),
+        ...(w.venv ? { python: w.venv.python } : {}),
+        ...(tools?.ok ? { pnpm: tools.pnpm } : {}),
+        browsersDir,
+        ...(backend ? { env: { RLMH_GPU_BACKEND: backend } } : {}),
+      });
+    } catch (err) {
+      // git failing in the copy (a deleted .git, a stale lock), a broken hidden tar: unresolved, and said why
+      return { ...line, grade_error: `grading failed: ${message(err)}` };
+    }
     return {
       ...line,
       pass: g.resolved,
@@ -515,6 +538,9 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
       }
       try {
         await runOne(t);
+      } catch (err) {
+        // anything runOne didn't expect stops this task only
+        write(blank(t, "host_bug", { grade_error: `the eval failed on this task: ${message(err)}` }));
       } finally {
         for (const g of groupsOf(t)) busy.delete(g);
         wake();
@@ -527,33 +553,34 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
   try {
     const done = await Promise.race([Promise.all(Array.from({ length: Math.max(1, Math.min(o.jobs, o.tasks.length)) }, worker)), aborted]);
     wasAborted = done === "abort";
-    if (!wasAborted) for (const t of queue.splice(0)) write(blank(t, cap.capped ? "capped" : "cancelled")); // never started
+    if (!wasAborted) for (const t of queue.splice(0)) write(blank(t, notStarted())); // never started
   } finally {
+    // -- after the last grade, even when capped, interrupted or failed: what was spent is always in the ledger --
+    closed = true;
+    if (wasAborted) killChildren(); // test runners and installs still going
     detach();
     offInterrupt();
     watcher.dispose();
     cap.dispose();
-    if (deps.session === undefined) await session.close();
-    if (!o.keep) rmSync(workRoot, { recursive: true, force: true });
+    if (deps.session === undefined) await session.close().catch(() => {});
+    if (!o.keep) removeQuietly(workRoot);
+    if (o.ledger !== false) {
+      appendLedger(o.home, {
+        date: now().toISOString(),
+        what: "eval",
+        set: o.set.manifest.name,
+        split: o.split,
+        root: `${o.root.provider}/${o.root.model}`,
+        profile: o.profile,
+        runs: lines.filter((l) => l.run_id !== null).length,
+        cost_usd: Math.round(cap.total * 1e6) / 1e6,
+        out,
+      });
+    }
+    writeJson(join(out, "eval.json"), { ...evalJson, capped: cap.capped, cost_usd: Math.round(cap.total * 1e6) / 1e6, finished: now().toISOString() });
+    writeReports(out);
   }
-
-  // -- after the last grade, even when capped or interrupted --
   const cost = Math.round(cap.total * 1e6) / 1e6;
-  if (o.ledger !== false) {
-    appendLedger(o.home, {
-      date: now().toISOString(),
-      what: "eval",
-      set: o.set.manifest.name,
-      split: o.split,
-      root: `${o.root.provider}/${o.root.model}`,
-      profile: o.profile,
-      runs: lines.filter((l) => l.run_id !== null).length,
-      cost_usd: cost,
-      out,
-    });
-  }
-  writeJson(join(out, "eval.json"), { ...evalJson, capped: cap.capped, cost_usd: cost, finished: now().toISOString() });
-  writeReports(out);
   return { id, out, lines, capped: cap.capped, interrupted: interrupts > 0, aborted: wasAborted, cost_usd: cost, gpu_backend: backend, engineExit: watcher.exit };
 }
 

@@ -7,6 +7,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { stripKeys } from "../engine.ts";
 import { Catalog } from "../gateway/catalog.ts";
 import { LEDGER_CAP_USD, readLedger } from "../eval/ledger.ts";
 import { compare, readOutput, renderCompare, type GradeLine } from "../eval/report.ts";
@@ -244,9 +245,15 @@ async function prepareEval(argv: string[], io: CliIO): Promise<Prepared | number
   };
 }
 
+/** `report`, `compare` or `ledger` when it is the first argument (--verbose aside), else null: `--out report` is a flag's value. */
+export function evalSubcommand(argv: string[]): "report" | "compare" | "ledger" | null {
+  const first = argv.filter((a) => a !== "--verbose")[0];
+  return first === "report" || first === "compare" || first === "ledger" ? first : null;
+}
+
 /** The exit code when `rlmh eval` would be refused before it starts an engine, else null. Prints why. */
 export async function preflightEval(argv: string[], io: CliIO): Promise<number | null> {
-  if (["report", "compare", "ledger"].includes(argv.find((a) => !a.startsWith("-")) ?? "")) return null;
+  if (evalSubcommand(argv) !== null) return null;
   const prepared = await prepareEval(argv, io);
   return typeof prepared === "number" ? prepared : null;
 }
@@ -256,7 +263,7 @@ function harnessCommit(): string | null {
   const dir = import.meta.dir;
   if (dir.includes("$bunfs") || dir.includes("~BUN")) return null;
   try {
-    const r = Bun.spawnSync(["git", "-C", resolve(dir, "..", "..", ".."), "rev-parse", "HEAD"], { stdout: "pipe", stderr: "ignore" });
+    const r = Bun.spawnSync(["git", "-C", resolve(dir, "..", "..", ".."), "rev-parse", "HEAD"], { stdout: "pipe", stderr: "ignore", env: stripKeys(process.env) });
     const sha = r.stdout.toString().trim();
     return r.exitCode === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
   } catch {
@@ -276,8 +283,8 @@ export interface EvalCommandDeps {
 }
 
 export async function evalCommand(argv: string[], io: CliIO, deps: EvalCommandDeps = {}): Promise<number> {
-  const sub = argv.find((a) => !a.startsWith("-"));
-  if (sub === "report" || sub === "compare" || sub === "ledger") return subcommand(sub, argv.filter((a) => a !== sub && a !== "--verbose"), io);
+  const sub = evalSubcommand(argv);
+  if (sub !== null) return subcommand(sub, argv.filter((a) => a !== "--verbose").slice(1), io);
   const prepared = await prepareEval(argv, io);
   if (typeof prepared === "number") return prepared;
   const p = prepared;

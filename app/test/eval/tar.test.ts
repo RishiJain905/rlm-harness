@@ -51,6 +51,7 @@ test("it refuses ../x, /etc/x, C:x, a symlink and two names that differ only in 
   expect(() => readTar(writeTar([{ path: "link", type: "2", linkname: "/etc/passwd" }]))).toThrow("is a symlink");
   expect(() => readTar(writeTar([{ path: "hard", type: "1", linkname: "a" }]))).toThrow("is a hard link");
   expect(() => readTar(writeTar([{ path: "Readme.md", data: "" }, { path: "README.md", data: "" }]))).toThrow("case-insensitive");
+  expect(() => readTar(writeTar([{ path: "A/x.py", data: "" }, { path: "a/y.py", data: "" }]))).toThrow("same folder on a case-insensitive disk");
 });
 
 test("a .tar.gz round trip works", () => {

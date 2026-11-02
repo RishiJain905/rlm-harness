@@ -90,6 +90,7 @@ export function readTar(input: Uint8Array): TarEntry[] {
   const bytes = input[0] === 0x1f && input[1] === 0x8b ? new Uint8Array(Bun.gunzipSync(input as Uint8Array<ArrayBuffer>)) : input;
   const entries: TarEntry[] = [];
   const folded = new Map<string, TarEntry>();
+  const prefixes = new Map<string, string>(); // folded parent folder -> its spelling
   let at = 0;
   let longName: string | null = null;
   let paxPath: string | null = null;
@@ -130,6 +131,14 @@ export function readTar(input: Uint8Array): TarEntry[] {
     }
     const path = safePath(name);
     const entry: TarEntry = { path, type: type === "5" ? "dir" : "file", mode: number(h, 100, 8) & 0o7777, data };
+    // every parent folder too: `A/x` and `a/y` are one folder on Windows and macOS, two on Linux
+    const parts = path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const prefix = parts.slice(0, i).join("/");
+      const seen = prefixes.get(prefix.normalize("NFC").toLowerCase());
+      if (seen !== undefined && seen !== prefix) throw new Error(`tar: ${JSON.stringify(seen)} and ${JSON.stringify(prefix)} are the same folder on a case-insensitive disk`);
+      prefixes.set(prefix.normalize("NFC").toLowerCase(), prefix);
+    }
     const key = path.normalize("NFC").toLowerCase();
     const before = folded.get(key);
     if (before !== undefined && !(before.type === "dir" && entry.type === "dir" && before.path === path)) {

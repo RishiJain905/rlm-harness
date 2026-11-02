@@ -179,7 +179,10 @@ export function loadSet(dirIn: string): EvalSet {
   }
   if (!isObj(manifest)) throw new SetError(dir, ["manifest.json is not a JSON object"]);
   if (manifest.format !== 1) problems.push(`manifest.json: format must be 1 (got ${JSON.stringify(manifest.format)})`);
-  if (typeof manifest.name !== "string" || manifest.name === "") problems.push("manifest.json: name must be a non-empty string");
+  // the name becomes the eval id, a folder under <home>/eval/work/ and out/, so it must be one plain path part
+  if (typeof manifest.name !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(manifest.name)) {
+    problems.push(`manifest.json: name must be letters, digits, ".", "_" and "-", not starting with "." (got ${JSON.stringify(manifest.name)})`);
+  }
   if (manifest.validated !== true) problems.push("manifest.json: validated is not true (a --no-validate build can't be run)");
   if (!PERMISSION_MODES.includes(manifest.permission_mode)) {
     problems.push(`manifest.json: permission_mode must be one of ${PERMISSION_MODES.join(", ")} (got ${JSON.stringify(manifest.permission_mode)})`);
