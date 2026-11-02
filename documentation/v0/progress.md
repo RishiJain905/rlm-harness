@@ -75,7 +75,7 @@ The v1 kit is [../v1/README.md](../v1/README.md); its specs link from this table
 
 | Step | Spec | Status | Owner thread | Depends on | Date | Notes |
 |---|---|---|---|---|---|---|
-| 1 | [Eval sets](../v1/specs/step-01-eval-sets.md) | not started | | none | | |
+| 1 | [Eval sets](../v1/specs/step-01-eval-sets.md) | not started | | none (kernel track: step 2's GPU shim) | | |
 | 2 | [`rlmh eval`](../v1/specs/step-02-rlmh-eval.md) | not started | | none | | |
 | 3 | [Compaction](../v1/specs/step-03-compaction.md) | not started | | none | | |
 | 4 | [Follow-ups](../v1/specs/step-04-follow-ups.md) | not started | | 3 | | |
@@ -161,3 +161,4 @@ Newest at the bottom. One line each: `YYYY-MM-DD step N (thread): what happened`
 - 2026-11-02 docs (v1 kit, thread "Model-agnostic harness options"): documentation/v1 created (README, architecture.md, ten specs), with the v1 table above; decisions.md gained S-40 to S-47 and D-168 to D-179, and is now titled for v0 and v1. Three log lines here had a vertical-tab byte where `scripts\verify.ps1` was written; fixed. Nothing built yet.
 - 2026-11-02 docs (thread "Model-agnostic harness options"): Rishi confirmed D-172 (bypass in throwaway copies for eval repo tasks) and OK'd step 1 creating its script, test and summary in the RLM repo; D-172 and step 1 task 1 now say so.
 - 2026-11-02 docs (thread "Model-agnostic harness options", S-48): the eval set now has five tracks: `python` 16, `web` 10 (Web-Bench, Playwright), `kernel` 10 (CUDA through CuPy, Rishi's pick of GPU kernels), `research` 8 (training's `research_test`) and `search` 4. D-170, D-176, D-180, D-184 and D-189 revised; D-222 to D-225 added. Steps 1 and 2 rewritten; steps 5 to 10, the README and architecture §1, §2, §6 and §12 updated. Step 5's prior estimate is now about $6.84 for `v1-baseline` and $3.04 for `training-v4`.
+- 2026-11-02 docs (same thread): Rishi's PC has an AMD GPU, so the kernel track is vendor-neutral (D-223 revised): one CUDA/HIP dialect, a ctypes `gpu.py` shim over NVRTC or hiprtc that step 2 owns and step 1 copies, `requires: ["gpu"]`, `--gpu cuda|hip|none`, and a probe that prints only the backend and a device count. CuPy is gone. Steps 1, 2, 5, 6 and 10, the README and architecture §2 and §6 updated.

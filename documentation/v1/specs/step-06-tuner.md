@@ -142,7 +142,7 @@ Every module opens with its cache note (`KV cache: none` for all of them).
    - **Changed:**
      - `inv.md` and `dom.md` keep the dimension, the scope split and the rules. Scripts, skills, hooks and subagents become what our harness has: always-on `guidance.md` text, short REPL recipes written in it, and (INV only) the TOML levers.
      - `generalize.md` keeps "procedure for the domain" and the library paragraph. It drops "write the workspace fact itself", because an offline profile serves every task, so a fact from one tune task is overfitting; step 9's online prompt keeps it.
-     - `work.md` is our THE WORK and DOMAIN AND TASK LENS: `rlmh`, repo tasks with tests (Python packages, websites under Playwright, CUDA kernels for an LLM engine), and long-input research and search tasks.
+     - `work.md` is our THE WORK and DOMAIN AND TASK LENS: `rlmh`, repo tasks with tests (Python packages, websites under Playwright, GPU kernels for an LLM engine), and long-input research and search tasks.
    - **Ours:** `surface.md` (WHAT YOU CAN CHANGE: the §7.2 table and the frozen list, replacing `_SURFACE_OPENCODE`) and `submit.md` (task 7's shapes).
    - **Dropped:** `select()` and its `*_SELECT` blocks, because offline acceptance uses labels (D-173); the `_tts_*` pack (JobBench); and `_SURFACE_CODEX`.
 7. [ ] **`sessions.ts`** (D-210). `runSession(stage, …)` starts one read run through the tune's `Session`:

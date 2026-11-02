@@ -34,7 +34,7 @@ The outputs are the comparator for everything after this. Step 7 tunes from the 
 - Steps 1, 2 and 3 are `done` in progress.md, or `review` with Rishi's word that step 5 may start.
 - The rlm-harness checkout on the PC (`F:\Personal\RLM\rlm-harness`) is at a commit that holds steps 2 and 3, with no local changes (`git status --short` is empty). `rlmh` runs from source: in `app\`, `..\.bun\bin\bun.exe run src/main.ts …`, so `eval.json` records `harness_commit`.
 - The real home (`~\.rlm-harness\`, no `RLMH_HOME`) has an `openrouter` entry in `key-index.json`. Read only the index, never the key store, and never print a key.
-- `D:\RLM-data\harness-eval\harness-eval-v1\` exists, `uv` is on PATH, and so are `node` 22 or later and the `pnpm` version the set's `nodeenvs/` pin (the web track, D-222). `nvidia-smi` shows the GPU the kernel track needs (D-223).
+- `D:\RLM-data\harness-eval\harness-eval-v1\` exists, `uv` is on PATH, and so are `node` 22 or later and the `pnpm` version the set's `nodeenvs/` pin (the web track, D-222). The AMD HIP SDK is installed, so the kernel track's probe finds the GPU as `hip` (D-223); every output's `eval.json` must say `gpu_backend: "hip"`.
 - `rlmh eval ledger` in the real home shows $0.00 of $30, or only earlier v1 lines that progress.md accounts for.
 
 ## Deliverables

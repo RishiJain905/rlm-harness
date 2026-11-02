@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Type** | PC (RLM repo; a Remote Control session on Rishi's PC, because the edit and research data live only on `D:` and the kernel track needs its NVIDIA GPU) |
-| **Cost** | $0. No model calls. The build downloads from PyPI (including CUDA toolkit wheels), the npm registry, github.com and Playwright's browser host, and the optional image fallback runs Docker locally |
-| **Depends on** | none |
+| **Type** | PC (RLM repo; a Remote Control session on Rishi's PC, because the edit and research data live only on `D:` and the kernel track validates on its GPU) |
+| **Cost** | $0. No model calls. The build downloads from PyPI (including NVIDIA's NVRTC wheel), the npm registry, github.com and Playwright's browser host, and the optional image fallback runs Docker locally |
+| **Depends on** | none; the kernel track copies step 2's GPU shim (task 9) |
 | **Unblocks** | 5, and through it 7, 8 and 10 |
 | **Parallel with** | 2, 3 |
 | **Decisions it uses** | S-19, S-44, S-46, S-48, D-169, D-170, D-172, D-176 (the five tracks), D-180 (disjoint splits), D-181 (long specs live in a file), D-183 (native validation rule), D-184 (test ids), D-185 (`import_root` for src layouts), D-189 (`text` grading), D-222 (Web-Bench), D-223 (kernels), D-224 (research), D-225 (`track`) |
@@ -17,11 +17,11 @@
 |---|---|---|---|---|---|---|
 | `python` | repo | training's held-out edit tasks | 6 | 6 | 4 | |
 | `web` | repo | Web-Bench projects (D-222) | 4 | 4 | 2 | |
-| `kernel` | repo | CUDA kernels of an LLM inference engine, written here (D-223) | 4 | 4 | 2 | |
+| `kernel` | repo | GPU kernels of an LLM inference engine, in one dialect that compiles for CUDA and HIP, written here (D-223) | 4 | 4 | 2 | |
 | `research` | read | training's `research_test`, levels 2 and 3 (D-224) | | | | 8 |
 | `search` | read | training's `callgraph_heldout` and `needle_heldout` | | | | 4 |
 
-Each split, `tune` and `heldout`, holds half of every cell, so each has R 6, S 7, M 7 and L 4. Every repo task is validated natively on Rishi's PC with the same commands `rlmh eval` (step 2) grades with: pytest in a uv venv for `python` and `kernel` (on the GPU, through CuPy), and Playwright in Chromium for `web`. The set lives in `RLM_DATA_DIR`, never in either repo. Step 5 runs the baseline on it.
+Each split, `tune` and `heldout`, holds half of every cell, so each has R 6, S 7, M 7 and L 4. Every repo task is validated natively on Rishi's PC with the same commands `rlmh eval` (step 2) grades with: pytest in a uv venv for `python` and `kernel` (on whichever GPU the machine has, through `gpu.py`), and Playwright in Chromium for `web`. The set lives in `RLM_DATA_DIR`, never in either repo. Step 5 runs the baseline on it.
 
 ## Read first
 
@@ -53,7 +53,9 @@ Each split, `tune` and `heldout`, holds half of every cell, so each has R 6, S 7
   - `tools/evaluator/src/index.ts` and `tools/evaluator/src/plugins/`: how Web-Bench itself copies `src-init/`, runs the specs and counts a pass, so this step grades the same way.
   - The root `pnpm-lock.yaml`: the importer entries of the projects you pick, for their resolved versions.
 - For the kernel track:
-  - CuPy's user guide page on user-defined kernels (docs.cupy.dev, "User-Defined Kernels": `RawKernel`, `RawModule`, `get_function`, NVRTC `options`, `name_expressions`) and its installation page (the `ctk` extra and the CUDA toolkit wheels).
+  - NVIDIA's NVRTC guide (`nvrtcCreateProgram`, `nvrtcCompileProgram`, `nvrtcGetCUBIN`, `--gpu-architecture`) and the CUDA driver API's context, module, memory and launch sections (`cuInit`, `cuDeviceGetCount`, `cuDevicePrimaryCtxRetain`, `cuModuleLoadData`, `cuLaunchKernel`, `cuMemAlloc`, `cuMemcpyHtoD`/`DtoH`).
+  - AMD's HIP RTC and module docs (`hiprtcCreateProgram`, `hiprtcCompileProgram`, `hiprtcGetCode`, `--offload-arch`, `hipGetDeviceCount`, `hipModuleLoadData`, `hipModuleLaunchKernel`, `hipMalloc`, `hipMemcpy`), and the HIP porting guide's sections on warp size (`warpSize`, `__AMDGCN_WAVEFRONT_SIZE`) and on warp shuffles and ballots, which have no `_sync` forms on HIP.
+  - llama.cpp's `ggml/src/ggml-cuda/vendors/hip.h` (MIT): how one CUDA code base maps itself onto HIP. Reference only.
   - As reference for style and layouts only (read, don't copy code into tasks): llama.cpp's `ggml/src/ggml-cuda/softmax.cu`, `norm.cu` and `rope.cu` (MIT, github.com/ggml-org/llama.cpp), and vLLM's `csrc/attention/paged_attention_v1.cu` and `csrc/cache_kernels.cu` (Apache-2.0, github.com/vllm-project/vllm) for block tables.
 - On `D:` (read only):
   - `edit/index.json`, `edit/v2/spec_index.json`, `edit/v2/bugs_index.json`, `edit/repos.json`, `edit/v2/profile/<key>.json` for the nine `REPOS`, and `edit/repos/<key>.tar`;
@@ -64,7 +66,7 @@ Each split, `tune` and `heldout`, holds half of every cell, so each has R 6, S 7
 - The RLM repo is on `dev_rishi` (`d83e71a` or later). Its Windows `.venv` imports `rlm_rl.tasks`, and `RLM_DATA_DIR` (default `D:\RLM-data`) holds the edit data and the four research files above.
 - **The research checks are in force.** `research.closed_book()` and `research.open_book()` both return a dict, not `None`. Without them the generator draws questions the base model answers from memory, or broken ones. If either is missing, stop and tell Rishi; don't run `closed_book.py` or `open_book.py` yourself, because they make model calls.
 - `uv` is on PATH (`uv --version`). Git for Windows is installed, and `git clone` from github.com works. Docker is optional: only the Python venv fallback uses it, directly or as `wsl -d Ubuntu docker`.
-- **An NVIDIA GPU** (kernel track): `nvidia-smi` lists one, and its "CUDA Version" is 12.0 or later, so the driver runs CUDA 12 code. Without it the kernel track can't be built: stop and tell Rishi.
+- **A GPU and its runtime** (kernel track). Rishi's PC has an AMD GPU, so it needs AMD's HIP SDK for Windows, with `HIP_PATH` set (on Linux the same role is ROCm's, under `/opt/rocm/lib`). If the SDK isn't installed, ask Rishi before installing it: it is an install on his machine. A machine with an NVIDIA GPU needs only its driver. The check is the shim's own: in the kernel venv, `gpu.backend()` returns `hip` or `cuda`. Without a GPU the kernel track can't be validated: stop and tell Rishi.
 - **Node and pnpm** (web track): `node --version` is 22 or later, and `pnpm --version` equals `PNPM` (below). Installing either is a step on Rishi's machine: ask before you run an installer.
 - No `harness-eval` folder exists under `RLM_DATA_DIR`, and no `private/seeds/harness-eval-v1-*.json`.
 
@@ -78,7 +80,8 @@ All in the RLM repo unless marked. Nothing in rlm-harness changes, except this s
 | `tests/test_harness_evalset.py` | Offline unittest tests (below) |
 | `documentation/harness-eval-v1.md` | The summary: counts by track and size, ids, gold sizes and test timings. Never task text, gold, test names, diffs, or the names of repositories, Web-Bench projects or kernel ops |
 | `RLM_DATA_DIR\harness-eval\harness-eval-v1\` | The set, in §6.1's layout. Outside both repos |
-| `RLM_DATA_DIR\harness-eval\build\harness-eval-v1\` | The build cache: candidates, gold, build venvs (the kernel venv holds the CUDA toolkit wheels), the Web-Bench clone, the pnpm store, Playwright's Chromium, the kernel sources and validation results, so a rerun resumes. Never read by `rlmh` |
+| `RLM_DATA_DIR\harness-eval\build\harness-eval-v1\` | The build cache: candidates, gold, build venvs, the Web-Bench clone, the pnpm store, Playwright's Chromium, the kernel sources and validation results, so a rerun resumes. Never read by `rlmh` |
+| `…\build\harness-eval-v1\kernels\_shared\` | `gpu.py` and `gpu_compat.h`, copied in task 9 from step 2's `app/test/fixtures/evalset/gpu/` in the `--harness` checkout, then byte for byte into every kernel task |
 | `…\build\harness-eval-v1\kernels\<op>\` | The 10 kernel tasks, written in task 9 (layout below). Private: never in git, never in a summary |
 | `private/seeds/harness-eval-v1-read.json`, `private/seeds/harness-eval-v1-repo.json` | Seeds, drawn once by `private_seed_list`. Git-ignored |
 
@@ -109,7 +112,7 @@ WEBBENCH = ("https://github.com/bytedance/web-bench", "7b31ca2b786eef120dd49ce63
 WEB_SPLIT = {"tune": ("react", "svelte", "tailwind", "canvas", "form", "sass", "dom", "calculator"),
              "heldout": ("vue", "angular", "unocss", "table", "stylus", "survey", "bom", "grid")}   # D-180, preference order
 WEB_REQUESTS = {"S": 3, "M": 6, "L": 12}                               # requests 1..n
-CUPY = "cupy-cuda12x[ctk]==14.2.0"   # win_amd64 and manylinux wheels; the ctk extra pulls cuda-toolkit[...,nvrtc]==12.*
+NVRTC = 'nvidia-cuda-nvrtc-cu12==12.9.86; sys_platform != "darwin"'   # win_amd64 and manylinux wheels; unused on HIP machines
 PNPM = "<the newest 10.x release at least two weeks old on build day>"  # fixed once, recorded in nodeenvs/
 ```
 
@@ -172,7 +175,7 @@ Every cell is split × track × size, and each split gets half: per split, `pyth
 
 ### The `kernel` track (D-223)
 
-Ten CUDA C kernel tasks, written for this set in task 9 and kept in the build cache only. Each is a piece of an LLM inference engine's GPU backend. The kernels compile at run time through CuPy: `cupy.RawModule(code=…)` hands the source to NVRTC from the pip CUDA toolkit, so the PC needs no nvcc, no MSVC and no system CUDA toolkit, only an NVIDIA GPU and its driver. The splits use different groups of ops (D-180):
+Ten GPU kernel tasks, written for this set in task 9 and kept in the build cache only. Each is a piece of an LLM inference engine's GPU backend. Every task is vendor-neutral: its kernels are written once, in a dialect that compiles both as CUDA (NVIDIA) and as HIP (AMD), and run on whichever GPU the machine has. Nothing is compiled ahead of time; the shim `gpu.py` compiles at run time with the vendor's runtime compiler, NVRTC or hiprtc. The splits use different groups of ops (D-180):
 
 | Split | Size | Op (folder name) | What it asks for |
 |---|---|---|---|
@@ -184,35 +187,47 @@ Ten CUDA C kernel tasks, written for this set in task 9 and kept in the build ca
 | heldout | S | `rmsnorm` | RMSNorm over rows with `eps` and a weight vector, fp32 and fp16, with row strides |
 | heldout | S | `rope` | Rotary position embedding in both the NeoX and GPT-J layouts, with a position offset and a `theta` base |
 | heldout | M | `tiled_matmul` | Shared-memory tiled SGEMM, a transposed-B variant, and an fp16-in, fp32-accumulate variant; any shape, including 1 |
-| heldout | M | `reductions` | Row logsumexp and argmax with warp shuffles over long rows, with `-inf` and NaN rules and ties by the lower index |
+| heldout | M | `reductions` | Row logsumexp and argmax with warp shuffles (through the prelude's wrappers) over long rows, with `-inf` and NaN rules and ties by the lower index |
 | heldout | L | `flash_attention` | A flash-attention-style forward: tiled QKᵀ, online softmax and the output, with a causal mask and head dims 64 and 128; at least 4 source files |
 
 If an op can't get a test suite that passes the mutant rule below, swap in one of the same split's spares (tune: `gelu_tanh`, `int4_pack`; heldout: `layernorm`, `transpose_tiled`), and log it.
+
+**The shared files.** Step 2 owns them, at `app/test/fixtures/evalset/gpu/` in rlm-harness, where CI tests their no-GPU path. This step copies them into `kernels/_shared/`, then byte for byte into every task's base. What they do:
+- **`gpu_compat.h`**, the prelude the loader puts in front of every kernel file, so no include path is needed. It defines `GPU_BACKEND_CUDA` or `GPU_BACKEND_HIP`; `WARP_SIZE` (32 on CUDA, `__AMDGCN_WAVEFRONT_SIZE` on HIP); `shfl_down`, `shfl_xor` and `ballot` wrappers (`__shfl_down_sync(0xffffffff, …)` on CUDA, `__shfl_down(…)` on HIP); `LAUNCH_BOUNDS(n)`; and `h2f`/`f2h`, so fp16 values travel as raw 16-bit storage and no vendor fp16 header is needed. Kernels are declared `extern "C" __global__`, so both compilers keep their names.
+- **`gpu.py`**, pure ctypes and numpy, no CuPy:
+  - `backend() -> "cuda" | "hip"`, `load(paths) -> Module`, `Module.launch(name, grid, block, args, shared=0)`, `to_device(ndarray) -> DeviceArray` and `DeviceArray.to_host()`.
+  - **`cuda`:** NVRTC from the `nvidia-cuda-nvrtc-cu12` wheel in the venv, compiling for the device's own `sm_XX`, and the driver API from `nvcuda.dll` or `libcuda.so.1`.
+  - **`hip`:** `hiprtc` and `amdhip64` from the HIP SDK on Windows (found through `HIP_PATH`) or ROCm on Linux (`/opt/rocm/lib`), compiling for the device's own `gfx` target.
+  - **Picking one:** `RLMH_GPU_BACKEND=cuda|hip` picks it. Without it, `cuda` then `hip`: the first whose runtime loads and reports at least one device. Device 0 is used.
+  - **What it reads.** Detection only loads a runtime and counts devices. The one device property it reads is the architecture the compiler needs (compute capability, or the `gfx` target). It never reads device names, UUIDs, serials or driver versions.
 
 **The source layout**, `kernels/<op>/`:
 
 ```
 meta.json              {op, split, size, files}
 base/
-  kernels/*.cu         stubs: every kernel's signature and doc comment (layouts, dtypes, edge cases, tolerances), empty bodies
-  kernels.py           loads every .cu file with cupy.RawModule and exposes the Python functions the tests call.
-                       The function signatures are the contract; the launch configuration inside each is the model's to choose
-  tests/conftest.py    a session fixture that imports kernels.py and fails the session if no CUDA device is found
+  kernels/*.gpu.cu     stubs: every kernel's signature and doc comment (layouts, dtypes, edge cases, tolerances), empty bodies
+  gpu.py, gpu_compat.h the shared files above
+  kernels.py           loads kernels/*.gpu.cu through gpu.py and exposes the Python functions the tests call
+  launch.py            the launch configuration (grid, block, shared memory) per kernel and shape; the model's to change
+  tests/conftest.py    a session fixture that imports kernels.py and fails the session if gpu.py finds no device
   tests/test_smoke.py  a few visible cases at small, easy shapes
   REQUIREMENTS.md      the spec, written for the model: formats, layouts, edge cases and tolerances
-gold/kernels/*.cu, gold/kernels.py      the reference implementation
+gold/kernels/*.gpu.cu, gold/launch.py   the reference implementation
 hidden/tests/test_<op>_*.py             the graded suite: NumPy references, seeded random inputs and edge cases
-mutants/<k>/kernels/*.cu               four plausible wrong implementations (k = 1..4)
+mutants/<k>/kernels/*.gpu.cu           four plausible wrong implementations (k = 1..4)
 ```
 
-- **The hidden suite** covers: sizes that aren't a multiple of the block or tile size, n = 1, long rows, `-inf` masks, NaN, block tables with gaps and out-of-order pages, and shapes that cross tiles, so a missing `__syncthreads` shows. Each test states its tolerance: indices compare exactly, fp32 results to about 1e-5 relative, and fp16 results to about 1e-2.
-- **The four mutants** are the bugs a hurried kernel author makes, chosen per op: a missing bounds check, no max-subtraction, a wrong block-table index, a race (a missing `__syncthreads`), an off-by-one tile edge, or fp16 accumulation where fp32 is required.
+- **Test infrastructure.** `gpu.py`, `gpu_compat.h` and `kernels.py` are in grading's revert list (architecture §6.4), with `tests/`. The model changes only `kernels/*.gpu.cu` and `launch.py`.
+- **The hidden suite** covers: sizes that aren't a multiple of the block or tile size, n = 1, long rows, `-inf` masks, NaN, block tables with gaps and out-of-order pages, shapes that cross tiles, so a missing `__syncthreads` shows, and lane counts that catch a kernel assuming a warp of 32 (they fail it on a 64-wide device). Each test states its tolerance: indices compare exactly, fp32 results to about 1e-5 relative, and fp16 results to about 1e-2.
+- **The four mutants** are the bugs a hurried kernel author makes, chosen per op: a missing bounds check, no max-subtraction, a wrong block-table index, a race (a missing `__syncthreads`), an off-by-one tile edge, fp16 accumulation where fp32 is required, or a hard-coded warp of 32.
 - **The task text** is the same for every kernel task:
 
-  > This repository is part of the CUDA backend of an LLM inference engine. The kernels in kernels/*.cu have empty bodies, and kernels.py compiles them at run time with CuPy (NVRTC) and wraps them for Python. Implement them as REQUIREMENTS.md and the doc comments describe, including every edge case they name, and choose each launch configuration in kernels.py. Test on the GPU with the command below, and add tests of your own.
+  > This repository is part of the GPU backend of an LLM inference engine. The kernels in kernels/*.gpu.cu have empty bodies. They are written in one dialect that compiles for both CUDA and HIP: gpu_compat.h, which the loader puts in front of each file, maps the differences, and a warp isn't always 32 threads. Implement the kernels as REQUIREMENTS.md and the doc comments describe, including every edge case they name, and set each launch configuration in launch.py. Test on the GPU with the command below, and add tests of your own.
 
-- **`requires`.** Every kernel task line carries `"requires": ["cuda"]`. Kernel tasks validate one at a time, because there is one GPU, and step 2 runs them one at a time too.
-- **The venv.** One key for every kernel task, `kernel-` plus the first 12 hex digits of the requirements' sha256. The build installs `CUPY`, plus numpy and pytest pinned to their newest releases at least two weeks old on build day that have cp312 wheels for Windows and Linux, then freezes the result with `uv pip freeze`, so every CUDA toolkit wheel is pinned exactly: `{"python": "3.12", "requirements": [frozen lines], "import_root": "."}`. The venv check runs `cupy.cuda.runtime.getDeviceCount()` (at least 1) and compiles and runs a trivial `RawKernel`.
+- **`requires`.** Every kernel task line carries `"requires": ["gpu"]`. Kernel tasks validate one at a time, because there is one GPU, and step 2 runs them one at a time too.
+- **Where it was validated.** The manifest records `kernel_validated_on`, the backends the kernel track passed validation on: `["hip"]` on Rishi's PC. Validating again on a machine with an NVIDIA GPU, if one is available later, adds `"cuda"`. Step 2's estimate warns, but doesn't refuse, when it runs kernel tasks on a backend not in the list.
+- **The venv.** One key for every kernel task, `kernel-` plus the first 12 hex digits of the requirements' sha256. The build installs `NVRTC`, plus numpy and pytest pinned to their newest releases at least two weeks old on build day that have cp312 wheels for Windows and Linux, then freezes the result with `uv pip freeze`: `{"python": "3.12", "requirements": [frozen lines], "import_root": "."}`. The venv check imports `gpu.py`, prints `gpu.backend()`, and compiles and launches a one-line kernel.
 
 ### The `research` and `search` tracks (D-224)
 
@@ -226,7 +241,7 @@ mutants/<k>/kernels/*.cu               four plausible wrong implementations (k =
 
 All bytes, LF, never through text mode:
 - `tasks.jsonl` and `grades.jsonl`, as in §6.2 and §6.3.
-  - A read line is exactly `{"id", "kind": "read", "track", "split", "size": "R", "question", "input"}`. A repo line is exactly `{"id", "kind": "repo", "track", "split", "size", "task", "base", "venv" | "node_env", "test_hint"}`, plus `"requires": ["cuda"]` on kernel lines.
+  - A read line is exactly `{"id", "kind": "read", "track", "split", "size": "R", "question", "input"}`. A repo line is exactly `{"id", "kind": "repo", "track", "split", "size", "task", "base", "venv" | "node_env", "test_hint"}`, plus `"requires": ["gpu"]` on kernel lines.
   - Repo `task` is the record's `issue` (python S, M), the L template (python L), the web text, or the kernel text.
   - `test_hint` is `"{python} -m pytest -q"` for `python`, `"{python} -m pytest -q tests"` for `kernel`, and `"{pnpm} exec playwright test"` for `web`.
   - A read grade line is exactly `{"id", "grader": "answer", "gold", "grading", "pass_score"}`, where `grading` is the RLM task's own grading fields. A repo grade line is §6.3's `{"id", "grader": "tests", "runner": "pytest" | "playwright", "hidden", "f2p", "p2p", "files", "timeout_s"}`, with no other keys.
@@ -238,24 +253,24 @@ All bytes, LF, never through text mode:
 - `hidden/<id>.tar.gz`: the hidden files (python: the record's `tests.hidden`, and for L the scope files' texts from `ctx.texts`; web: the request specs and their `test/util/`; kernel: `hidden/tests/`), with the same normalisation, gzipped with `mtime=0`.
 - `ctx/<id>/context.txt`: `task.context.encode("utf-8")`.
 - `venvs/<key>.json`: `{"python", "requirements", "import_root"}` for python (D-185; `"src"` when the package's import directory is under `src/`) and kernel tasks. `nodeenvs/<key>.json` for web tasks.
-- `manifest.json`: `{"format": 1, "name", "created", "builder": {"repo": "RishiJain905/rlm", "commit", "dirty"}, "permission_mode": "bypass", "validated": true, "counts": {"<split>/<track>/<size>": n}, "tasks_sha256", "grades_sha256"}` (D-172 for the mode).
+- `manifest.json`: `{"format": 1, "name", "created", "builder": {"repo": "RishiJain905/rlm", "commit", "dirty"}, "permission_mode": "bypass", "validated": true, "kernel_validated_on": ["hip"], "counts": {"<split>/<track>/<size>": n}, "tasks_sha256", "grades_sha256"}` (D-172 for the mode).
 
 ### Native validation (D-183, D-184)
 
 For each candidate, on the PC, in its own temp folder under the build cache. The runs are exactly step 2's grading commands (architecture §6.4).
 
-- **pytest** (`python`, `kernel`): `<python> -c <grader.PYTEST_BOOT_TEMPLATE filled for the work folder> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<tmp>/junit.xml --tb=short -q <scope files>`, with the build venv. Test ids are `grader.pytest_key(file, classname, name)` from the JUnit report. Kernel runs go one at a time, on the GPU.
+- **pytest** (`python`, `kernel`): `<python> -c <grader.PYTEST_BOOT_TEMPLATE filled for the work folder> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<tmp>/junit.xml --tb=short -q <scope files>`, with the build venv. Test ids are `grader.pytest_key(file, classname, name)` from the JUnit report. Kernel runs go one at a time, on the GPU, with the backend `gpu.backend()` picks.
 - **playwright** (`web`): `pnpm install --offline --frozen-lockfile --store-dir <cache>\pnpm-store`, then `pnpm exec playwright test --reporter=junit --retries=0 <spec files>` with `PLAYWRIGHT_JUNIT_OUTPUT_NAME=<tmp>\junit.xml`, `IS_EVAL_PRODUCTION=1`, `PLAYWRIGHT_BROWSERS_PATH=<cache>\ms-playwright`, a free `EVAL_PROJECT_PORT` per job, and `CI` unset. Test ids follow D-184 exactly as step 2's `playwrightKey` builds them: the testcase's `classname` (the spec file relative to `testDir`, with `\` turned into `/`), `::`, then its `name`.
 
 The steps:
 1. **Base:** extract the base and restore the hidden files. Every f2p test must fail or be missing. A test that passes is p2p if it also passes on gold, and is dropped if not.
-2. **Gold, three times:** extract, apply the gold (python: `git apply` the gold patch, and remove `REQUIREMENTS.md` for L; web: replace `src/` with the pinned `src/`; kernel: copy `gold/kernels/` and `gold/kernels.py`), then restore the hidden files.
+2. **Gold, three times:** extract, apply the gold (python: `git apply` the gold patch, and remove `REQUIREMENTS.md` for L; web: replace `src/` with the pinned `src/`; kernel: copy `gold/kernels/` and `gold/launch.py`), then restore the hidden files.
    - Every f2p test must pass all three times, or the task is dropped. For a kernel task, a test that fails on gold is a bug in the task: fix the test or the gold and validate again.
    - A p2p test that doesn't pass all three times is removed from `p2p`, and the task is dropped if more than 10% of its p2p tests go.
    - `timeout_s = max(120, editdata.CAP_FACTOR × the slowest gold run)`.
-3. **Visible collection:** the base without the hidden files. python: `pytest --collect-only -q -p no:cacheprovider` must exit 0 or 5. kernel: `tests/test_smoke.py` must import `kernels.py`, compile the stubs through NVRTC and run (it may fail on the stubs). web: `pnpm exec playwright test --list` must exit 0 with an empty `test/`.
+3. **Visible collection:** the base without the hidden files. python: `pytest --collect-only -q -p no:cacheprovider` must exit 0 or 5. kernel: `tests/test_smoke.py` must import `kernels.py`, compile the stubs through `gpu.py` and run (it may fail on the stubs). web: `pnpm exec playwright test --list` must exit 0 with an empty `test/`.
 4. **python L only:** every stubbed function must be run by at least one surviving f2p test (`ctx.tests_of`), or the task is dropped.
-5. **kernel only, the mutant rule:** for each of the four mutants, run the hidden suite once. At least 3 of the 4 must fail at least one f2p test. If not, the tests are too weak: strengthen them and validate again. The gold also compiles under NVRTC with no warnings.
+5. **kernel only, the mutant rule:** for each of the four mutants, run the hidden suite once. At least 3 of the 4 must fail at least one f2p test. If not, the tests are too weak: strengthen them and validate again. The gold also compiles with no warnings on the validating backend.
 6. **Leaks:**
    - python and kernel: `editdata.leaks(task_text, gold_patch, f2p + p2p)` must be empty, and for kernel the same holds for `REQUIREMENTS.md` and the stubs' doc comments;
    - web: no spec title or spec file name appears in the task text or `FEATURES.md` (Web-Bench's requests name class names and texts on purpose, so gold-line overlap is allowed);
@@ -266,14 +281,14 @@ The results go to the build cache, one line per candidate: `{id, track, source, 
 ## Tasks
 
 1. [ ] Set row 1 of the v1 table in progress.md to `in progress`. Rishi OK'd on 2026-11-02 that this step creates its script, its test and its summary in the RLM repo on `dev_rishi`. Anything else there, and every commit or push there, still needs his OK (CLAUDE.md, "The RLM repo is outside this repo").
-2. [ ] Check that `git -C F:\Personal\RLM\RLM check-ignore -v private/seeds/harness-eval-v1-read.json` prints `private/`. The set folder and build cache are outside the repo, so they need no rule. Check the starting state: `nvidia-smi`, Node, pnpm, the four research files, and that `closed_book()` and `open_book()` aren't `None`.
+2. [ ] Check that `git -C F:\Personal\RLM\RLM check-ignore -v private/seeds/harness-eval-v1-read.json` prints `private/`. The set folder and build cache are outside the repo, so they need no rule. Check the starting state: the GPU runtime, Node, pnpm, the four research files, and that `closed_book()` and `open_book()` aren't `None`.
 3. [ ] Write the plan constants, the CLI and the outside-the-repo guard.
 4. [ ] Write the read builder (research and search), the list and type guards, `pass_score`, and the files it writes. Test with `--only research,search --no-validate`.
 5. [ ] Write the python S and M candidate readers over the three indexes, with the Python, licence, level and file-count filters and the repository-to-split assignment.
 6. [ ] Write the `edit_large` builder (above). Print each repository's L clusters (modules, functions, body lines, hidden files) before validating anything.
-7. [ ] Write the python venv resolver and freezer, with the Python-version ladder and the Docker fallback, and the kernel venv with its GPU check.
+7. [ ] Write the python venv resolver and freezer, with the Python-version ladder and the Docker fallback, and the kernel venv with its `gpu.backend()` check.
 8. [ ] Write the web builder: the clone at the pin, the project filter, the standalone copy, the lockfile, the pnpm store and Chromium. Print the projects each split would use, in order, before validating anything.
-9. [ ] Write the ten kernel tasks in `kernels/<op>/`, as the table and layout above say. Write the gold first, then the hidden suite against NumPy, then the four mutants, then the stubs, `kernels.py` and `REQUIREMENTS.md`. Then write the reader that turns them into candidates.
+9. [ ] Copy `gpu.py` and `gpu_compat.h` from `--harness`'s `app/test/fixtures/evalset/gpu/` into `kernels/_shared/`. If step 2 hasn't written them yet, build the other tracks first and come back. Check them on this PC's GPU with a one-line kernel. A fix goes into step 2's files in rlm-harness, with Rishi's OK, never only into the copy. Then write the ten kernel tasks in `kernels/<op>/`, as the table and layout above say. Write the gold first, then the hidden suite against NumPy, then the four mutants, then the stubs, `kernels.py`, `launch.py` and `REQUIREMENTS.md`. Then write the reader that turns them into candidates.
 10. [ ] Write native validation exactly as above. Run it with `--jobs` processes (default 4), each in its own temp folder under the build cache; kernel tasks take one slot at a time, never two at once. On Windows, remove folders with read-only bits cleared (as v0's `_rmtree` does).
 11. [ ] Write the assembly, the manifest and `check`. `check` lists every problem:
     - an id in one of `tasks.jsonl`/`grades.jsonl` but not the other;
@@ -282,7 +297,8 @@ The results go to the build cache, one line per candidate: `{id, track, source, 
     - an id outside `^harness-eval-v1-(python|web|kernel|research|search)-(R|S|M|L)-\d{2}$`;
     - a tar member that `grader.safe_path` refuses, or any `.git` or `node_modules`;
     - a hidden file present in a base tar, or a kernel gold or mutant file in any tar;
-    - a kernel line without `"requires": ["cuda"]`, or another line with `requires`;
+    - a kernel line without `"requires": ["gpu"]`, or another line with `requires`;
+    - a kernel base whose `gpu.py` or `gpu_compat.h` differs from the shared copy;
     - a `gold` string or test name in `tasks.jsonl`;
     - counts that differ from the plan.
 12. [ ] Write `tests/test_harness_evalset.py` and make it pass.
@@ -293,7 +309,7 @@ The results go to the build cache, one line per candidate: `{id, track, source, 
 
 ## Tests
 
-`tests/test_harness_evalset.py` (`python -m unittest -v tests.test_harness_evalset`). The fixtures are built in a temp folder: a fake data root holding a tiny edit index and snapshot tars, a tiny fake Web-Bench tree, and a tiny kernel source folder, all made by the test. Cases that run pytest need `uv` and skip without it; cases that run Playwright need Node, pnpm and an installed Chromium, and cases that run CUDA need a GPU and the kernel venv; each skips without them. No case reads `D:`, clones from the network, makes a model call, or reads a key.
+`tests/test_harness_evalset.py` (`python -m unittest -v tests.test_harness_evalset`). The fixtures are built in a temp folder: a fake data root holding a tiny edit index and snapshot tars, a tiny fake Web-Bench tree, and a tiny kernel source folder, all made by the test. Cases that run pytest need `uv` and skip without it; cases that run Playwright need Node, pnpm and an installed Chromium, and cases that run kernels need a GPU and the kernel venv; each skips without them. No case reads `D:`, clones from the network, makes a model call, or reads a key.
 
 | Case | Asserts |
 |---|---|
@@ -308,8 +324,9 @@ The results go to the build cache, one line per candidate: `{id, track, source, 
 | `test_web_standalone` | From the fake Web-Bench tree: `package.json` has no `workspace:` spec and points `@web-bench/test-util` at `vendor/test-util`; `LICENSE.md` and `NOTICE` are present; `src/` equals `src-init/`; no `src-init/`, `test/` or `tasks.jsonl` in the base tar; `FEATURES.md` holds requests 1 to 6 for M, and the S text holds requests 1 to 3; the hidden tar holds exactly the request specs and `test/util/` |
 | `test_web_filter` | A project with a `node scripts/dev.js` start script, a `sqlite3` dependency, an outside-path require, `stable: false`, or a variant name is skipped with its reason |
 | `test_web_validation` (Node, pnpm, Chromium) | A fake project whose spec checks a heading: the base fails it, the gold passes it three times, and the task is kept with Playwright test ids |
-| `test_kernel_layout` | From the fake kernel folder: the base tar holds the `.cu` stubs, `kernels.py`, `conftest.py`, the smoke tests and `REQUIREMENTS.md`, and no hidden test, gold or mutant file. The task text equals the pinned template, and the line carries `"requires": ["cuda"]` |
-| `test_kernel_validation` (GPU) | A tiny `vec_add` kernel through `RawModule`: the stub fails every f2p test, the gold passes three times, and 3 of 4 mutants are caught, so it is kept. A suite that catches only 2 is reported as too weak |
+| `test_kernel_layout` | From the fake kernel folder: the base tar holds the `.gpu.cu` stubs, `kernels.py`, `launch.py`, `conftest.py`, the smoke tests, `REQUIREMENTS.md`, and `gpu.py` and `gpu_compat.h` byte-equal to the shared copies; no hidden test, gold or mutant file. The task text equals the pinned template, and the line carries `"requires": ["gpu"]` |
+| `test_gpu_pick` | With fake runtime loaders and no GPU: `RLMH_GPU_BACKEND` picks the backend; without it `cuda` comes first, a runtime that fails to load or reports 0 devices falls through to `hip`, and none gives a clear error. The shim's ctypes calls stay inside an allowlist with no name, UUID, serial or driver-version query |
+| `test_kernel_validation` (GPU) | A tiny `vec_add` kernel through `gpu.py`, on whichever backend loads: the stub fails every f2p test, the gold passes three times, and 3 of 4 mutants are caught, so it is kept. A suite that catches only 2 is reported as too weak |
 | `test_tar_deterministic` | Two builds give byte-identical tars, with no `.git`, no `node_modules` and no hidden file in a base tar |
 | `test_validation_keeps_good` (uv) | A tiny package with a stubbed function: the base fails its f2p test, gold passes it three times, and the task is kept with `timeout_s >= 120` |
 | `test_validation_drops_bad` (uv) | Gold that fails one f2p test is dropped with the reason. A flaky p2p (fails on the second run) is removed from `p2p`. Losing more than 10% of p2p drops the task |
@@ -331,7 +348,7 @@ The results go to the build cache, one line per candidate: `{id, track, source, 
 ## Out of scope
 
 - `rlmh eval` itself (step 2). Running any model on the set (step 5).
-- CPU kernels in C, Triton and PyTorch extensions (see the last two bullets below). Running the kernel track on a machine without an NVIDIA GPU. Go, Rust and other languages from training's data. Web-Bench projects that need their own server or a database.
+- CPU kernels in C, Triton and PyTorch extensions (see the last two bullets below). Running the kernel track on a machine with neither a CUDA nor a HIP GPU, or on macOS. Go, Rust and other languages from training's data. Web-Bench projects that need their own server or a database.
 - Partial-credit rewards for training. Any change under `rlm_rl/`. Running `closed_book.py` or `open_book.py`.
 - Linux and macOS validation. The set is validated on Windows, where steps 5, 7, 8 and 10 run it. A run elsewhere needs the folder copied, and a check there first.
 
@@ -342,8 +359,8 @@ The results go to the build cache, one line per candidate: `{id, track, source, 
   - the manifest hashes;
   - `permission_mode: "bypass"`;
   - the build cache's `pnpm-store\` and `ms-playwright\`, which step 2's environment setup can copy instead of downloading again;
-  - the PC's GPU, which the kernel tasks need while step 5 runs.
-- Step 2's tests can rely on the exact §6 layout: `track` on every task line, `"grader": "answer"` and `pass_score` on read grade lines, `runner` on repo grade lines, `requires: ["cuda"]` on kernel task lines (run one at a time), `import_root` in the venv JSON, `nodeenvs/`, pytest node ids from JUnit xunit1, and Playwright ids as `test/<file>::<title>`.
+  - the PC's GPU and HIP SDK, which the kernel tasks need while step 5 runs.
+- Step 2's tests can rely on the exact §6 layout: `track` on every task line, `"grader": "answer"` and `pass_score` on read grade lines, `runner` on repo grade lines, `requires: ["gpu"]` on kernel task lines (run one at a time), `kernel_validated_on` in the manifest, the `gpu.py` API, `import_root` in the venv JSON, `nodeenvs/`, pytest node ids from JUnit xunit1, and Playwright ids as `test/<file>::<title>`.
 - progress.md v1 row 1: set `review`, with the date, the counts per cell, the drops by reason, environments by kind and method, and the manifest's two hashes. Add a log line. Note anything later steps should know: a repository whose tests need longer than 300-second cells (the default profile's `cell_timeout_s`), a web project whose specs run long, or a kernel op that was swapped for a spare.
 
 ## If a decision goes the other way
@@ -353,5 +370,6 @@ The results go to the build cache, one line per candidate: `{id, track, source, 
 - **D-172, a narrower permission mode for evals.** Only `manifest.permission_mode` changes. Validation here never runs the model.
 - **D-222, web tasks written for this set instead of Web-Bench.** Web-Bench has been public since 2025, so a model may have seen it. Written tasks would follow the kernel track's layout (gold, hidden Playwright specs, mutants), with the same standalone pnpm project shape.
 - **D-224, AA-LCR instead of `research_test`.** Its answers need a judge model, so the `answer` grader would need a judge and every eval would spend on it. That is a step 2 change too.
-- **D-223, CPU kernels in C instead of CUDA.** The same ops in C11, compiled by `ziglang==0.16.0` from PyPI (wheels for Windows, macOS and Linux; 0.17.0 has no Windows wheel) through a `conftest.py` that builds a shared library and loads it with ctypes. That runs on any machine and in step 2's CI, with no GPU, but it tests no GPU skills: no thread blocks, shared memory or synchronisation.
-- **Rejected for the CUDA track:** Triton, because it has no official Windows build; PyTorch's `load_inline`, because it needs nvcc and MSVC on the PC. CuPy's `RawModule` needs neither.
+- **D-223, CUDA only, through CuPy.** The previous version: `cupy-cuda12x[ctk]==14.2.0`, kernels in plain CUDA loaded with `cupy.RawModule`, `requires: ["cuda"]`. Simpler, but it runs only on NVIDIA GPUs, so it can't be validated on Rishi's PC.
+- **D-223, CPU kernels in C.** The same ops in C11, compiled by `ziglang==0.16.0` from PyPI (wheels for Windows, macOS and Linux; 0.17.0 has no Windows wheel) through a `conftest.py` that builds a shared library and loads it with ctypes. That runs on any machine and in step 2's CI, but it tests no GPU skills: no thread blocks, shared memory or synchronisation.
+- **Rejected for the GPU track:** Triton, because it has no official Windows build; PyTorch's `load_inline`, because it needs nvcc (or hipcc) and MSVC on the PC. The runtime compilers need neither.

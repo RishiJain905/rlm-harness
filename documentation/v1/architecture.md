@@ -99,6 +99,7 @@ rlm-harness/
   app/test/
     eval/*.test.ts                   2
     fixtures/evalset/                2          a tiny set: two read, two Python, one kernel and one web task, with hidden tests
+    fixtures/evalset/gpu/            2          gpu.py and gpu_compat.h, the GPU shim every kernel task carries; step 1 copies these bytes (D-223)
     tune/*.test.ts                   6 +9
     interface/conversation.test.ts   4
     interface/tune.test.tsx          9
@@ -246,7 +247,7 @@ Step 1 writes it and step 2 reads it. The model never sees anything but the task
 ```
 <set>/
   manifest.json     {format: 1, name, created, builder: {repo: "RishiJain905/rlm", commit, dirty}, permission_mode,
-                     validated, counts: {"<split>/<track>/<size>": n}, tasks_sha256, grades_sha256}
+                     validated, kernel_validated_on: ["hip"|"cuda", ...], counts: {"<split>/<track>/<size>": n}, tasks_sha256, grades_sha256}
   tasks.jsonl       what rlmh is given, one task a line, never gold (§6.2)
   grades.jsonl      how each task is graded (§6.3); gold and test lists live only here
   ctx/<id>/...      read-mode inputs, written as bytes
@@ -262,7 +263,7 @@ The set has five tracks (D-176, S-48). Each split holds half of every cell:
 |---|---|---|---|---|---|---|---|
 | `python` | repo | training's held-out edit tasks (bug, feature, real PR, spec, multi-bug) | 6 | 6 | 4 | | pytest in a uv venv |
 | `web` | repo | Web-Bench projects (ByteDance, Apache-2.0): build a site from its first 3, 6 or 12 feature requests (D-222) | 4 | 4 | 2 | | Playwright in Chromium |
-| `kernel` | repo | CUDA kernels for an LLM inference engine, written for this set; needs an NVIDIA GPU (D-223) | 4 | 4 | 2 | | pytest against NumPy, compiled at run time by CuPy's NVRTC |
+| `kernel` | repo | GPU kernels for an LLM inference engine, written for this set in one CUDA/HIP dialect; run on an NVIDIA or AMD GPU (D-223) | 4 | 4 | 2 | | pytest against NumPy; compiled at run time by NVRTC or hiprtc |
 | `research` | read | training's `research_test`: multi-hop and list questions over 330K to 610K characters (D-224) | | | | 8 | `answer` grader |
 | `search` | read | training's `callgraph_heldout` and `needle_heldout` | | | | 4 | `answer` grader |
 
@@ -271,11 +272,11 @@ The set has five tracks (D-176, S-48). Each split holds half of every cell:
 ```
 read: {"id", "kind": "read", "track": "research"|"search", "split": "tune"|"heldout", "size": "R", "question", "input": ["ctx/<id>/<file>", ...]}
 repo: {"id", "kind": "repo", "track": "python"|"kernel"|"web", "split", "size": "S"|"M"|"L", "task", "base": "repos/<id>.tar",
-       "venv": "<key>" (python, kernel) | "node_env": "<key>" (web), "test_hint", "requires": ["cuda"] (kernel only)}
+       "venv": "<key>" (python, kernel) | "node_env": "<key>" (web), "test_hint", "requires": ["gpu"] (kernel only)}
 ```
 
 - **Ids** are `<set>-<track>-<size>-<nn>`, and reveal nothing about content.
-- **`test_hint`** is `{python} -m pytest -q <paths>` for `python` and `kernel` (a kernel task's `kernels.py` loads its `.cu` files with `cupy.RawModule`), and `{pnpm} exec playwright test` for `web`. `{python}` becomes the absolute path of the task's venv interpreter and `{pnpm}` the dev machine's pinned pnpm, so the run needs no global packages.
+- **`test_hint`** is `{python} -m pytest -q <paths>` for `python` and `kernel` (a kernel task's `kernels.py` loads its kernel source through the task's `gpu.py` shim, for CUDA or HIP), and `{pnpm} exec playwright test` for `web`. `{python}` becomes the absolute path of the task's venv interpreter and `{pnpm}` the dev machine's pinned pnpm, so the run needs no global packages.
 - **Paths** are relative to the set folder.
 
 ### 6.3 `grades.jsonl`
@@ -302,10 +303,10 @@ The read grader ports `rlm_rl/reward.py`'s `score_answer` for the types int, flo
    - `test_hint` is filled.
 
    Web tasks run one at a time until their grading ends, because the model's own test runs serve the site on Web-Bench's default port. Kernel tasks run one at a time too, because they share one GPU. The two groups can overlap.
-   - **GPU check.** When the selection holds a task with `requires: ["cuda"]`, pre-flight runs `nvidia-smi`, and env prep has the kernel venv's Python count devices and compile a trivial `RawKernel`. Without a GPU, `rlmh eval` exits 2 and names those tasks, so nothing is spent.
+   - **GPU check.** Only when the selection holds a task with `requires: ["gpu"]`, env prep has the kernel venv's Python run a one-line probe through `gpu.py`. It prints only the backend (`cuda` or `hip`) and a device count: never a device name, UUID, serial or driver version, and never through `nvidia-smi`. The shim reads the GPU's compile target (`sm_XX` or `gfx…`) inside the process, because the compiler needs it, and never prints or records it. `--gpu cuda|hip|none` overrides it (`none` leaves the kernel tasks out). With no GPU, `rlmh eval` exits 2 and names those tasks, so nothing is spent. The backend reaches runs and grading as `RLMH_GPU_BACKEND`, and `eval.json` records `gpu_backend` and nothing else about the GPU. Plain `rlmh` runs never probe.
 3. **Permission mode.** The run uses the manifest's `permission_mode`, `bypass` for this set (D-172), printed in the estimate. Without the model's own shell, a coding agent can't run tests.
 4. **Grading, after `run.finished`:**
-   - revert any change to a test path (`tests/`, `test/`, `test_*.py`, `*_test.py`, `*.spec.*`, `conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `pyproject.toml`'s pytest table, `playwright.config.*`, `package.json`, `pnpm-lock.yaml`, `vendor/`), and set `test_tamper` if there was one;
+   - revert any change to a test path (`tests/`, `test/`, `test_*.py`, `*_test.py`, `*.spec.*`, `conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `pyproject.toml`'s pytest table, `playwright.config.*`, `package.json`, `pnpm-lock.yaml`, `vendor/`; for kernel copies also `gpu.py`, `gpu_compat.h` and `kernels.py`), and set `test_tamper` if there was one;
    - extract the hidden tests;
    - **pytest** (`python`, `kernel`): run `{python} -c <PYTEST_BOOT> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<grade dir>/junit.xml --tb=short -q <files>` with `timeout_s` and key-like variables stripped (`PYTEST_BOOT` is training's, from `rlm_rl/grader.py`). When the venv's `import_root` is `"src"`, a `.pth` file points the venv at the work copy's `src/` for that run only;
    - **playwright** (`web`): run `{pnpm} exec playwright test --reporter=junit --retries=0 <files>` with `PLAYWRIGHT_JUNIT_OUTPUT_NAME=<grade dir>/junit.xml`, `EVAL_PROJECT_PORT` set to a free port the runner picks, `CI` unset (Web-Bench's config retries under it), `IS_EVAL_PRODUCTION=1` (Web-Bench's own grading timeouts), `PLAYWRIGHT_BROWSERS_PATH`, `timeout_s` and key-like variables stripped. A test id is the JUnit `classname` (with `/` separators) `::` its `name`;
@@ -314,10 +315,10 @@ The read grader ports `rlm_rl/reward.py`'s `score_answer` for the types int, flo
 6. **Clean up.** The work copy is removed after grading, unless `--keep`.
 
 **Environments are made once, before the first run that needs them:**
-- venvs per key, `<home>/eval/venvs/<key>/`, with `uv venv --python <python>` and `uv pip install -r`. Kernel venvs pin `cupy-cuda12x[ctk]` (the `ctk` extra brings the pip CUDA toolkit, NVRTC included, so no nvcc or MSVC is needed), `numpy` and `pytest`, and need only the NVIDIA driver;
+- venvs per key, `<home>/eval/venvs/<key>/`, with `uv venv --python <python>` and `uv pip install -r`. Kernel venvs pin `numpy`, `pytest` and the pip NVRTC wheel (`nvidia-cuda-nvrtc-cu12`). The `cuda` backend needs only the NVIDIA driver; the `hip` backend needs the AMD HIP SDK on Windows or ROCm on Linux, installed by the machine's owner;
 - for web tasks, `node` 22 or later and the pinned `pnpm` must be on PATH. `pnpm fetch` fills `<home>/eval/pnpm-store/` from each project's lockfile, and `pnpm exec playwright install chromium` puts one Chromium in `<home>/eval/ms-playwright/`. `rlmh eval` sets `PLAYWRIGHT_BROWSERS_PATH` and `IS_EVAL_PRODUCTION=1` in the engine's environment, so the model's own Playwright runs find that browser.
 
-That is a developer action that touches PyPI (the CUDA toolkit wheels are large), the npm registry and Playwright's browser download, and the estimate says so.
+That is a developer action that touches PyPI, the npm registry and Playwright's browser download, and the estimate says so.
 
 ### 6.5 Commands and output
 

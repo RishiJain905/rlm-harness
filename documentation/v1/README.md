@@ -1,6 +1,6 @@
 # v1 build docs
 
-This folder lets a thread pick up one v1 step and build it without asking anyone. v1 is the Harness² release, and it ships as 1.0.0 (S-45). It makes the `default` profile measurably better, ships the better version, and lets users improve it on their own work. Alongside that, it adds follow-ups and compaction. The design is the v1 alignment doc ([Claude Doc](https://claude.ai/artifact/LVWSoM6bRFk6kSoWZ1r71Z)), which Rishi agreed on 2026-11-02 with one change: the eval suite is mostly agentic coding, because that's what he and his users run `rlmh` for (S-46): Python repos, website building and CUDA kernels for an LLM engine, plus research questions (S-48).
+This folder lets a thread pick up one v1 step and build it without asking anyone. v1 is the Harness² release, and it ships as 1.0.0 (S-45). It makes the `default` profile measurably better, ships the better version, and lets users improve it on their own work. Alongside that, it adds follow-ups and compaction. The design is the v1 alignment doc ([Claude Doc](https://claude.ai/artifact/LVWSoM6bRFk6kSoWZ1r71Z)), which Rishi agreed on 2026-11-02 with one change: the eval suite is mostly agentic coding, because that's what he and his users run `rlmh` for (S-46): Python repos, website building and GPU kernels (CUDA or HIP) for an LLM engine, plus research questions (S-48).
 
 ## How a thread uses it
 
@@ -44,7 +44,7 @@ flowchart LR
 ```
 
 **In parallel:**
-- Steps 1, 2 and 3 have no dependencies, so separate threads can build them at the same time.
+- Steps 1, 2 and 3 have no dependencies, so separate threads can build them at the same time. Step 1's kernel track copies step 2's GPU shim, so it comes last within step 1 if step 2 isn't there yet.
 - Step 4 follows 3, and step 6 follows 2; they can run alongside step 5.
 - Step 9 can run alongside steps 7 and 8.
 

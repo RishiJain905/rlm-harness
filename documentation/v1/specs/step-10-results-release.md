@@ -61,7 +61,7 @@ Read these whole, before doing anything:
 6. **`training-v4`** on the held-out split from step 5, as context, not as a contender.
 7. **Integrity.** Infra errors and reruns, `test_tamper` and `leak_suspect` counts per run.
 8. **Spend.** Each step's estimate, cap and real cost, and the total against $30.
-9. **Limits.** One replicate; 24 held-out tasks; Web-Bench has been public since 2025, so a model may have seen its projects (D-222); kernel tasks need an NVIDIA GPU, so the set runs in full only on such a machine (D-223); the editor sessions ran on the tuning model (D-174).
+9. **Limits.** One replicate; 24 held-out tasks; Web-Bench has been public since 2025, so a model may have seen its projects (D-222); kernel tasks ran on the PC's AMD GPU through HIP, so a CUDA run of the same set may differ (D-223); the editor sessions ran on the tuning model (D-174).
 
 ## Tasks
 

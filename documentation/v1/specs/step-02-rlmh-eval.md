@@ -7,11 +7,11 @@
 | **Depends on** | none (the set format is pinned in architecture.md §6, so this step and step 1 build in parallel) |
 | **Unblocks** | 5, 6, and through 6, 7 and 9 |
 | **Parallel with** | 1, 3, 4 |
-| **Decisions it uses** | S-19, S-44, S-46, S-48; D-169 (set folder), D-170 (pass, `pass_score`, `f2p_share`, one replicate), D-172 (`bypass` in throwaway copies), D-176 (five tracks, uv venvs and Node), D-179 (ledger), D-184 (test ids), D-189 (the `answer` grader, `text` included), D-222 (web tasks from Web-Bench, Playwright), D-223 (CUDA kernels through CuPy, `requires: cuda`), D-224 (research, `pass_score` 0.8 for lists), D-225 (`track`). From v0: D-15, D-17, D-26, D-28, D-40, D-62, D-121, D-133, D-165. New here: D-188 to D-193, D-196 to D-198 |
+| **Decisions it uses** | S-19, S-44, S-46, S-48; D-169 (set folder), D-170 (pass, `pass_score`, `f2p_share`, one replicate), D-172 (`bypass` in throwaway copies), D-176 (five tracks, uv venvs and Node), D-179 (ledger), D-184 (test ids), D-189 (the `answer` grader, `text` included), D-222 (web tasks from Web-Bench, Playwright), D-223 (vendor-neutral GPU kernels through `gpu.py`, `requires: gpu`), D-224 (research, `pass_score` 0.8 for lists), D-225 (`track`). From v0: D-15, D-17, D-26, D-28, D-40, D-62, D-121, D-133, D-165. New here: D-188 to D-193, D-196 to D-198 |
 
 ## Goal
 
-`rlmh eval SET` runs one eval set (step 1's folder) through `rlmh`, then grades every run. Read answers (the `research` and `search` tracks) are graded with training's own scoring rules. Repo tasks are graded by their hidden tests, in a throwaway work copy: pytest for the `python` and `kernel` tracks (kernel tasks are CUDA kernels launched through CuPy, so they need an NVIDIA GPU), and Playwright in Chromium for the `web` track. The command writes a report, totalled by track and size, that steps 5, 7, 8 and 10 compare.
+`rlmh eval SET` runs one eval set (step 1's folder) through `rlmh`, then grades every run. Read answers (the `research` and `search` tracks) are graded with training's own scoring rules. Repo tasks are graded by their hidden tests, in a throwaway work copy: pytest for the `python` and `kernel` tracks (kernel tasks are GPU kernels in one CUDA/HIP dialect, run on whichever of an NVIDIA or AMD GPU the machine has), and Playwright in Chromium for the `web` track. The command writes a report, totalled by track and size, that steps 5, 7, 8 and 10 compare.
 
 Before anything is spent, it prints a priced estimate. It spends only with `--go`, and stops at `--max-usd`. `--rerun OUT` reruns the tasks a transient infra error stopped. `eval compare` pairs two outputs task by task, and `eval ledger` keeps the running total against the $30 cap (S-44).
 
@@ -70,7 +70,7 @@ Read these whole, before writing code:
   - `README.md`, its section on running the evaluation.
 - Playwright's JUnit reporter: the "JUnit reporter" section of playwright.dev's reporters page. If that host is blocked, read `packages/playwright/src/reporters/junit.ts` from `microsoft/playwright` at the version the fixture pins, through git as above.
 - pnpm's `fetch` and `install --offline` pages (pnpm.io). If blocked, read `pnpm help fetch` and `pnpm help install` from the pinned pnpm.
-- CuPy's `RawModule` and `RawKernel` pages, and its install page for `cupy-cuda12x[ctk]` (the `ctk` extra pulls NVRTC and the CUDA runtime from pip, so no system CUDA toolkit is needed). In a cloud container, read them from `cupy` 14.2.0's sdist on PyPI if docs.cupy.dev is blocked.
+- For `gpu.py` (task 3), the C APIs it calls through `ctypes`: NVIDIA's NVRTC guide (`nvrtcCreateProgram`, `nvrtcCompileProgram`, `nvrtcGetPTX`) and the CUDA driver API's module and launch calls (`cuInit`, `cuDeviceGetCount`, `cuCtxCreate`, `cuModuleLoadData`, `cuModuleGetFunction`, `cuMemAlloc`, `cuMemcpyHtoD`/`DtoH`, `cuLaunchKernel`); AMD's HIP RTC guide (`hiprtcCreateProgram`, `hiprtcCompileProgram`, `hiprtcGetCode`) and HIP's module API (`hipGetDeviceCount`, `hipModuleLoadData`, `hipModuleGetFunction`, `hipModuleLaunchKernel`), plus HIP's porting notes on warp size and shuffles; and the file list of the `nvidia-cuda-nvrtc-cu12` wheel on PyPI (where its DLL or `.so` sits). If a docs host is blocked, read the headers shipped in that wheel and in ROCm's public `hip` repository through git.
 
 ## Starting state
 
@@ -87,7 +87,7 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
 |---|---|
 | `app/src/eval/set.ts` | `loadSet(dir): EvalSet`, the types `Manifest`, `EvalTask`, `Grade`, `Track`, and `selectTasks(set, {split, only, sample, seed}): EvalTask[]` |
 | `app/src/eval/tar.ts` | `readTar(bytes): TarEntry[]` and `extractTar(bytes, dest)`, a small ustar reader (D-188). `.tar.gz` goes through `Bun.gunzipSync` first |
-| `app/src/eval/work.ts` | `makeWorkCopy(set, task, dir): Promise<string>`; `ensureVenv(set, key, {home, uv}): Promise<Venv>` (`{python, purelib}`); `findNodeTools(env): NodeTools` (`{node, pnpm, nodeVersion, pnpmVersion}` or the missing tool); `ensureNodeEnv(set, key, {home, tools}): Promise<void>`; `installNodeModules(copy, {home, tools})`; `ensureBrowser(playwrightVersion, {home, tools, copy})`; `findGpu(env)` and `checkCuda(venv)` (D-223); `writeSrcPth(venv, copy)`, `removeSrcPth(venv)`; `fillHint(hint, {python?, pnpm?}): string`; `revertTestPaths(dir): Promise<string[]>` |
+| `app/src/eval/work.ts` | `makeWorkCopy(set, task, dir): Promise<string>`; `ensureVenv(set, key, {home, uv}): Promise<Venv>` (`{python, purelib}`); `findNodeTools(env): NodeTools` (`{node, pnpm, nodeVersion, pnpmVersion}` or the missing tool); `ensureNodeEnv(set, key, {home, tools}): Promise<void>`; `installNodeModules(copy, {home, tools})`; `ensureBrowser(playwrightVersion, {home, tools, copy})`; `probeGpu(venv, shimDir, {backend?}): Promise<{backend, devices}>` and `parseProbe(line)` (D-223); `writeSrcPth(venv, copy)`, `removeSrcPth(venv)`; `fillHint(hint, {python?, pnpm?}): string`; `revertTestPaths(dir): Promise<string[]>` |
 | `app/src/eval/graders.ts` | `scoreAnswer(answer, gold, grading): {score, exact, components}` (training's `score_answer`, `text` included); `readPassed(score, grade): boolean`; `gradeRepo(task, grade, {dir, python?, tools?, set, logDir, port?}): Promise<RepoGrade>`, which picks the runner from `grade.runner` |
 | `app/src/eval/junit.ts` | `parseJunit(xml, keyOf): Map<string, "passed"\|"failed"\|"error"\|"skipped">`; `pytestKey(file, classname, name, base)`, ports of `_junit_cases`, `_merge` and `pytest_key`; `playwrightKey(classname, name)` (D-184) |
 | `app/src/eval/estimate.ts` | `REFERENCE` (architecture §6.6's table), `referenceFrom(runLogs, set)`, `ceilingFor(limits, agentApi)`, `estimate(tasks, {root, sub, catalog, refs, profile, home}): Estimate` |
@@ -102,6 +102,7 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
 | `app/test/fixtures/evalset/` | The fixture set's text files and plain source trees (below) |
 | `app/test/eval/fixture.ts` | `buildFixtureSet(tmp): string`: packs the trees into tars with a test-only ustar writer, writes `manifest.json` with the real hashes, and returns the set folder. No binary is committed |
 | `app/test/eval/reward-vectors.json`, `junit-vectors.json` | Expected values produced by running training's functions (task 4) |
+| `app/test/fixtures/evalset/gpu/gpu.py`, `gpu_compat.h` | The shared GPU shim and dialect header (task 3). Step 1 copies these bytes into every kernel task's base |
 | `app/test/eval/prepare-web.sh` | Fills a pnpm store and a Playwright browser folder for the web fixture (bash; CI's Linux leg and Git Bash) |
 | `.github/workflows/ci.yml` (+) | The fixture environment steps (task 11) |
 
@@ -115,9 +116,10 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
   - a hidden `hidden-src/fx-python-S-0n/tests/test_fix.py`, whose test is in `f2p`.
 
   Both run under pytest with only the standard library.
-- **`fx-kernel-S-01`** (tune, track `kernel`, `requires: ["cuda"]`): `kernel.cu` with a stub `extern "C" __global__ void fx_add(const float *a, const float *b, float *out, int n)` that writes zeros, and a `conftest.py` that loads it with `cupy.RawModule(code=<file text>)` and launches it with a fixed block size. A visible `tests/test_smoke.py` (compiles and launches with `n = 0`, in `p2p`), and a hidden `tests/test_add.py` (`n = 1000`, several blocks, against NumPy's `a + b` within `1e-6`, in `f2p`). Venv `fx-kernel`.
+- **`fx-kernel-S-01`** (tune, track `kernel`, `requires: ["gpu"]`): `kernels.cu` in the common dialect, `#include "gpu_compat.h"`, with a stub `GPU_KERNEL void fx_add(const float *a, const float *b, float *out, int n)` that writes zeros; the shared `gpu.py` and `gpu_compat.h`; and a `kernels.py` that compiles `kernels.cu` through `gpu.py` and exposes `add(a, b) -> numpy.ndarray`, launched with a fixed block size. A visible `tests/test_smoke.py` (compiles and launches with `n = 0`, in `p2p`), and a hidden `tests/test_add.py` (`n = 1000`, several blocks, against NumPy's `a + b` within `1e-6`, in `f2p`). Venv `fx-kernel`.
 - **`fx-web-S-01`** (heldout, track `web`): a static `index.html` whose `<h1>` reads `Helo`, a dependency-free `server.js` (Node's `http`, serving the folder on `EVAL_PROJECT_PORT`, default 3211), and a `playwright.config.js` modelled on Web-Bench's (`testDir: './test'`, `webServer: node server.js`, the same port rule, `retries: 0`). `package.json` depends only on `@playwright/test` at the pinned version, and its `pnpm-lock.yaml` is committed as text. The hidden `test/task-1.spec.js` expects `<h1>` to read `Hello` (in `f2p`). Node env `fx-web`.
-- **`venvs/fx.json`** is `{"python": "3.12", "requirements": ["pytest"], "import_root": "."}`, **`venvs/fx-src.json`** the same with `"import_root": "src"`, and **`venvs/fx-kernel.json`** `{"python": "3.12", "requirements": ["cupy-cuda12x[ctk]==14.2.0", "numpy", "pytest"], "import_root": "."}` (numpy pinned to one exact version). Tests build the first two for real with `UV_OFFLINE=1`, from uv's cache. The kernel venv is built only on a machine with a GPU, by the hand check. Nothing reaches PyPI during a test.
+- **`venvs/fx.json`** is `{"python": "3.12", "requirements": ["pytest"], "import_root": "."}`, **`venvs/fx-src.json`** the same with `"import_root": "src"`, and **`venvs/fx-kernel.json`** `{"python": "3.12", "requirements": ["numpy==<pin>", "pytest", "nvidia-cuda-nvrtc-cu12==<pin>; sys_platform != 'darwin'"], "import_root": "."}`. Tests build the first two for real with `UV_OFFLINE=1`, from uv's cache. The kernel venv is built only on a machine with a GPU, by the hand check.
+- **The shared shim**, `app/test/fixtures/evalset/gpu/gpu.py` and `gpu_compat.h` (task 3). `buildFixtureSet` copies both into the kernel task's tree, and step 1 copies the same bytes into every kernel task's base. Nothing reaches PyPI during a test.
 - **`nodeenvs/fx-web.json`** is `{"node": "22", "pnpm": "<pin>", "playwright": "<pin>"}`.
 
 ## Tasks
@@ -130,7 +132,7 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
    - `track` is one of `python`, `web`, `kernel`, `research`, `search`, and its `kind` follows: `repo` for the first three, `read` for the other two;
    - `split` is `tune` or `heldout`; `size` is `R` for read and `S`, `M` or `L` for repo;
    - every path is relative, inside the set folder, and exists;
-   - `requires`, when present, is a list whose only allowed value is `"cuda"`; every `kernel` task carries `["cuda"]`, and no other track carries it;
+   - `requires`, when present, is a list whose only allowed value is `"gpu"`; every `kernel` task carries `["gpu"]`, and no other track carries it;
    - `python` and `kernel` tasks name a `venv` key with `venvs/<key>.json`, holding `python`, `requirements` and `import_root` (`"."` or `"src"`; with `"src"`, the repo tar has a `src/` folder);
    - `web` tasks name a `node_env` key with `nodeenvs/<key>.json`, holding `node`, `pnpm` and `playwright`. Every node env in the set pins the same `pnpm` and the same `playwright`, so one pnpm and one Chromium serve the whole set;
    - `permission_mode` is one of v0's three modes;
@@ -160,8 +162,15 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
      - otherwise runs `uv venv --python <python> <dir>`, then `uv pip install --python <interpreter> -r <tmp>/requirements.txt`, through `findUv` and setup's env rules. It then asks the interpreter for `sysconfig.get_path("purelib")` and writes the marker with the hash and `purelib`;
      - the interpreter is `Scripts/python.exe` on Windows and `bin/python` elsewhere.
 
-     Kernel venvs pin `cupy-cuda12x[ctk]==14.2.0`, `numpy` and `pytest`, and the task's `conftest.py` compiles its `.cu` through `cupy.RawModule` (NVRTC from the pip CUDA toolkit). Nothing else is installed.
-   - **`checkCuda(venv)`** (D-223), after a kernel venv is made, runs the venv's interpreter on a short script: `cupy.cuda.runtime.getDeviceCount()` must be at least 1, and a trivial `RawKernel` must compile and launch. It returns the device name, or the error. **`findGpu(env)`** runs `nvidia-smi -L` (no shell, a 10 s limit) and returns the GPU names, or why there are none.
+     Kernel venvs pin `numpy`, `pytest` and the `nvidia-cuda-nvrtc-cu12` wheel (skipped on macOS by its marker). No CuPy or other GPU library, and nothing from AMD comes through pip.
+   - **`gpu.py`** (D-223), the shared shim, standard library only, pure `ctypes`:
+     - **`cuda` backend:** NVRTC from the `nvidia-cuda-nvrtc-cu12` wheel in the running venv, and the driver's `nvcuda.dll` (Windows) or `libcuda.so.1` (Linux).
+     - **`hip` backend:** `hiprtc` and `amdhip64` from the AMD HIP SDK on Windows, found through `HIP_PATH` (globbing `amdhip64*.dll` and `hiprtc*.dll` in its `bin`), or from ROCm on Linux (`ROCM_PATH`, else `/opt/rocm/lib`).
+     - **Choice.** `RLMH_GPU_BACKEND` forces one. Otherwise `cuda` when its driver loads and counts a device, then `hip`, else none.
+     - **API.** `compile(source, name) -> Module` (with `gpu_compat.h` on the include path) and `Module.launch(grid, block, args)` over device buffers made from NumPy arrays, so a task's `kernels.py` never names a vendor.
+     - **`python gpu.py --probe [--backend cuda|hip]`** prints exactly one line, `backend=<cuda|hip|none> devices=<n>`, and nothing else: never a device name, UUID, serial or driver version. A library that is missing or fails to load means 0 devices for that backend, never a traceback.
+   - **`gpu_compat.h`** makes one kernel source compile under NVRTC and hiprtc: `GPU_KERNEL` (`extern "C" __global__`), `GPU_WARP_SIZE` (32 on NVIDIA, the device's `warpSize` on AMD), and `gpu_shfl_down`/`gpu_shfl_xor` over CUDA's `_sync` shuffles and HIP's.
+   - **`probeGpu(venv, shimDir, {backend?})`** runs the kernel venv's interpreter on `gpu.py --probe` (no shell, a 30 s limit, `stripKeys` env), with `shimDir` holding `gpu.py` and `gpu_compat.h` extracted from the first selected kernel task's tar. **`parseProbe`** accepts only the one-line shape above; anything else is a probe error, shown without the output's other lines.
    - **`findNodeTools(env)`** looks up `node` and `pnpm` on `PATH` (on Windows also `pnpm.cmd`, run through `cmd /c` as `findEngine` does), runs `--version` on each, and returns their paths and versions, or which one is missing.
    - **`ensureNodeEnv`** (D-222):
      - refuses a `node` below the major version in `nodeenvs/<key>.json`, and a `pnpm` whose version isn't exactly the pinned one, with the fix in the message (for pnpm, `npm install -g pnpm@<pin>` or `corepack`);
@@ -185,7 +194,7 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
    - **`playwrightKey(classname, name)`** is our own rule (D-184): the testcase's `classname` (the spec file, relative to the config's `testDir`) with `\` turned into `/`, then `::`, then its `name` exactly as the report prints it (describe titles joined by ` › `). Step 1 writes its `f2p` and `p2p` ids with the same rule from the same reporter, so check the rule against a real report from `fx-web-S-01` before you rely on it.
    - **The vectors.** Write about 90 `(answer, gold, grading)` inputs, about 30 of them `text` (exact, alias, dates in several forms, numbers with and without units, country names, generic answers, accents, articles, dashes and slashes, the casefold cases above, `ignore` words), and about 25 `(file, classname, name, base)` inputs into a scratch script outside both repos. Run training's own functions over them in the RLM repo's venv, and commit only the inputs and the outputs as `reward-vectors.json` and `junit-vectors.json`, with a header naming the RLM commit. **Never type an expected value by hand** (CLAUDE.md). `playwrightKey` has no training twin, so its tests use small hand-written reports.
 5. [ ] **`gradeRepo`**, run in the work copy after `run.finished`:
-   1. **`revertTestPaths`.** For every path `git diff --name-only -z base` and `git ls-files -z --others --exclude-standard` report, where `isTestPath` or `isTestConfig` holds, or `setup.cfg`/`pyproject.toml`/`tox.ini` changed a line inside a test section (`SECTIONED`): restore it from `base`, or delete it if it is new. For web copies the test paths also include architecture §6.4's `test/`, `*.spec.*`, `playwright.config.*`, `package.json`, `pnpm-lock.yaml` and `vendor/` (step 1 puts Web-Bench's `test-util` there). It returns the paths, and `test_tamper = paths.length > 0` (D-190).
+   1. **`revertTestPaths`.** For every path `git diff --name-only -z base` and `git ls-files -z --others --exclude-standard` report, where `isTestPath` or `isTestConfig` holds, or `setup.cfg`/`pyproject.toml`/`tox.ini` changed a line inside a test section (`SECTIONED`): restore it from `base`, or delete it if it is new. For web copies the test paths also include architecture §6.4's `test/`, `*.spec.*`, `playwright.config.*`, `package.json`, `pnpm-lock.yaml` and `vendor/` (step 1 puts Web-Bench's `test-util` there), and for kernel copies `gpu.py`, `gpu_compat.h` and `kernels.py`. It returns the paths, and `test_tamper = paths.length > 0` (D-190).
    2. **Hidden tests.** Extract `hidden/<id>.tar.gz` over the copy.
    3. **Run the task's runner.** The grade dir is `<out>/grade-logs/<id>/`. For both runners, cwd is the copy, the env has been through `stripKeys` (so a key in the app's environment never reaches code the model wrote), the process tree is killed after `timeout_s`, and stdout and stderr go to `<grade dir>/output.txt`.
       - **`pytest`** (`python`, `kernel`), with the command and flags step 1 validates its tasks with: `<python> -c <PYTEST_BOOT for this copy> -p no:cacheprovider -o junit_family=xunit1 --junitxml=<grade dir>/junit.xml --tb=short -q <grade.files>`.
@@ -198,10 +207,10 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
    5. **`leak_suspect`** is true when the record's `messages` (read from `<out>/runs.jsonl` by `run_id`) contain the set folder's path (either separator, case-folded on Windows and macOS), `hidden/`, the function name of any pytest f2p id, or the title of any Playwright f2p id of 20 characters or more. It never changes `resolved`.
 6. [ ] **`runner.ts`.** `runEval({set, tasks, root, sub, profile, callFormat, jobs, out, maxUsd, keep, logDir}, deps)`:
    - **`logDir`** is where the runs' `runs.jsonl` goes. It defaults to `out`; `/tune` (step 9) passes `<home>/runs/tune-<id>/`, so `/runs` lists its runs.
-   - **`deps`** holds `{session?, uv?, tools?, checkCuda?, storeDir?, browsersDir?, now?}`, so tests can inject a recording uv, fake node tools, a stub GPU probe, a pre-filled pnpm store and browser folder, and a fixed clock. Without them, the store is `<home>/eval/pnpm-store` and the browsers `<home>/eval/ms-playwright`.
+   - **`deps`** holds `{session?, uv?, tools?, probeGpu?, storeDir?, browsersDir?, now?}`, so tests can inject a recording uv, fake node tools, a stub GPU probe, a pre-filled pnpm store and browser folder, and a fixed clock. Without them, the store is `<home>/eval/pnpm-store` and the browsers `<home>/eval/ms-playwright`.
    - **The eval id** is `<manifest.name>-<split>-<YYYYMMDD-HHMMSS>`. It is also the `batch` name and the work folder (D-192).
-   - **Preparation.** Before the first run, make every venv the chosen tasks need, and, when any is a web task, run `ensureNodeEnv` for each node env and `ensureBrowser` once. When any task `requires` `cuda`, run `checkCuda` on each kernel venv. If it fails, nothing has been spent yet: `runEval` stops with a `CudaMissing` error naming those tasks, and the CLI exits 2.
-   - **The engine's environment.** When `runEval` opens its own `Session`, it passes `evalEngineEnv(home)`: `PLAYWRIGHT_BROWSERS_PATH=<home>/eval/ms-playwright` and `IS_EVAL_PRODUCTION=1`. Neither name matches `KEY_LIKE` or the engine's own list (D-29, D-133), so both reach the worker, and the model's own Playwright runs find the browser and use Web-Bench's grading timeouts. A test checks that they arrive and that a key-like variable still doesn't.
+   - **Preparation.** Before the first run, make every venv the chosen tasks need, and, when any is a web task, run `ensureNodeEnv` for each node env and `ensureBrowser` once. When any task `requires` `gpu`, and only then, run `probeGpu` with the `--gpu` choice (task 10). Nothing else in `rlmh` probes a GPU, and ordinary runs never do. If the probe finds 0 devices, nothing has been spent yet: `runEval` stops with a `GpuMissing` error naming those tasks, and the CLI exits 2 and suggests `--gpu none`.
+   - **The engine's environment.** When `runEval` opens its own `Session`, it passes `evalEngineEnv(home)`: `PLAYWRIGHT_BROWSERS_PATH=<home>/eval/ms-playwright`, `IS_EVAL_PRODUCTION=1` and, when a backend was chosen, `RLMH_GPU_BACKEND=<cuda|hip>`, which grading's pytest gets too. None of these names matches `KEY_LIKE` or the engine's own list (D-29, D-133), so both reach the worker, and the model's own Playwright runs find the browser and use Web-Bench's grading timeouts. A test checks that they arrive and that a key-like variable still doesn't.
    - **The pool.** One `Session` for the whole eval, with `approvals` that always deny and `interactive: false`. For each task, `start({..., tag: task.id, batch, logDir})`:
      - read tasks pass `inputs` resolved against the set and `permissionMode: "accept-edits"`;
      - repo tasks pass `repoPath`, the filled `testHint` and `permissionMode: manifest.permission_mode` (D-172, D-191). A web task's copy has its `node_modules` installed before `start`.
@@ -211,7 +220,7 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
    - **Grading** happens per task, right after its `run.finished`. Each grade line is appended to `<out>/grades.jsonl` with architecture §6.5's keys, `track` included. The work copy is removed afterwards unless `keep`.
    - **The cap** (D-193). A `CostCap` sums `usage.cost_usd` of every `call.end` on the session's bus, which is OpenRouter's billed cost when it reports one (D-121). Once the total passes `maxUsd`, no task starts and every running run is cancelled. Their lines get `infra_kind: "capped"`, and `eval.json` gets `capped: true`.
    - **Ctrl-C** works as in batch: the first cancels the running runs, the second quits. Exit 130.
-   - **A missing tool or a failed install** (uv, node, pnpm, the browser, a CuPy venv) before a task starts gives that task `infra_kind: "host_bug"` and its log path, and the eval goes on with the others.
+   - **A missing tool or a failed install** (uv, node, pnpm, the browser, a kernel venv) before a task starts gives that task `infra_kind: "host_bug"` and its log path, and the eval goes on with the others.
 7. [ ] **`estimate.ts`.**
    - **Reference tokens.** With `--tokens-from` run logs, it uses the mean `usage.root` and `usage.sub` (input, output and cache read) by `track/size` (D-225), matching records to the set's tasks by `tag`. A stratum with no records falls back to `REFERENCE` for its size.
    - **The profile's ceiling** (D-198). Each figure is capped at what the run's mode limits allow, from `engine.info`'s entry for `--profile` (read limits for read tasks, repo limits for repo tasks), with `harness_smoke.py`'s `ceiling_tokens` formula:
@@ -223,11 +232,11 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
    - **Price.** Root tokens at the root model's catalog price and sub tokens at the sub model's, with 80% of root input as cache reads when `price.cache_read > 0`.
    - **The cap.** The default `maxUsd` is twice the total.
    - **Unpriced models.** A model the catalog doesn't price (`costOf` gives 0) is printed as "unpriced", and `--go` then requires an explicit `--max-usd`.
-   - **Downloads.** The estimate also lists what preparation would fetch, since that touches the network: venvs it would create (PyPI), node envs whose lockfile isn't in the store yet (the npm registry), the Chromium download when `<home>/eval/ms-playwright/.rlmh-<version>` is missing, and, for a kernel venv not yet made, the CuPy and CUDA toolkit wheels (`cupy-cuda12x` and the `nvidia-*` wheels its `ctk` extra pulls, about 1 GB), named as such. It also prints the tracks and sizes it plans, as a small table.
+   - **Downloads.** The estimate also lists what preparation would fetch, since that touches the network: venvs it would create (PyPI), node envs whose lockfile isn't in the store yet (the npm registry), the Chromium download when `<home>/eval/ms-playwright/.rlmh-<version>` is missing, and, for a kernel venv not yet made, the `nvidia-cuda-nvrtc-cu12` wheel (tens of MB; nothing for AMD, whose HIP SDK or ROCm must already be installed). It warns when the chosen backend is missing from the manifest's `kernel_validated_on`, and notes the kernel tasks `--gpu none` leaves out. It also prints the tracks and sizes it plans, as a small table.
 8. [ ] **`report.ts`.**
    - **`readGrades(out)`** reads `<out>/grades.jsonl` and, when `<out>/rerun/grades.jsonl` exists, puts each rerun line in place of the original with the same id. `report`, `compare` and the tuner read grades only through it.
    - **`buildReport`** totals by `split`, `track`, `kind` and `size` (D-225), plus a total row: `n`, `passed`, `pass_rate`, `mean_score`, `mean_f2p_share` (repo only), `mean_turns`, `mean_subcalls`, `mean_compactions`, `cost_usd`, `mean_cost_usd`, `cache_hit` (cache reads over input), `mean_wall_s`, `infra`, `test_tamper` and `leak_suspect`. Infra runs count as not passed.
-   - **`compare`** pairs the ids present in both outputs and prints how many were in one only, so step 5's all-split run compares with step 8's held-out run: `both`, `a_only`, `b_only`, `neither`; `mcnemarExact(a_only, b_only)`; the pass-rate difference; the mean `f2p_share` difference; and the cost ratio. It also gives the pass counts per track.
+   - **`compare`** pairs the ids present in both outputs and prints how many were in one only, so step 5's all-split run compares with step 8's held-out run: `both`, `a_only`, `b_only`, `neither`; `mcnemarExact(a_only, b_only)`; the pass-rate difference; the mean `f2p_share` difference; and the cost ratio. It also gives the pass counts per track, and warns when the two outputs' `gpu_backend` differ, since then their kernel rows ran on different hardware.
    - **`mcnemarExact(b, c)`** is two-sided: `min(1, 2 · Σ_{k=0}^{min(b,c)} C(b+c, k) / 2^(b+c))`, and 1 when `b + c = 0`.
    - **Every rendered comparison** ends with D-170's line: one replicate per task, so a held-out difference of a few tasks is within noise.
 9. [ ] **`ledger.ts`.** On every `--go`, after the last grade, even when capped or interrupted, `runEval` appends one JSON line to `<home>/eval/ledger.jsonl`: `{date, what: "eval", set, split, root, profile, runs, cost_usd, out}`. `readLedger` skips torn lines, like `RunLog.records`.
@@ -235,17 +244,18 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
     ```
     rlmh eval SET [--split tune|heldout|all] [--only ID,...] [--sample K --seed S] [--root P/M] [--sub P/M]
                   [--profile NAME] [--call-format F] [--jobs N] [--out DIR] [--tokens-from RUNS.jsonl]...
-                  [--go] [--max-usd X] [--keep] [--json] [--verbose]
+                  [--gpu cuda|hip|none] [--go] [--max-usd X] [--keep] [--json] [--verbose]
     rlmh eval SET --rerun OUT [--jobs N] [--go] [--max-usd X] [--keep] [--json]
     rlmh eval report OUT
     rlmh eval compare OUT_A OUT_B
     rlmh eval ledger
     ```
     - **Defaults:** `--split all`, `--jobs 4`, `--out <home>/eval/out/<eval id>/`.
-    - **Pre-flight.** Before an engine starts, check the flags, `loadSet`, the selection, the models through `modelFlags` and `buildRunParams`, and that `--out` doesn't exist or is empty. When the selection holds a web task, also check `findNodeTools` against the set's node envs. When it holds a task that `requires` `cuda`, run `findGpu`: with no GPU, exit 2, list those tasks, and say that `--only` can leave them out. Any problem returns 2, and a missing or wrong tool is named with its fix.
+    - **Pre-flight.** Before an engine starts, check the flags, `loadSet`, the selection, the models through `modelFlags` and `buildRunParams`, and that `--out` doesn't exist or is empty. When the selection holds a web task, also check `findNodeTools` against the set's node envs. On macOS a selection with a task that `requires` `gpu` exits 2 here, since neither backend exists there. Elsewhere the GPU is probed during preparation (task 6), once the kernel venv exists.
+    - **`--gpu`** (D-223). `cuda` or `hip` makes the probe check only that backend. `none` leaves every `requires: gpu` task out of the selection and prints a note naming them. Without the flag, the probe's own choice stands. With 0 devices, `rlmh eval` exits 2 before any run, naming the kernel tasks and `--gpu none`. Any problem returns 2, and a missing or wrong tool is named with its fix.
     - **Without `--go`:** print the estimate, write nothing, start no run, exit 0. The engine starts only for `engine.info`, whose profile limits the ceiling needs.
-    - **With `--go`:** write `eval.json` first (architecture §6.5's keys, plus `call_format`, `jobs`, and `harness_commit` when `git rev-parse HEAD` works in a source checkout), then run, then write `report.json` and `report.md`.
-    - **`--rerun OUT`** (D-197) takes the split, models, profile and call format from `OUT/eval.json`, and reruns once the tasks in `OUT/grades.jsonl` whose `infra_kind` is transient: `rate_limit`, `server`, `timeout`, `network`, `worker`, `runlog` or `other`. Never `auth`, `no_key`, `bad_request`, `context_window`, `unknown_model`, `cancelled`, `capped`, `workspace` or `host_bug`: those are setup errors or the run's own limits, and a rerun only spends again.
+    - **With `--go`:** write `eval.json` first (architecture §6.5's keys, plus `call_format`, `jobs`, `gpu_backend` (`"cuda"`, `"hip"` or `null`, and nothing else about the GPU), and `harness_commit` when `git rev-parse HEAD` works in a source checkout), then run, then write `report.json` and `report.md`.
+    - **`--rerun OUT`** (D-197) takes the split, models, profile, call format and `gpu_backend` from `OUT/eval.json`, and reruns once the tasks in `OUT/grades.jsonl` whose `infra_kind` is transient: `rate_limit`, `server`, `timeout`, `network`, `worker`, `runlog` or `other`. Never `auth`, `no_key`, `bad_request`, `context_window`, `unknown_model`, `cancelled`, `capped`, `workspace` or `host_bug`: those are setup errors or the run's own limits, and a rerun only spends again.
       - The output is `OUT/rerun/`, an ordinary output folder whose `eval.json` adds `rerun_of`. It ends by rewriting `OUT/report.json` and `OUT/report.md` through `readGrades`.
       - Exit 2 before anything runs when `OUT/rerun/` is not empty (one rerun only), when the set's hashes or the profile's `profile_hash` differ from `OUT/eval.json`, or when no task qualifies.
       - Without `--go` it estimates the rerun, like any eval, and every `--go` adds its own ledger line.
@@ -259,12 +269,12 @@ Every module opens with its cache note (`KV cache: none` for all of them). Code 
       - installs it in a scratch copy and runs `pnpm exec playwright install --with-deps chromium` into `$PLAYWRIGHT_BROWSERS_PATH`.
 
       The job sets both variables under `$RUNNER_TEMP`. The web fixture tests run only when both point at filled folders and `node` and the pinned `pnpm` are on PATH. Elsewhere, macOS and Windows CI included, they skip with a printed reason.
-    - **No GPU in CI.** GitHub's runners have none, so the kernel fixture's grading test skips there with a reason. CI still covers kernel tasks in set loading, the `requires` check (a fake `nvidia-smi` script on a test `PATH`, once listing a GPU and once failing) and the kernel group in the pool.
+    - **No GPU in CI.** GitHub's runners have none, so the kernel fixture's grading test skips there with a reason. CI still covers kernel tasks in set loading, `parseProbe`, `--gpu`, the no-GPU exit and the kernel group, through a stub `probeGpu`. It also runs the real `gpu.py --probe` with the engine's Python on all three OSes, which must print `backend=none devices=0`.
     - The new steps keep `zizmor` clean: no `${{ }}` in `run:`, `persist-credentials: false` where a step checks out, nothing cached across jobs.
     - Only test code reads `RLMH_TEST_PNPM_STORE` and `PLAYWRIGHT_BROWSERS_PATH`, and passes them as `deps.storeDir` and `deps.browsersDir`. The CLI never reads a test variable.
 12. [ ] **Docs.**
     - CLAUDE.md's commands table gains `rlmh eval` (estimate, `--go`, `compare`), the one-test command for `test/eval`, and how to run the web fixture tests locally (`prepare-web.sh` with the two variables set).
-    - architecture.md already lists `eval/runner.ts` and `eval/tar.ts` (§2), the five tracks, both runners, the node environments, `--tokens-from`, `--rerun`, the default `--out`, the `answer` grader with `text` and `pass_score`, and `eval.json`'s keys (§6), and the ceiling cap (§6.6). Check them against what you built and fix any drift, the CuPy and pnpm pins included. v0/architecture.md §7 gains the `engine.info` fields. Log each change in progress.md.
+    - architecture.md already lists `eval/runner.ts` and `eval/tar.ts` (§2), the five tracks, both runners, the node environments, `--tokens-from`, `--rerun`, the default `--out`, the `answer` grader with `text` and `pass_score`, and `eval.json`'s keys (§6), and the ceiling cap (§6.6). Check them against what you built and fix any drift, the NVRTC wheel, numpy and pnpm pins included. v0/architecture.md §7 gains the `engine.info` fields. Log each change in progress.md.
 
 ## Tests
 
@@ -272,7 +282,7 @@ Every test is offline. The fixture set is built into a temp folder by `buildFixt
 
 - **`app/test/eval/set.test.ts`**:
   - the fixture loads, all six tasks across the five tracks;
-  - each of these is reported, all in one call: a changed byte (hash mismatch), a duplicate id, a task without a grade, a path with `..`, `pass_score: 0`, `kind: "repo"` with `size: "R"`, track `web` with kind `read`, a missing venv file, a web task without its `nodeenvs/<key>.json`, a `runner: "pytest"` on a web task, two node envs that pin different `playwright` versions, a kernel task without `requires`, and `requires: ["rocm"]`;
+  - each of these is reported, all in one call: a changed byte (hash mismatch), a duplicate id, a task without a grade, a path with `..`, `pass_score: 0`, `kind: "repo"` with `size: "R"`, track `web` with kind `read`, a missing venv file, a web task without its `nodeenvs/<key>.json`, a `runner: "pytest"` on a web task, two node envs that pin different `playwright` versions, a kernel task without `requires`, and `requires: ["cuda"]`;
   - `text` grading with `aliases` loads;
   - `selectTasks` with `--split`, `--only`, and `--sample 3 --seed a` twice gives the same three ids, from three different `track/size` strata.
 - **`app/test/eval/tar.test.ts`**:
@@ -301,12 +311,12 @@ Every test is offline. The fixture set is built into a temp folder by `buildFixt
     - a 1-second `timeout_s` on a sleeping test gives `grade_error`;
     - `fx-python-S-02` (the `src` layout) imports the copy's `calc` through the `.pth`, and after grading the file is gone;
     - a key-like variable set in the test's env is absent inside the test (the hidden test prints `os.environ` keys to a file).
-  - **Kernel** (skips without CUDA): the stub fails `test_add`; with a real body written into `kernel.cu`, it compiles through `cupy.RawModule` and the task resolves; a `conftest.py` edited to skip the launch is reverted and flagged.
+  - **Kernel** (skips when the real probe finds no GPU): the stub fails `test_add`; with a real body written into `kernels.cu`, it compiles through `gpu.py` and the task resolves; an edited `kernels.py` or `gpu.py` is reverted and flagged.
   - **Web:** the base page fails `task-1.spec.js`; with `Hello` written, the task resolves; a new `test/mine.spec.js` is deleted and an edited `playwright.config.js` is restored, both flagged; grading uses its own port while another server holds 3211.
 - **`app/test/eval/report.test.ts`**:
   - `mcnemarExact(0,5) = 0.0625`, `(1,6) = 0.125`, `(3,3) = 1`, `(0,0) = 1`;
   - `buildReport` totals on a hand-made `grades.jsonl`, with a row per track;
-  - `compare` counts, its per-track counts and the D-170 line;
+  - `compare` counts, its per-track counts, the D-170 line, and the warning when `gpu_backend` differs;
   - `renderReport` is stable (a snapshot);
   - `readGrades` puts a rerun line in place of the original.
 - **`app/test/eval/estimate.test.ts`**:
@@ -314,7 +324,7 @@ Every test is offline. The fixture set is built into a temp folder by `buildFixt
   - `--tokens-from` means replace the reference by `track/size` stratum, and a stratum without records falls back by size;
   - an unpriced model makes `--go` need `--max-usd`;
   - `ceilingFor` with `training-v4`'s repo limits equals a hand calculation and caps an M/L reference figure, and with `agent_api` on the sub figure is not capped;
-  - the downloads list names a missing venv, an unfetched lockfile, a missing browser and a kernel venv's CuPy and CUDA wheels, and names nothing once all four exist.
+  - the downloads list names a missing venv, an unfetched lockfile, a missing browser and a kernel venv's NVRTC wheel, and names nothing once all four exist.
 - **`app/test/eval/cap.test.ts`**: `CostCap` on a bare `Bus`: `call.end` events summing past the cap call the cancel function for each running run exactly once and stop new starts.
 - **`app/test/cli/eval.test.ts`**, the real engine with `fake/scripted` and `RLMH_FAKE_SCRIPT`:
   - **The script.** One root entry, a tool call whose code branches on the task: in `fx-python-S-01` it writes the fix; in `fx-python-S-02` it changes nothing; in read mode it submits `len(context.splitlines())`. Then it calls `submit('done')` or the count.
@@ -325,19 +335,21 @@ Every test is offline. The fixture set is built into a temp folder by `buildFixt
     - the ledger has one line with `cost_usd: 0`;
     - no work copy is left;
     - exit 0.
-  - **The engine's environment.** A read task whose cell submits `os.environ.get('PLAYWRIGHT_BROWSERS_PATH')`, `os.environ.get('IS_EVAL_PRODUCTION')` and whether a `FAKE_TEST_KEY` set in the test's env is present shows the first two and not the key.
+  - **The engine's environment.** A read task whose cell submits `os.environ.get('PLAYWRIGHT_BROWSERS_PATH')`, `os.environ.get('IS_EVAL_PRODUCTION')` and whether a `FAKE_TEST_KEY` set in the test's env is present shows the first two and not the key. With a stub probe choosing `hip`, `RLMH_GPU_BACKEND` arrives as `hip`, and `eval.json` holds `gpu_backend: "hip"` and no other GPU field.
   - **Without `--go`:** the estimate prints, no `out` folder appears, exit 0.
-  - **Exit 2** before any engine starts for: a bad set, `--out` not empty, `--sample` without `--seed`, a selection with `fx-web-S-01` while `PATH` holds no `pnpm`, and a selection with `fx-kernel-S-01` while a fake `nvidia-smi` on `PATH` fails (the message names the task and `--only`). With a fake `nvidia-smi` that lists a GPU, pre-flight passes, and without `--go` the estimate prints.
-  - **`--jobs 2` with two `src`-layout tasks on one venv** never runs them at once, **`--jobs 4` with two web tasks** never overlaps them from `start` to the end of grading, the same holds for two kernel tasks, and one web task and one kernel task do overlap (a stub `start`, a stub grader and a stub `checkCuda` record it).
+  - **Exit 2** before any engine starts for: a bad set, `--out` not empty, `--sample` without `--seed`, a selection with `fx-web-S-01` while `PATH` holds no `pnpm`, and, on macOS only, a selection with `fx-kernel-S-01`.
+  - **The GPU choice**, with a stub `probeGpu`: `backend=none devices=0` makes `--go` exit 2 before any run, naming `fx-kernel-S-01` and `--gpu none`; `--gpu none` leaves it out with a note and exits 0; `--gpu hip` passes `hip` to the probe; a probe line in any other shape is a probe error; and the estimate warns when the manifest's `kernel_validated_on` lacks the chosen backend.
+  - **`gpu.py --probe`**, the real shim under the engine's Python, prints exactly `backend=none devices=0` on a machine without a GPU (every CI runner).
+  - **`--jobs 2` with two `src`-layout tasks on one venv** never runs them at once, **`--jobs 4` with two web tasks** never overlaps them from `start` to the end of grading, the same holds for two kernel tasks, and one web task and one kernel task do overlap (a stub `start`, a stub grader and a stub `probeGpu` record it).
   - **`--rerun`.** After a `--go`, the test rewrites two lines of `OUT/grades.jsonl` to `infra_kind` `server` and `auth` (fake errors are counted per run, so they can't pick one task). `--rerun OUT --go` reruns only the `server` task into `OUT/rerun/`, `OUT/report.json` counts its rerun line, a second `--rerun` exits 2, and the ledger has two lines.
   - **`eval compare`** of two outputs prints the pair counts; **`eval ledger`** prints the total.
-  - **The whole fixture**, when task 11's web conditions hold: `--go` on every task but `fx-kernel-S-01` grades the web task too (unresolved, since the script changes nothing there) and exits 0. The kernel task joins it only on a machine with CUDA (the hand check).
+  - **The whole fixture**, when task 11's web conditions hold: `--go` on every task but `fx-kernel-S-01` grades the web task too (unresolved, since the script changes nothing there) and exits 0. The kernel task joins it only on a machine with a GPU (the hand check).
 
 ## Done when
 
 - The full verify gate passes (`bash scripts/verify.sh` or `scripts\verify.ps1`), including the new `test/eval` and `test/cli/eval.test.ts`.
 - CI is green on macOS, Windows and Linux, and its log shows the web fixture tests running on Linux and the kernel grading test skipped for want of a GPU. The tar, git and pytest tests are the Windows-sensitive ones.
-- **GPU hand check, on Rishi's PC** (it has an NVIDIA GPU): `rlmh eval <fixture> --only fx-kernel-S-01 --root fake/scripted --go` builds the CuPy venv, passes `checkCuda`, and grades the task (unresolved, since the script changes nothing); then `bun test test/eval/grade.test.ts` runs the kernel cases instead of skipping them. Record the GPU name, driver and CuPy version in the progress log.
+- **GPU hand check, on Rishi's PC** (an AMD GPU, so the `hip` backend through the AMD HIP SDK; installing the SDK is a change outside this repo, so ask Rishi first): `rlmh eval <fixture> --only fx-kernel-S-01 --root fake/scripted --go` probes `backend=hip devices=<n>`, and grades the task (unresolved, since the script changes nothing); then `bun test test/eval/grade.test.ts` runs the kernel cases instead of skipping them. Record only the backend and the device count in the progress log, never a device name or driver version.
 - On Rishi's PC, in `app/`: `..\.bun\bin\bun.exe test test/eval test/cli/eval.test.ts` passes. Once Node 22 and the pinned pnpm are installed (with his OK), and `prepare-web.sh` has filled the two folders from Git Bash, the web fixture tests pass there too. Playwright on Windows is the one runner CI doesn't cover.
 - In a temp home, `rlmh eval <a fixture set built by buildFixtureSet> --root fake/scripted` prints an estimate of $0.00, its downloads list and its track table, and exits 0.
 - The two vectors files carry the RLM commit they were produced from, and the progress log names the scratch script's command, never its outputs typed in. It also records the pnpm and Playwright pins.
@@ -346,7 +358,7 @@ Every test is offline. The fixture set is built into a temp folder by `buildFixt
 
 - Building the real set (step 1), and running it on a real model (step 5).
 - Repeats per task, and runners other than pytest and Playwright.
-- Kernels on anything but NVIDIA GPUs through CuPy (no ROCm, Metal or CPU fallback), and speed scoring: a kernel task passes on correctness alone (D-223).
+- GPUs other than NVIDIA (CUDA) and AMD (HIP), so no Metal and no CPU fallback; and speed scoring: a kernel task passes on correctness alone (D-223).
 - The tuner and `/tune` (steps 6 and 9), which call `runEval`, `loadSet`, `selectTasks` and `compare`.
 - Any sandbox. `bypass` is not one (CLAUDE.md), so evals run only on a developer's machine, in throwaway copies.
 
@@ -355,7 +367,7 @@ Every test is offline. The fixture set is built into a temp folder by `buildFixt
 - **Steps 5, 7, 8 and 10 rely on** `rlmh eval SET --split … --profile … --root … --go --max-usd … --out …`, `--rerun OUT`, `eval compare` and `eval ledger`, and on the output layout of architecture §6.5, totalled by track.
 - **Step 6 relies on** `runEval`, `loadSet`, `selectTasks` (`--sample/--seed` is its probe subset, stratified by track and size), `readGrades`, `compare`, `buildReport` and `CostCap`. **The tuner never reads `grades.jsonl` or `grade-logs/`**, apart from pass counts for acceptance (architecture §7.3).
 - **Step 1 relies on** `loadSet`'s checks, which are the definition of a valid set; step 1's `check` covers the same ground in Python. It also needs from this step:
-  - the CuPy pin and `checkCuda`'s probe, for its kernel venvs and validation;
+  - `gpu.py` and `gpu_compat.h` (copied byte for byte into every kernel task's base), the NVRTC wheel and numpy pins, and the probe's one-line shape, for its kernel venvs and validation;
   - the pnpm and Playwright pins, written into every `nodeenvs/<key>.json`;
   - `playwrightKey`'s rule, for its web tasks' `f2p` and `p2p` ids;
   - that every web project's `playwright.config.js` reads `EVAL_PROJECT_PORT` and `IS_EVAL_PRODUCTION`, as Web-Bench's do.
@@ -372,5 +384,5 @@ Every test is offline. The fixture set is built into a temp folder by `buildFixt
   - The cost: the model can't run a narrower test, a quick script, a compile or a dev server, so long-running coding tasks, kernels and web builds get harder and measure the permission rule as much as the profile.
 - **D-170, repeats.** `runEval` takes `repeats: n`; `tag` becomes `<id>#<k>`; grade lines carry `repeat`; `buildReport` averages per task before totalling, and `compare` uses the per-task majority. Each extra repeat costs one more full pass against S-44.
 - **D-176, more languages.** `grades.jsonl`'s `runner` takes `go` or `jest`; `gradeRepo` grows a runner table like `RUNNER_CLASSES`, and each runner gets its own toolchain check, as `findNodeTools` does for Node. Nothing in the set or report format changes.
-- **D-223, C kernels on the CPU instead.** Kernel venvs pin `ziglang` (the newest release with wheels for all three OSes; 0.16.0 on 2026-11-02) instead of CuPy, `conftest.py` compiles with `python -m ziglang cc -shared` and loads the library with `ctypes`, and `requires` goes away. Kernel tasks then run in parallel like Python tasks, and CI grades the kernel fixture on all three OSes.
+- **D-223, C kernels on the CPU instead.** Kernel venvs pin `ziglang` (the newest release with wheels for all three OSes; 0.16.0 on 2026-11-02) instead of the NVRTC wheel, `kernels.py` compiles with `python -m ziglang cc -shared` and loads the library with `ctypes`, and `gpu.py`, `requires`, `--gpu` and `gpu_backend` go away. Kernel tasks then run in parallel like Python tasks, and CI grades the kernel fixture on all three OSes.
 - **D-222, Web-Bench run its own way.** If its projects can't be made standalone pnpm projects, step 1 ships one shared workspace per set instead: one lockfile, one `pnpm fetch`, and every web copy installs from it. `ensureNodeEnv` then keys on that one lockfile, and nothing else here changes.
