@@ -163,6 +163,25 @@ MESSAGES = {
     "tool": obj({"role": enum("tool"), "tool_call_id": STR, "content": STR}),
 }
 
+# engine.info's per-mode limits: contract.Limits.as_dict() (v1 step 2, D-198).
+PROFILE_LIMITS = obj(
+    {
+        "max_turns": INT,
+        "max_subcalls": INT,
+        "root_max_tokens": INT,
+        "output_max_chars": INT,
+        "cell_timeout_s": NUM,
+        "cpus": NUM,
+        "memory_mb": INT,
+        "pids": INT,
+        "grader_timeout_s": nullable(INT),
+        "subcall_max_chars": INT,
+        "subcall_max_tokens": INT,
+        "subcall_thinking": nullable(STR),
+        "subcall_oversize": STR,
+    }
+)
+
 # params (requests, notifications) or result, per "<method>:<kind>".
 FIELDS = {
     "engine.info:request": obj({}),
@@ -174,7 +193,18 @@ FIELDS = {
             "contract": nullable(STR),
             "contract_hash": nullable(STR),
             "training_hash": nullable(STR),
-            "profiles": list_of(obj({"name": STR, "source": enum("builtin", "user"), "prompt_hash": STR, "profile_hash": STR})),
+            "profiles": list_of(
+                obj(
+                    {
+                        "name": STR,
+                        "source": enum("builtin", "user"),
+                        "prompt_hash": STR,
+                        "profile_hash": STR,
+                        "agent_api": BOOL,
+                        "limits": obj({"read": PROFILE_LIMITS, "repo": PROFILE_LIMITS}),
+                    }
+                )
+            ),
         }
     ),
     "run.start:request": obj(

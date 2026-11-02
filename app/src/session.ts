@@ -152,8 +152,17 @@ export class Session {
     this.engine = parts.engine;
   }
 
-  /** Throws SettingsError, EngineNotFound, ProtocolMismatch (the engine is killed) or EngineStartError. */
-  static async open(opts: { home: string; verbose?: boolean; approvals: (p: ApprovalParams) => Promise<ApprovalResult> }): Promise<Session> {
+  /**
+   * Throws SettingsError, EngineNotFound, ProtocolMismatch (the engine is killed) or EngineStartError. `env` is merged
+   * over process.env before findEngine, so the engine (and through it the worker) gets it, key-like names still
+   * stripped at both hops (`rlmh eval`'s evalEngineEnv, v1 step 2).
+   */
+  static async open(opts: {
+    home: string;
+    verbose?: boolean;
+    approvals: (p: ApprovalParams) => Promise<ApprovalResult>;
+    env?: Record<string, string>;
+  }): Promise<Session> {
     const settings = loadSettings(opts.home);
     const keys = new KeyStore({ home: opts.home });
     const catalog = new Catalog(opts.home);
@@ -161,7 +170,7 @@ export class Session {
     const gateway = new Gateway({ keys, catalog, settings, bus });
     // engine.ts strips key-like variables from the engine's env (D-29)
     const verbose = opts.verbose ?? settings.display.verbose;
-    const engine = startEngine(findEngine({ home: opts.home, env: process.env }), {
+    const engine = startEngine(findEngine({ home: opts.home, env: { ...process.env, ...opts.env } }), {
       onStderr: verbose ? (line) => process.stderr.write(`${line}\n`) : undefined,
     });
     const { link } = engine;

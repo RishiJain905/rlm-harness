@@ -48,3 +48,8 @@ export function engineDir(version: string, h = home()): string {
 export function binDir(h = home()): string {
   return join(h, "bin");
 }
+
+/** `rlmh eval`'s folder (v1 architecture §9): ledger.jsonl, out/, work/, venvs/, the pnpm store and Playwright's browsers. */
+export function evalDir(h = home()): string {
+  return join(h, "eval");
+}

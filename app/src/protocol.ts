@@ -100,11 +100,31 @@ export type ApprovalKind = "write" | "shell" | "network";
 
 // -- §5.1 app -> engine --
 
+/** One mode's limits as the engine runs them: contract.Limits.as_dict(). */
+export interface ProfileLimits {
+  max_turns: number;
+  max_subcalls: number;
+  root_max_tokens: number;
+  output_max_chars: number;
+  cell_timeout_s: number;
+  cpus: number;
+  memory_mb: number;
+  pids: number;
+  grader_timeout_s: number | null;
+  subcall_max_chars: number;
+  subcall_max_tokens: number;
+  subcall_thinking: string | null;
+  subcall_oversize: string;
+}
+
 export interface ProfileInfo {
   name: string;
   source: "builtin" | "user";
   prompt_hash: string;
   profile_hash: string;
+  /** v1 step 2 (D-198): an added field, so the protocol number stays. */
+  agent_api: boolean;
+  limits: { read: ProfileLimits; repo: ProfileLimits };
 }
 
 /** `contract*` and `profiles` are null and [] until step 3. */

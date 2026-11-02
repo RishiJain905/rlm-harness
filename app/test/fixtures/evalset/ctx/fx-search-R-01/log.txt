@@ -1,0 +1,5 @@
+boot ok
+load config
+start worker
+worker ready
+shutdown

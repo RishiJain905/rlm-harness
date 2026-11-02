@@ -186,13 +186,22 @@ def _cancel(entry: _Run) -> None:
 
 
 def contract_info(home: Path) -> dict:
-    """engine.info's contract fields: the copy's hash beside training's, and every profile with its two hashes."""
+    """engine.info's contract fields: the copy's hash beside training's, and every profile with its two hashes,
+    whether it has the agent API, and each mode's limits (v1 step 2, D-198: `rlmh eval`'s estimate caps its
+    reference tokens at what the profile allows)."""
     return {
         "contract": contract.CONTRACT_VERSION,
         "contract_hash": contract.prompt_hash(contract.PROMPTS_V4),
         "training_hash": contract.TRAINING_HASH,
         "profiles": [
-            {"name": p.name, "source": p.source, "prompt_hash": p.prompt_hash(), "profile_hash": p.profile_hash()}
+            {
+                "name": p.name,
+                "source": p.source,
+                "prompt_hash": p.prompt_hash(),
+                "profile_hash": p.profile_hash(),
+                "agent_api": p.agent_api,
+                "limits": {"read": p.read.limits.as_dict(), "repo": p.repo.limits.as_dict()},
+            }
             for p in profiles.list_profiles(home)
         ],
     }

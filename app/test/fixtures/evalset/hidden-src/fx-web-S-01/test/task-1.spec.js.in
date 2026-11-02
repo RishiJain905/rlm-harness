@@ -1,0 +1,9 @@
+const { test, expect } = require('@playwright/test')
+
+test.beforeEach(async ({ page }) => {
+  await page.goto('/index.html')
+})
+
+test('the page heading greets the visitor', async ({ page }) => {
+  await expect(page.locator('h1')).toHaveText('Hello')
+})

@@ -157,6 +157,23 @@ const MESSAGES: Record<string, Spec> = {
   tool: obj({ role: oneOf("tool"), tool_call_id: "str", content: "str" }),
 };
 
+/** engine.info's per-mode limits: contract.Limits.as_dict() (v1 step 2, D-198). */
+const PROFILE_LIMITS = obj({
+  max_turns: "int",
+  max_subcalls: "int",
+  root_max_tokens: "int",
+  output_max_chars: "int",
+  cell_timeout_s: "num",
+  cpus: "num",
+  memory_mb: "int",
+  pids: "int",
+  grader_timeout_s: nullable("int"),
+  subcall_max_chars: "int",
+  subcall_max_tokens: "int",
+  subcall_thinking: nullable("str"),
+  subcall_oversize: "str",
+});
+
 /** params (requests, notifications) or result, per "<method>:<kind>". */
 const FIELDS: Record<string, Spec> = {
   "engine.info:request": obj({}),
@@ -167,7 +184,16 @@ const FIELDS: Record<string, Spec> = {
     contract: nullable("str"),
     contract_hash: nullable("str"),
     training_hash: nullable("str"),
-    profiles: listOf(obj({ name: "str", source: oneOf("builtin", "user"), prompt_hash: "str", profile_hash: "str" })),
+    profiles: listOf(
+      obj({
+        name: "str",
+        source: oneOf("builtin", "user"),
+        prompt_hash: "str",
+        profile_hash: "str",
+        agent_api: "bool",
+        limits: obj({ read: PROFILE_LIMITS, repo: PROFILE_LIMITS }),
+      }),
+    ),
   }),
   "run.start:request": obj(
     { mode: oneOf("read", "repo"), profile: "str", root: MODEL_REF, sub: MODEL_REF, permission_mode: PERMISSION_MODE, call_format: CALL_FORMAT },

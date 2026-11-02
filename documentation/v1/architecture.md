@@ -77,7 +77,7 @@ rlm-harness/
   app/src/
     version.ts                       +3 +10     PROTOCOL_VERSION 2; APP_VERSION "1.0.0"
     protocol.ts                      +3 +4 +6   the §3 types
-    session.ts                       +3 +4 +6   window in buildRunParams; say(), closeRun(); run.closed; checkProfile()
+    session.ts                       +2 +3 +4 +6  Session.open's env (2); window in buildRunParams; say(), closeRun(); run.closed; checkProfile()
     settings.ts                      +4 +9      §8 keys
     paths.ts                         +2 +6 +9   evalDir, tuneDir, libraryDir (§9)
     main.ts                          +2 +6      eval, tune
@@ -88,8 +88,10 @@ rlm-harness/
     eval/set.ts                      2          read and check a set folder (§6)
     eval/tar.ts                      2          a small ustar reader, the same on every OS; refuses links and path escapes
     eval/work.ts                     2          throwaway work copies and per-repo venvs
-    eval/graders.ts                  2          the read grader (a port of score_answer: int, float, count, entity, list) and the tests grader
-    eval/junit.ts                    2          JUnit XML to per-test results
+    eval/graders.ts                  2          readPassed, gradeRepo (the tests grader) and leakSuspect; re-exports scoreAnswer
+    eval/reward.ts                   2          the read grader, a port of reward.py's score_answer: int, float, count, entity, list, text (D-241)
+    eval/junit.ts                    2          JUnit XML to per-test results; pytestKey, playwrightKey, resolvedFrom
+    eval/testpaths.ts                2          grader.py's test-path rules and PYTEST_BOOT, plus each track's extra test paths (D-241)
     eval/report.ts                   2          report.json, report.md, compare, McNemar
     eval/estimate.ts                 2          the cost estimate before spending (§6.5)
     eval/ledger.ts                   2          <home>/eval/ledger.jsonl
@@ -108,7 +110,7 @@ rlm-harness/
     interface/commands/tuned.tsx     9          the /tuned picker
     interface/commands/model.tsx     +9         the tuning model row (tune.model)
   app/test/
-    eval/*.test.ts                   2
+    eval/*.test.ts                   2          plus eval/fixture.ts (buildFixtureSet, a test-only ustar writer), the two vectors files and prepare-web.sh
     fixtures/evalset/                2          a tiny set: two read, two Python, one kernel and one web task, with hidden tests
     fixtures/evalset/gpu/            2          gpu.py and gpu_compat.h, the GPU shim every kernel task carries; step 1 copies these bytes (D-223)
     tune/*.test.ts                   6 +9
@@ -301,7 +303,7 @@ repo: {"id", "grader": "tests", "runner": "pytest"|"playwright", "hidden": "hidd
 
 Where each task came from stays in step 1's build cache (`sources.jsonl`), never in the set. `validated` is false only for a `--no-validate` test build, and `rlmh eval` refuses such a set.
 
-The read grader ports `rlm_rl/reward.py`'s `score_answer` for the types int, float, count, entity, list and text (an exact or alias match, else 0.8 × token F1; no judge model). Expected test values come from running training's functions in a scratch copy. For the primary metric, a read task passes when its score reaches its `pass_score`: 1.0, except 0.8 for research list questions, training's open-book bar (D-170, D-224). For a repo task, `resolved` means every f2p test passes and no p2p test fails. `f2p_share` is the fraction of f2p tests that pass, a secondary metric that breaks ties (D-170).
+The read grader ports `rlm_rl/reward.py`'s `score_answer` for the types int, float, count, entity, list and text (an exact or alias match, else 0.8 × token F1; no judge model). Expected test values come from running training's functions in a scratch copy. For the primary metric, a read task passes when its score reaches its `pass_score`: 1.0, except 0.8 for research list questions, training's open-book bar (D-170, D-224). For a repo task, `resolved` means every f2p test passes and every p2p test passes too: as training's `score` counts them, a p2p test that is missing, skipped, failed or in error fails the task (D-240). `f2p_share` is the fraction of f2p tests that pass, a secondary metric that breaks ties (D-170).
 
 ### 6.4 Running a set
 
@@ -327,8 +329,8 @@ The read grader ports `rlm_rl/reward.py`'s `score_answer` for the types int, flo
 6. **Clean up.** The work copy is removed after grading, unless `--keep`.
 
 **Environments are made once, before the first run that needs them:**
-- venvs per key, `<home>/eval/venvs/<key>/`, with `uv venv --python <python>` and `uv pip install -r`. A python venv's frozen requirements already hold `tzdata` (D-230), so `zoneinfo` works on Windows. Kernel venvs pin `numpy`, `pytest` and the pip NVRTC wheel (`nvidia-cuda-nvrtc-cu12`). The `cuda` backend needs only the NVIDIA driver; the `hip` backend needs the AMD HIP SDK on Windows or ROCm on Linux, installed by the machine's owner;
-- for web tasks, `node` 22 or later and the pinned `pnpm` must be on PATH. `pnpm fetch` fills `<home>/eval/pnpm-store/` from each project's lockfile, and `pnpm exec playwright install chromium` puts one Chromium in `<home>/eval/ms-playwright/`. `rlmh eval` sets `PLAYWRIGHT_BROWSERS_PATH` and `IS_EVAL_PRODUCTION=1` in the engine's environment, so the model's own Playwright runs find that browser.
+- venvs per key, `<home>/eval/venvs/<key>/`, with `uv venv --python <python>` and `uv pip install -r`. A python venv's frozen requirements already hold `tzdata` (D-230), so `zoneinfo` works on Windows. Kernel venvs pin `numpy`, `pytest` and the pip NVRTC wheel (`nvidia-cuda-nvrtc-cu12`): `harness-eval-v1` and the fixture pin `numpy==2.5.4`, `pytest==9.1.1` and `nvidia-cuda-nvrtc-cu12==12.9.86` (off on macOS). The `cuda` backend needs only the NVIDIA driver; the `hip` backend needs the AMD HIP SDK on Windows or ROCm on Linux, installed by the machine's owner;
+- for web tasks, `node` 22 or later and the pinned `pnpm` (10.34.7, with Playwright 1.57.0, D-227) must be on PATH. `pnpm fetch` fills `<home>/eval/pnpm-store/` from each project's lockfile, and `pnpm exec playwright install chromium` puts one Chromium in `<home>/eval/ms-playwright/`. `rlmh eval` sets `PLAYWRIGHT_BROWSERS_PATH` and `IS_EVAL_PRODUCTION=1` in the engine's environment, so the model's own Playwright runs find that browser.
 
 That is a developer action that touches PyPI, the npm registry and Playwright's browser download, and the estimate says so.
 
@@ -351,11 +353,12 @@ rlmh eval ledger
 
 ```
 <out>/
-  eval.json        set name, manifest hashes, split, models, profile, profile_hash, call_format, jobs, harness version and commit,
-                   estimate, cap, capped, rerun_of, started, finished
+  eval.json        id, set name and folder, manifest hashes, split, task ids, models, profile, profile_hash, prompt_hash, call_format,
+                   jobs, harness version and commit, estimate, cap, capped, cost_usd, rerun_of, gpu_backend, started, finished
   runs.jsonl       the engine's run log (logDir = <out>)
   grades.jsonl     one line per task: id, track, kind, size, split, run_id, submitted, infra_kind, pass, score, f2p_share,
-                   test_tamper, leak_suspect, turns, subcalls, compactions, cost_usd, cache_hit, wall_s
+                   test_tamper, leak_suspect, turns, subcalls, compactions, cost_usd, cache_hit, input_tokens, cache_read_tokens,
+                   wall_s, grade_error, env_log (D-239)
   grade-logs/<id>/ the test runner's output and junit.xml (the tuner never reads this folder, §7.3)
   report.json      totals by split, track, kind and size: n, pass rate, mean score, mean f2p_share, turns, sub-calls,
                    compactions, cost, cache hit, wall time, infra errors

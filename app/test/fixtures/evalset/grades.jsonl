@@ -1,0 +1,6 @@
+{"id": "fx-search-R-01", "grader": "answer", "gold": 5, "grading": {"type": "count", "blind": 0}}
+{"id": "fx-research-R-01", "grader": "answer", "gold": "Ada Lovelace", "grading": {"type": "text", "aliases": ["Augusta Ada King"], "blind": null, "ignore": ["who"]}, "pass_score": 1.0}
+{"id": "fx-python-S-01", "grader": "tests", "runner": "pytest", "hidden": "hidden/fx-python-S-01.tar.gz", "f2p": ["tests/test_fix.py::test_add"], "p2p": ["tests/test_basic.py::test_mul"], "files": ["tests/test_basic.py", "tests/test_fix.py"], "timeout_s": 120}
+{"id": "fx-python-S-02", "grader": "tests", "runner": "pytest", "hidden": "hidden/fx-python-S-02.tar.gz", "f2p": ["tests/test_fix.py::test_add"], "p2p": ["tests/test_basic.py::test_mul"], "files": ["tests/test_basic.py", "tests/test_fix.py"], "timeout_s": 120}
+{"id": "fx-kernel-S-01", "grader": "tests", "runner": "pytest", "hidden": "hidden/fx-kernel-S-01.tar.gz", "f2p": ["tests/test_add.py::test_add_several_blocks"], "p2p": ["tests/test_smoke.py::test_compiles_and_launches"], "files": ["tests/test_smoke.py", "tests/test_add.py"], "timeout_s": 300}
+{"id": "fx-web-S-01", "grader": "tests", "runner": "playwright", "hidden": "hidden/fx-web-S-01.tar.gz", "f2p": ["task-1.spec.js::the page heading greets the visitor"], "p2p": [], "files": ["test/task-1.spec.js"], "timeout_s": 180}

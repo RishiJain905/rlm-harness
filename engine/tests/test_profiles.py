@@ -249,7 +249,16 @@ def test_contract_info(tmp_path: Path) -> None:
         ("default", "builtin"), ("training-v4", "builtin"), ("mine", "user"),
     ]
     for entry in info["profiles"]:
-        assert list(entry) == ["name", "source", "prompt_hash", "profile_hash"]
+        assert list(entry) == ["name", "source", "prompt_hash", "profile_hash", "agent_api", "limits"]
         assert HEX64.fullmatch(entry["prompt_hash"]) and HEX64.fullmatch(entry["profile_hash"])
+        profile = p.load_profile(entry["name"], tmp_path)
+        assert entry["agent_api"] is profile.agent_api
+        # v1 step 2 (D-198): each mode's limits, as the run would get them
+        assert entry["limits"] == {"read": profile.read.limits.as_dict(), "repo": profile.repo.limits.as_dict()}
     training = next(x for x in info["profiles"] if x["name"] == "training-v4")
     assert training["prompt_hash"] == info["training_hash"]
+    assert training["agent_api"] is False
+    assert training["limits"]["repo"]["max_turns"] == 30 and training["limits"]["repo"]["root_max_tokens"] == 4096
+    default = next(x for x in info["profiles"] if x["name"] == "default")
+    assert default["agent_api"] is True and default["limits"]["repo"]["max_turns"] == 150
+    json.dumps(info)  # it goes on the wire as it is

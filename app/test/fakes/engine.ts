@@ -188,9 +188,28 @@ const NO_CODE_ERROR = "No code block found. Put your code in a ```repl block, or
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 const CONTRACT_HASH = sha("fake contract v4");
 const DEFAULT_PROMPT_HASH = sha("fake contract v4 + guidance.md");
+/** The built-ins' limits as engine.info gives them (v1 step 2). */
+const limitsOf = (turns: { read: number; repo: number }, tokens: number): EngineInfo["profiles"][number]["limits"] => {
+  const mode = (max_turns: number, repo: boolean) => ({
+    max_turns,
+    max_subcalls: 80,
+    root_max_tokens: tokens,
+    output_max_chars: 8000,
+    cell_timeout_s: repo ? 300 : 120,
+    cpus: repo ? 2 : 1,
+    memory_mb: repo ? 4096 : 512,
+    pids: repo ? 256 : 64,
+    grader_timeout_s: repo ? 600 : null,
+    subcall_max_chars: 60000,
+    subcall_max_tokens: tokens,
+    subcall_thinking: repo ? "low" : null,
+    subcall_oversize: "error",
+  });
+  return { read: mode(turns.read, false), repo: mode(turns.repo, true) };
+};
 const PROFILES: EngineInfo["profiles"] = [
-  { name: "default", source: "builtin", prompt_hash: DEFAULT_PROMPT_HASH, profile_hash: sha("profile default") },
-  { name: "training-v4", source: "builtin", prompt_hash: CONTRACT_HASH, profile_hash: sha("profile training-v4") },
+  { name: "default", source: "builtin", prompt_hash: DEFAULT_PROMPT_HASH, profile_hash: sha("profile default"), agent_api: true, limits: limitsOf({ read: 50, repo: 150 }, 16384) },
+  { name: "training-v4", source: "builtin", prompt_hash: CONTRACT_HASH, profile_hash: sha("profile training-v4"), agent_api: false, limits: limitsOf({ read: 20, repo: 30 }, 4096) },
 ];
 
 /** The fixed run.vars answer while a run is active. */
