@@ -11,6 +11,7 @@ import { settingRows } from "../../src/interface/commands/settings.tsx";
 import { contextBreakdown, viewFromRecord } from "../../src/interface/store.ts";
 import { runsDir, settingsPath } from "../../src/paths.ts";
 import { PROVIDERS } from "../../src/gateway/providers.ts";
+import { followUpLine } from "../../src/interface/Transcript.tsx";
 import { getSetting, loadSettings, SCHEMA } from "../../src/settings.ts";
 import { createFakeApp, FAKE_VARS, runRecord, type FakeApp, type FakeAppOptions } from "../fakes/engine.ts";
 import { KEYS, mount, type Mounted } from "./helpers.ts";
@@ -55,7 +56,7 @@ describe("slash commands", () => {
     for (const c of COMMANDS) {
       await command(m, c.name);
       await m.press(KEYS.esc);
-      await m.waitFor(() => !m.screen().includes(`── /${c.name}`) && m.screen().includes("Each question is a new run."));
+      await m.waitFor(() => !m.screen().includes(`── /${c.name}`) && m.screen().includes(followUpLine(true)));
     }
     const help = await command(m, "help");
     for (const c of COMMANDS) expect(help).toContain(`/${c.name}`);
@@ -200,7 +201,7 @@ describe("slash commands", () => {
     const { app, m } = await open({ scenario: "hold" });
     let s = await command(m, "context");
     expect(s).toContain("No root request yet.");
-    expect(s).toContain("Variables exist only while a run is active.");
+    expect(s).toContain("Variables exist only while a run or a conversation is open.");
     await m.press(KEYS.esc);
     await ask(m);
     await m.waitForText("running");
@@ -229,7 +230,7 @@ describe("slash commands", () => {
     const s = await command(m, "context");
     expect(s).toContain("fake/scripted  window 1M");
     for (const label of ["system", "first message", "turns (1)", "tool def", "output reserve", "free"]) expect(s).toContain(label);
-    expect(s).toContain("Variables exist only while a run is active.");
+    expect(s).toContain("Variables exist only while a run or a conversation is open.");
   });
 
   test("(6) /runs lists the log newest first, replays one read-only, and flags another format", async () => {

@@ -36,6 +36,8 @@ export interface RunSummary {
   /** The question (read mode) or the task (repo mode), "" when missing. */
   text: string;
   infraKind: string | null;
+  /** The record's prompt in its conversation (v1 step 4): 0 for a one-shot run or a conversation's first question. */
+  promptIndex: number;
 }
 
 function str(v: unknown): string {
@@ -69,6 +71,7 @@ function summarize(record: Record<string, unknown>, file: string, offset: number
     turns: Array.isArray(record.turns) ? record.turns.length : 0,
     text: typeof record.question === "string" ? record.question : str(record.task),
     infraKind: typeof record.infra_kind === "string" ? record.infra_kind : null,
+    promptIndex: num(record.prompt_index),
   };
 }
 

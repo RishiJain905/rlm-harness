@@ -49,18 +49,46 @@ export const RUN_CHOICES: readonly RunChoice[] = ["auto", "repo", "read"];
  * `/work/repo` names can't send the model elsewhere. Under `read` a question needs a mention.
  */
 export function parseQuestion(text: string, cwd: string, fs: FileProbe = nodeProbe, choice: RunChoice = "auto"): ParsedQuestion {
-  const mentions = [...text.matchAll(MENTION)];
-  if (mentions.length === 0) {
+  const found = mentionPaths(text, cwd, fs);
+  if (!found.ok) return found;
+  if (found.mentions.length === 0) {
     if (choice === "read") return { ok: false, error: "Read mode needs @file mentions. Shift+Tab changes the mode." };
     return { ok: true, run: { mode: "repo", task: text, repoPath: cwd, interactive: true } };
   }
-  const win32 = process.platform === "win32";
-  const inputs: string[] = [];
-  const seen = new Set<string>();
   let question = "";
   let task = "";
   let last = 0;
-  for (const m of mentions) {
+  for (const m of found.mentions) {
+    question += text.slice(last, m.start) + m.typed.replaceAll("\\", "/");
+    task += text.slice(last, m.start) + repoPath(m.absolute, cwd);
+    last = m.end;
+  }
+  question += text.slice(last);
+  task += text.slice(last);
+  if (choice === "repo") return { ok: true, run: { mode: "repo", task, repoPath: cwd, interactive: true } };
+  return { ok: true, run: { mode: "read", question, inputs: found.paths, interactive: true } };
+}
+
+/** One checked `@` mention: where it starts (its `@`) and ends in the text, the path as typed (quotes dropped), and the
+ *  file it names, absolute. */
+interface Mention {
+  start: number;
+  end: number;
+  typed: string;
+  absolute: string;
+}
+
+/**
+ * The files a question's `@` mentions name, with `parseQuestion`'s regex and checks: absolute, deduplicated in order
+ * (without case on win32); the first mention that is not a file is the error. No mention gives `paths: []`. The app
+ * compares them with an open conversation's files (v1 step 4, `continues`).
+ */
+export function mentionPaths(text: string, cwd: string, fs: FileProbe = nodeProbe): { ok: true; paths: string[]; mentions: Mention[] } | { ok: false; error: string } {
+  const win32 = process.platform === "win32";
+  const paths: string[] = [];
+  const mentions: Mention[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(MENTION)) {
     const lead = m[1] as string;
     const token = m[2] as string;
     const typed = QUOTED.test(token) ? token.slice(1, -1) : token;
@@ -71,17 +99,12 @@ export function parseQuestion(text: string, cwd: string, fs: FileProbe = nodePro
     const key = win32 ? absolute.toLowerCase() : absolute;
     if (!seen.has(key)) {
       seen.add(key);
-      inputs.push(absolute);
+      paths.push(absolute);
     }
     const start = (m.index ?? 0) + lead.length;
-    question += text.slice(last, start) + typed.replaceAll("\\", "/");
-    task += text.slice(last, start) + repoPath(absolute, cwd);
-    last = (m.index ?? 0) + m[0].length;
+    mentions.push({ start, end: (m.index ?? 0) + m[0].length, typed, absolute });
   }
-  question += text.slice(last);
-  task += text.slice(last);
-  if (choice === "repo") return { ok: true, run: { mode: "repo", task, repoPath: cwd, interactive: true } };
-  return { ok: true, run: { mode: "read", question, inputs, interactive: true } };
+  return { ok: true, paths, mentions };
 }
 
 /** A checked mention as a repo task names it: relative to `cwd` inside it, else absolute; `/` always; quoted with whitespace. */

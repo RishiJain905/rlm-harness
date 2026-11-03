@@ -29,6 +29,7 @@ const ERROR_CODES: Record<string, number> = {
   UNKNOWN_RUN: -32010,
   UNKNOWN_PROFILE: -32011,
   BAD_INPUT: -32012,
+  RUN_BUSY: -32013,
   CANCELLED: -32800,
 };
 
@@ -37,6 +38,11 @@ const REQUIRED = [
   "engine.info:result",
   "run.cancel:request",
   "run.cancel:result",
+  "run.say:request",
+  "run.say:result",
+  "run.say:error:RUN_BUSY",
+  "run.close:request",
+  "run.close:result",
   "run.vars:request",
   "run.vars:result",
   "debug.roundtrip:request",
@@ -71,6 +77,7 @@ const REQUIRED = [
   "run.permission:notification",
   "run.budget:notification",
   "run.finished:notification",
+  "run.closed:notification",
   "model.cancel:notification",
 ];
 
@@ -79,6 +86,8 @@ const METHODS: Record<string, string> = {
   "engine.info": "app->engine",
   "run.start": "app->engine",
   "run.cancel": "app->engine",
+  "run.say": "app->engine",
+  "run.close": "app->engine",
   "run.vars": "app->engine",
   "debug.roundtrip": "app->engine",
   "model.complete": "engine->app",
@@ -92,6 +101,7 @@ const METHODS: Record<string, string> = {
   "run.permission": "engine->app",
   "run.budget": "engine->app",
   "run.finished": "engine->app",
+  "run.closed": "engine->app",
   "model.cancel": "engine->app",
 };
 
@@ -216,11 +226,16 @@ const FIELDS: Record<string, Spec> = {
       batch: "str",
       log_dir: "str",
       window: WINDOW,
+      conversation: "bool",
     },
   ),
   "run.start:result": obj({ run_id: "str", log_path: "str" }),
   "run.cancel:request": obj({ run_id: "str" }),
   "run.cancel:result": obj({}),
+  "run.say:request": obj({ run_id: "str", text: "str" }),
+  "run.say:result": obj({ prompt_index: "int" }),
+  "run.close:request": obj({ run_id: "str" }),
+  "run.close:result": obj({}),
   "run.vars:request": obj({ run_id: "str" }),
   "run.vars:result": obj({ vars: listOf(obj({ name: "str", type: "str", len: nullable("int"), chars: "int" })) }),
   "debug.roundtrip:request": obj({ count: "int" }),
@@ -283,6 +298,7 @@ const FIELDS: Record<string, Spec> = {
     log_path: "str",
     window: WINDOW,
     compaction: nullable(obj({ window: "int", trigger: "int", keep: "int" })),
+    conversation: "bool",
   }),
   "run.compacted:notification": obj({
     run_id: "str",
@@ -368,7 +384,10 @@ const FIELDS: Record<string, Spec> = {
     infra_kind: nullable("str"),
     wall_s: "num",
     log_path: "str",
+    prompt_index: "int",
+    open: "bool",
   }),
+  "run.closed:notification": obj({ run_id: "str", prompts: "int" }),
   "model.cancel:notification": obj({ run_id: "str" }),
 };
 

@@ -2,7 +2,8 @@
 // The interactive app: the transcript of the current run, the sub-call panel, the approval prompt,
 // the prompt box and the status line, in a frame one row shorter than the terminal. App owns focus,
 // the screens, the submit flow (with /clear and /quit, which have no screen) and the Esc order: deny
-// the approval, close the screen or view, cancel the run, clear the prompt. Each question is a new run (S-11).
+// the approval, close the screen or view, cancel the run, clear the prompt. A question that fits the open conversation
+// is a follow-up in it (run.say, v1 step 4); any other starts a new run, after the open conversation is closed.
 
 import { Box, render, Text, useApp, useInput, useWindowSize } from "ink";
 import { existsSync } from "node:fs";
@@ -10,14 +11,17 @@ import { homedir } from "node:os";
 import { dirname, parse, resolve } from "node:path";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { provider, PROVIDERS } from "../gateway/providers.ts";
-import type { StartRun } from "../session.ts";
+import { RpcError } from "../link.ts";
+import { ErrorCode } from "../protocol.ts";
+import { settingsRefs, type StartRun } from "../session.ts";
 import { APP_VERSION } from "../version.ts";
 import { Approval, approvalHeight } from "./Approval.tsx";
 import { COMMANDS, slashMatches } from "./commands/index.ts";
 import { envKeyVar } from "./commands/providers.tsx";
+import { continues, refKey } from "./conversation.ts";
 import { layoutHeights } from "./format.ts";
 import { Lines } from "./Lines.tsx";
-import { listFiles, mentionToken, parseQuestion, rankFiles, RUN_CHOICES, type RunChoice } from "./mentions.ts";
+import { listFiles, mentionPaths, mentionToken, parseQuestion, rankFiles, RUN_CHOICES, type RunChoice } from "./mentions.ts";
 import { HISTORY_MAX, PromptBox } from "./PromptBox.tsx";
 import { StatusLine } from "./StatusLine.tsx";
 import { engineStoppedMessage, isActive, RunStore, statusModel, type AppDeps } from "./store.ts";
@@ -39,6 +43,8 @@ const HINT: Record<RunChoice, string> = {
 const WELCOME_PROVIDERS = "Welcome to rlmh. Connect a provider: pick one, a adds a key; Esc when done.";
 const WELCOME_MODEL = "Pick the root model: Enter on root, then a provider and a model; Esc when done.";
 const NO_MODEL_YET = "No model picked yet: /model picks one, /providers adds a key.";
+/** run.say answered -32010: the engine had already closed the conversation (v1 step 4). */
+export const CONVERSATION_ENDED = "That conversation had ended, so this starts a new one.";
 
 /** A `.git` in `dir` or a parent. */
 function inGitRepo(dir: string): boolean {
@@ -165,28 +171,51 @@ export function App(props: { deps: AppDeps }) {
     deps.session.cancel(runId).catch((err: unknown) => store.note(`Cancel failed: ${messageOf(err)}`, "error"));
   };
 
+  /** The open conversation, if any: run.close, and back once run.closed was sent. A failure is a note, never a throw. */
+  const closeConversation = async () => {
+    const conv = store.conversation();
+    if (!conv?.open) return;
+    try {
+      await deps.session.closeRun(conv.runId);
+    } catch (err) {
+      store.note(`Closing the conversation failed: ${messageOf(err)}`, "error");
+    }
+    store.conversationEnded();
+  };
+
   const quit = async () => {
     setQuitting(true);
     setHint("Quitting...");
     deps.approvals.denyAll();
     const { phase, runId } = store.live();
     if (isActive(phase) && runId !== null) deps.session.cancel(runId).catch(() => undefined);
+    else await closeConversation();
     await deps.session.close().catch(() => undefined);
     exit();
   };
 
-  const start = (run: StartRun, display: string, warnings: string[]) => {
-    const detail = run.mode === "read" ? `read: ${run.inputs!.length} file${run.inputs!.length === 1 ? "" : "s"}` : `repo: ${deps.cwd}`;
+  /** A fresh run: the open conversation is closed first, then v0's start with `conversation.follow_ups` (v1 step 4). */
+  const start = async (run: StartRun, display: string, warnings: string[], notes: string[] = []) => {
     history.current = [...history.current, display].slice(-HISTORY_MAX);
     setText("");
+    if (store.conversation()?.open) {
+      busy.current = true;
+      try {
+        await closeConversation();
+      } finally {
+        busy.current = false;
+      }
+    }
+    const detail = run.mode === "read" ? `read: ${run.inputs!.length} file${run.inputs!.length === 1 ? "" : "s"}` : `repo: ${deps.cwd}`;
     setScroll(0);
     setPanel({ selected: 0, open: {} });
     setFocus("prompt");
     setSubview(null);
     store.beginRun({ text: run.mode === "read" ? run.question! : run.task!, detail });
+    for (const n of notes) store.note(n, "info");
     for (const w of warnings) store.note(w, "warn");
     cancelWhenStarted.current = false;
-    deps.session.start({ ...run, permissionMode: nextMode }).then(
+    deps.session.start({ ...run, permissionMode: nextMode, conversation: deps.session.settings.conversation.follow_ups }).then(
       (r) => {
         store.startResolved(r.run_id);
         if (cancelWhenStarted.current) deps.session.cancel(r.run_id).catch(() => undefined);
@@ -195,10 +224,44 @@ export function App(props: { deps: AppDeps }) {
     );
   };
 
-  /** /clear: a new session without a new engine. Nothing is cancelled for it, and it is not kept in the history it empties. */
-  const clear = () => {
+  /** A follow-up in the open conversation: run.say with `text`. A -32010 means the engine had closed it, so `fresh` runs. */
+  const followUp = async (runId: string, text: string, display: string, fresh: () => void) => {
+    history.current = [...history.current, display].slice(-HISTORY_MAX);
+    setText("");
+    setScroll(0);
+    setFocus("prompt");
+    setSubview(null);
+    store.beginFollowUp(text);
+    busy.current = true;
+    try {
+      const r = await deps.session.say(runId, text);
+      store.followUpResolved(r.prompt_index);
+    } catch (err) {
+      if (err instanceof RpcError && err.code === ErrorCode.UNKNOWN_RUN) {
+        store.followUpFailed();
+        store.conversationEnded();
+        history.current = history.current.slice(0, -1); // the fresh start keeps it again
+        busy.current = false;
+        return fresh();
+      }
+      store.followUpFailed(messageOf(err));
+    } finally {
+      busy.current = false;
+    }
+  };
+
+  /** /clear: a new session without a new engine. An open conversation is closed first; a run is not cancelled for it. */
+  const clear = async () => {
     if (isActive(store.live().phase) || deps.approvals.head() || confirm) {
       return store.note("A run is active. Esc cancels it, then /clear.", "warn");
+    }
+    if (store.conversation()?.open) {
+      busy.current = true;
+      try {
+        await closeConversation();
+      } finally {
+        busy.current = false;
+      }
     }
     history.current = [];
     ctrlCAt.current = 0;
@@ -223,7 +286,7 @@ export function App(props: { deps: AppDeps }) {
     if (typed.startsWith("/")) {
       const name = typed.slice(1).split(/\s/)[0]!.toLowerCase();
       if (name === "quit") return void quit();
-      if (name === "clear") return clear();
+      if (name === "clear") return void clear();
       if (!COMMANDS.some((c) => c.name === name)) return store.note(`Unknown command /${name}. /help lists the commands.`, "warn");
       history.current = [...history.current, typed].slice(-HISTORY_MAX);
       setText("");
@@ -233,8 +296,8 @@ export function App(props: { deps: AppDeps }) {
     const exited = store.snapshot().engineExit;
     if (exited) return store.note(engineStoppedMessage(exited.code), "error");
     if (isActive(store.live().phase)) return store.note("A run is active. Esc cancels it.", "warn");
-    const parsed = parseQuestion(typed, deps.cwd, undefined, runChoice);
-    if (!parsed.ok) return store.note(parsed.error, "error");
+    const mentioned = mentionPaths(typed, deps.cwd);
+    if (!mentioned.ok) return store.note(mentioned.error, "error");
     const settings = deps.session.settings;
     if (settings.root.model === "") {
       store.note("No model picked. Use /model.", "warn");
@@ -257,16 +320,47 @@ export function App(props: { deps: AppDeps }) {
         busy.current = false;
       }
     }
-    const run = parsed.run;
-    const warnings: string[] = [];
-    if (run.mode === "repo") {
-      if (!inGitRepo(deps.cwd)) warnings.push(`No git repository in ${deps.cwd} or its parents, so diff() will be unavailable.`);
-      if (veryLarge(deps.cwd)) {
-        setConfirm({ text: "This folder is very large. Run on it anyway? y/N", onYes: () => start(run, typed, warnings) });
-        return;
+    /** v0's start flow: parse, the repo checks, then a fresh run. */
+    const fresh = (notes: string[] = []) => {
+      const parsed = parseQuestion(typed, deps.cwd, undefined, runChoice);
+      if (!parsed.ok) {
+        for (const n of notes) store.note(n, "info");
+        return store.note(parsed.error, "error");
       }
+      const run = parsed.run;
+      const warnings: string[] = [];
+      if (run.mode === "repo") {
+        if (!inGitRepo(deps.cwd)) warnings.push(`No git repository in ${deps.cwd} or its parents, so diff() will be unavailable.`);
+        if (veryLarge(deps.cwd)) {
+          for (const n of notes) store.note(n, "info");
+          setConfirm({ text: "This folder is very large. Run on it anyway? y/N", onYes: () => void start(run, typed, warnings, notes) });
+          return;
+        }
+      }
+      void start(run, typed, warnings, notes);
+    };
+    const conv = store.conversation();
+    const refs = settingsRefs(settings);
+    if (
+      conv &&
+      settings.conversation.follow_ups &&
+      refs.root &&
+      refs.sub &&
+      continues(
+        conv,
+        { mentions: mentioned.paths, choice: runChoice },
+        { root: refKey(refs.root), sub: refKey(refs.sub), profile: settings.profile, permissionMode: nextMode, folder: deps.cwd },
+      )
+    ) {
+      // the text sent: the typed text, or with mentions the run's own question or task (their `@` and quotes dropped)
+      let text = typed;
+      if (mentioned.paths.length > 0) {
+        const parsed = parseQuestion(typed, deps.cwd, undefined, runChoice);
+        if (parsed.ok) text = (parsed.run.mode === "read" ? parsed.run.question : parsed.run.task) ?? typed;
+      }
+      return followUp(conv.runId, text, typed, () => fresh([CONVERSATION_ENDED]));
     }
-    start(run, typed, warnings);
+    fresh();
   };
 
   const onCtrlC = () => {
@@ -293,7 +387,7 @@ export function App(props: { deps: AppDeps }) {
   const lines = useMemo(() => {
     if (view.entries.length === 0 && view.phase === "idle") {
       const s = deps.session.settings;
-      return bannerLines({ app: APP_VERSION, engine: engineVersion, folder: deps.cwd, root: s.root.model || "none (use /model)", sub: s.sub.model || "same" }, size.columns);
+      return bannerLines({ app: APP_VERSION, engine: engineVersion, folder: deps.cwd, root: s.root.model || "none (use /model)", sub: s.sub.model || "same", followUps: s.conversation.follow_ups }, size.columns);
     }
     return transcriptLines(view.entries, size.columns, theme, { full, now: view.now });
   }, [view, size.columns, theme, full, engineVersion, deps, deps.session.settings]);

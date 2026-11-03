@@ -15,6 +15,7 @@ import type {
   RunBudgetParams,
   RunCellParams,
   RunChildParams,
+  RunClosedParams,
   RunCompactedParams,
   RunFinishedParams,
   RunLimits,
@@ -27,6 +28,7 @@ import type {
 import type { Session } from "../session.ts";
 import { saveSettings, setSetting, type Settings } from "../settings.ts";
 import type { ApprovalQueue } from "./approvals.ts";
+import { refKey, type Conversation } from "./conversation.ts";
 import { cacheTone, contextTone, formatClock, formatCost, formatTokens, thousands, unicodeSupported, type StatusSegment } from "./format.ts";
 
 /** Store changes reach React at most this often, so 20 streams don't repaint per chunk. */
@@ -40,7 +42,7 @@ const STDERR_LINES = 12;
 const EARLY_MAX = 256;
 
 /** What the interface needs of a Session; the fake engine in the tests builds one over in-memory links. */
-export type SessionLike = Pick<Session, "bus" | "gateway" | "settings" | "info" | "start" | "cancel" | "vars" | "close">;
+export type SessionLike = Pick<Session, "bus" | "gateway" | "settings" | "info" | "start" | "cancel" | "vars" | "say" | "closeRun" | "close">;
 
 export interface AppDeps {
   session: SessionLike;
@@ -80,6 +82,20 @@ export interface SubcallRow {
   /** Set when the row is an rlm() child run (D-160): its text is every turn's reply after a `── turn k ──` line, and its
    *  usage the sum of its turns. */
   child: ChildInfo | null;
+  /** A root row of an earlier prompt of the conversation: its "Issued by" line, frozen when the next prompt began,
+   *  because turns count from 1 again in every prompt (D-199) and `cellCode` then holds the new prompt's cells. */
+  issued?: string;
+}
+
+/** "Issued by turn T, line L: <that line of the cell>", once the cell's code is known; `rlm<n> turn T` for a call an
+ *  rlm() child made, whose cells `cellCode` then holds. */
+export function issuedBy(row: SubcallRow, cellCode: Record<number, string>): string {
+  if (row.issued !== undefined) return row.issued;
+  const { turn, line } = row.origin;
+  const by = row.origin.child === undefined ? `turn ${turn}` : `rlm${row.origin.child} turn ${turn}`;
+  if (line === null) return `Issued by ${by}, line unknown`;
+  const text = cellCode[turn]?.split("\n")[line - 1]?.trim();
+  return `Issued by ${by}, line ${line}${text ? `: ${text}` : ""}`;
 }
 
 /** One cell of an rlm() child, from run.child "turn". */
@@ -161,6 +177,10 @@ export interface RunView {
   totals: Totals | null;
   finished: RunFinishedParams | null;
   engineExit: { code: number; stderr: string[] } | null;
+  /** The run's conversation (v1 step 4), from run.started with `conversation: true`; null for a one-shot run. */
+  conversation: Conversation | null;
+  /** The prompt the view shows last: 0 for the run's first question, k for follow-up k. */
+  prompt: number;
   /** Date.now() at the flush that built this view; screens draw timers from it. */
   now: number;
 }
@@ -194,6 +214,8 @@ export function emptyView(): RunView {
     totals: null,
     finished: null,
     engineExit: null,
+    conversation: null,
+    prompt: 0,
     now: Date.now(),
   };
 }
@@ -227,6 +249,8 @@ export class RunStore {
   private rejected = 0;
   /** Engine events that came while starting with no run id yet, for startResolved() to replay. */
   private early: { method: string; params: any }[] = [];
+  /** What beginFollowUp changed, for followUpFailed to put back. */
+  private beforeFollowUp: Pick<RunView, "phase" | "startedAt" | "endedAt" | "finished" | "failKind" | "prompt" | "turns" | "budget"> | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private lastFlush = 0;
   private tick: { timer: ReturnType<typeof setInterval>; ms: number } | undefined;
@@ -270,6 +294,56 @@ export class RunStore {
     this.lastReply = null;
     this.compactedTo = null;
     this.rejected = 0;
+    this.changed();
+  }
+
+  /**
+   * The next question of the open conversation (v1 step 4), before run.say is sent: the run id, the transcript and the
+   * panel's rows stay; the question is added with detail `follow-up <k>`, and the prompt's turns and budgets start over.
+   */
+  beginFollowUp(question: string): void {
+    const v = this.v;
+    const conv = v.conversation;
+    if (!conv) return;
+    const k = conv.promptIndex + 1;
+    this.beforeFollowUp = { phase: v.phase, startedAt: v.startedAt, endedAt: v.endedAt, finished: v.finished, failKind: v.failKind, prompt: v.prompt, turns: v.turns, budget: v.budget };
+    v.phase = "starting";
+    v.prompt = k;
+    v.startedAt = Date.now();
+    v.endedAt = null;
+    v.finished = null;
+    v.failKind = null;
+    v.turns = 0; // turns count from 1 in every prompt (D-199)
+    for (const b of v.blocks) {
+      for (const r of b.rows) if (r.origin.child === undefined && r.issued === undefined) r.issued = issuedBy(r, v.cellCode);
+    }
+    v.cellCode = {};
+    v.rootOpen = false;
+    if (v.limits) v.budget = { turnsLeft: v.limits.max_turns, subcallsLeft: v.limits.max_subcalls };
+    v.entries.push({ kind: "question", text: question, detail: `follow-up ${k}` });
+    this.changed();
+  }
+
+  /** run.say answered with the prompt's index. */
+  followUpResolved(promptIndex: number): void {
+    this.beforeFollowUp = null;
+    this.v.prompt = promptIndex;
+    if (this.v.phase === "starting") this.v.phase = "running";
+    this.changed();
+  }
+
+  /** run.say failed: back to how the conversation stood, with `message` as an error when given. */
+  followUpFailed(message?: string): void {
+    const before = this.beforeFollowUp;
+    this.beforeFollowUp = null;
+    if (before && this.v.phase === "starting") Object.assign(this.v, before);
+    if (message !== undefined) this.v.entries.push({ kind: "error", text: message, lines: [] });
+    this.changed();
+  }
+
+  /** The engine no longer has the conversation (run.say answered -32010): no question continues it. */
+  conversationEnded(): void {
+    if (this.v.conversation) this.v.conversation.open = false;
     this.changed();
   }
 
@@ -318,6 +392,12 @@ export class RunStore {
     return { phase: this.v.phase, runId: this.v.runId };
   }
 
+  /** The run's conversation now, ahead of the next flush (a copy), or null. */
+  conversation(): Conversation | null {
+    const c = this.v.conversation;
+    return c ? { ...c, files: [...c.files] } : null;
+  }
+
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => {
@@ -351,6 +431,8 @@ export class RunStore {
   /** One engine event of this run; another run's, or any before a run id is known, is dropped. */
   private dispatch(method: string, params: any): void {
     if (params.run_id !== this.v.runId || this.v.runId === null) return;
+    // a follow-up's first events can come before run.say's result is handled
+    if (method !== "run.finished" && method !== "run.closed") this.promptBegan();
     switch (method) {
       case "run.started":
         this.started(params as RunStartedParams);
@@ -381,6 +463,9 @@ export class RunStore {
       case "run.finished":
         this.finished(params as RunFinishedParams);
         break;
+      case "run.closed":
+        this.closed(params as RunClosedParams);
+        break;
       default:
         return;
     }
@@ -396,6 +481,33 @@ export class RunStore {
     v.limits = p.limits;
     v.budget ??= { turnsLeft: p.limits.max_turns, subcallsLeft: p.limits.max_subcalls };
     v.entries.push({ kind: "started", text: startedLine(p) });
+    if (p.conversation === true) {
+      v.conversation = {
+        runId: p.run_id,
+        mode: p.mode,
+        files: Array.isArray(p.input?.files) ? [...p.input.files] : [],
+        folder: this.deps.cwd,
+        root: refKey(p.root),
+        sub: refKey(p.sub),
+        profile: p.profile,
+        permissionMode: p.permission_mode,
+        promptIndex: 0,
+        open: true,
+      };
+    }
+  }
+
+  /** A follow-up that is still `starting` is running once any of its events arrives. */
+  private promptBegan(): void {
+    if (this.v.phase === "starting" && this.v.prompt > 0 && this.v.conversation) {
+      this.beforeFollowUp = null;
+      this.v.phase = "running";
+    }
+  }
+
+  /** run.closed (v1 step 4): the conversation is over, and nothing continues it. */
+  private closed(_p: RunClosedParams): void {
+    if (this.v.conversation) this.v.conversation.open = false;
   }
 
   private reply(p: RunReplyParams): void {
@@ -496,13 +608,20 @@ export class RunStore {
 
   private finished(p: RunFinishedParams): void {
     const v = this.v;
+    const open = p.open === true;
+    if (v.conversation) {
+      v.conversation.promptIndex = typeof p.prompt_index === "number" ? p.prompt_index : v.prompt;
+      v.conversation.open = open;
+    }
+    this.beforeFollowUp = null;
     v.finished = p;
     v.phase = p.infra_kind === "cancelled" ? "cancelled" : p.infra_error ? "failed" : "finished";
     v.failKind = v.phase === "failed" ? (p.infra_kind ?? "other") : null;
     v.endedAt = Date.now();
     v.rootOpen = false;
     v.entries = v.entries.filter((e) => !(e.kind === "reply" && e.live) && e.kind !== "compacting");
-    for (const b of v.blocks) {
+    // an open conversation cancels nothing between prompts (D-203): an llm_async call may still be going
+    for (const b of open ? [] : v.blocks) {
       for (const r of b.rows) {
         if (r.status === "queued" || r.status === "streaming") {
           r.status = "error";
@@ -523,6 +642,7 @@ export class RunStore {
       this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live) && x.kind !== "compacting");
       this.v.entries.push({ kind: "compacting" });
     } else if (e.role === "root") {
+      this.promptBegan();
       this.calls.set(e.call_id, { role: "root" });
       this.v.rootOpen = true;
       this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live) && x.kind !== "compacting");
@@ -637,6 +757,7 @@ export class RunStore {
   private onEngineExit(code: number, stderr: string[]): void {
     const v = this.v;
     v.engineExit = { code, stderr: stderr.slice(-STDERR_LINES) };
+    if (v.conversation) v.conversation.open = false; // the engine took the conversation with it
     if (isActive(v.phase)) {
       v.phase = "failed";
       v.failKind = "engine";
@@ -718,6 +839,7 @@ function copyView(v: RunView): RunView {
   return {
     ...v,
     entries: v.entries.map((e) => ({ ...e })),
+    conversation: v.conversation ? { ...v.conversation, files: [...v.conversation.files] } : null,
     blocks: v.blocks.map((b) => ({ ...b, rows: b.rows.map((r) => ({ ...r, child: r.child ? { ...r.child, cells: [...r.child.cells] } : null })) })),
     permissions: [...v.permissions],
     cellCode: { ...v.cellCode },
@@ -894,6 +1016,7 @@ export function statusModel(view: RunView, deps: AppDeps, nextMode?: string, run
 }
 
 function stateText(view: RunView, deps: AppDeps): { text: string; tone?: StatusSegment["tone"] } {
+  if (view.conversation?.open && !view.readOnly && view.phase === "finished") return { text: "ready for a follow-up", tone: "ok" };
   switch (view.phase) {
     case "idle":
       return { text: "idle" };
@@ -901,7 +1024,7 @@ function stateText(view: RunView, deps: AppDeps): { text: string; tone?: StatusS
       return { text: "starting" };
     case "running":
       if (deps.approvals.size > 0) return { text: "waiting for approval", tone: "warn" };
-      return { text: `running ${formatClock(((view.now ?? Date.now()) - (view.startedAt ?? view.now)) / 1000)}` };
+      return { text: `running ${formatClock(((view.now ?? Date.now()) - (view.startedAt ?? view.now)) / 1000)}${view.prompt > 0 ? ` · follow-up ${view.prompt}` : ""}` };
     case "cancelling":
       return { text: "cancelling", tone: "warn" };
     case "finished":
@@ -971,7 +1094,15 @@ export function viewFromRecord(record: Record<string, any>, opts: { unicode?: bo
 
   const files: string[] = Array.isArray(record.input?.files) ? record.input.files : [];
   const text = str(record.mode === "repo" ? record.task : record.question) ?? "";
-  const detail = record.mode === "repo" ? `repo: ${str(record.workspace) ?? "?"}` : `read: ${files.length} file${files.length === 1 ? "" : "s"}`;
+  // a conversation's record holds one prompt (v1 step 4): a follow-up's shows its own question and turns only
+  const promptIndex = typeof record.prompt_index === "number" ? record.prompt_index : 0;
+  v.prompt = promptIndex;
+  const detail =
+    promptIndex > 0
+      ? `follow-up ${promptIndex}`
+      : record.mode === "repo"
+        ? `repo: ${str(record.workspace) ?? "?"}`
+        : `read: ${files.length} file${files.length === 1 ? "" : "s"}`;
   v.entries.push({ kind: "question", text, detail });
   if (v.root && v.sub) {
     v.entries.push({

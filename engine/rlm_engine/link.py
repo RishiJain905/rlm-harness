@@ -38,6 +38,7 @@ MODEL_ERROR = -32001
 UNKNOWN_RUN = -32010
 UNKNOWN_PROFILE = -32011
 BAD_INPUT = -32012
+RUN_BUSY = -32013  # run.say or run.close while a conversation's prompt is running (v1 step 4)
 CANCELLED = -32800
 
 MESSAGE_TOO_LARGE = "message_too_large"  # data.kind of the error for a message this side would not send

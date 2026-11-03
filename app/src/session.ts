@@ -21,6 +21,7 @@ import {
   type ModelRef,
   type ModelWindow,
   type PermissionMode,
+  type RunSayResult,
   type RunStartParams,
   type RunStartResult,
   type RunVarsResult,
@@ -49,6 +50,8 @@ export interface StartRun {
   tag?: string;
   batch?: string;
   logDir?: string;
+  /** v1 step 4: keep the run open for follow-ups (run.say). Only the interactive app sets it; scripts stay one-shot. */
+  conversation?: boolean;
 }
 
 /** A mistake in what the user asked for; the CLI prints it and exits 2. */
@@ -91,8 +94,7 @@ export function buildRunParams(
   if (!root) {
     throw new UsageError("no root model: pass --root provider/model, or pick one with `rlmh config set root.model provider/model`");
   }
-  // An empty sub.model is the root's provider and model, with the sub thinking setting, never the root's.
-  const sub = r.sub ?? settingRef(settings, "sub") ?? { provider: root.provider, model: root.model, thinking: thinkingOf(settings, "sub") };
+  const sub = r.sub ?? subRef(settings, root);
   const permissionMode = r.permissionMode ?? settings.permissions.mode;
   if (!PERMISSION_MODES.includes(permissionMode)) {
     throw new UsageError(`permission mode must be one of ${PERMISSION_MODES.join(", ")} (got ${JSON.stringify(permissionMode)})`);
@@ -122,7 +124,20 @@ export function buildRunParams(
   if (r.batch !== undefined) p.batch = r.batch;
   if (r.logDir !== undefined) p.log_dir = resolve(r.logDir);
   p.window = deps.windowOf?.(root) ?? { context_window: 0, max_output: 0 };
+  p.conversation = r.conversation ?? false;
   return p;
+}
+
+/** The root and sub models a run with no overrides starts with, as buildRunParams fills them; root is undefined while
+ *  no root model is picked. The interactive app compares them with an open conversation's (v1 step 4). */
+export function settingsRefs(settings: Settings): { root: ModelRef | undefined; sub: ModelRef | undefined } {
+  const root = settingRef(settings, "root");
+  return { root, sub: root ? subRef(settings, root) : undefined };
+}
+
+/** An empty sub.model is the root's provider and model, with the sub thinking setting, never the root's. */
+function subRef(settings: Settings, root: ModelRef): ModelRef {
+  return settingRef(settings, "sub") ?? { provider: root.provider, model: root.model, thinking: thinkingOf(settings, "sub") };
 }
 
 function settingRef(settings: Settings, role: "root" | "sub"): ModelRef | undefined {
@@ -238,6 +253,21 @@ export class Session {
   async cancel(runId: string): Promise<void> {
     try {
       await this.engine.link.request("run.cancel", { run_id: runId });
+    } catch (err) {
+      if (!(err instanceof RpcError && err.code === ErrorCode.UNKNOWN_RUN)) throw err;
+    }
+  }
+
+  /** The next question of an open conversation (v1 step 4). Passes the engine's RpcError through: -32010 when the
+   *  conversation is gone, -32013 while a prompt is still running, -32602 for empty text. */
+  say(runId: string, text: string): Promise<RunSayResult> {
+    return this.engine.link.request<RunSayResult>("run.say", { run_id: runId, text });
+  }
+
+  /** Ends an open conversation; returns once run.closed was sent. A run that is unknown or already closed is no error. */
+  async closeRun(runId: string): Promise<void> {
+    try {
+      await this.engine.link.request("run.close", { run_id: runId });
     } catch (err) {
       if (!(err instanceof RpcError && err.code === ErrorCode.UNKNOWN_RUN)) throw err;
     }

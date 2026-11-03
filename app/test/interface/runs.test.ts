@@ -1,12 +1,17 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
 // runs.ts against temp run folders: the summaries, the byte ranges (the records hold non-ASCII text,
-// so offsets are bytes), the torn last line, unknown formats, the newest-200 cut and `readRun`.
+// so offsets are bytes), the torn last line, unknown formats, the newest-200 cut and `readRun`; and a
+// conversation's records (v1 step 4) in /runs.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runRow } from "../../src/interface/commands/runs.tsx";
 import { READABLE_FORMATS, RUN_LOG_FORMAT, listRuns, readRun, upgradeRecord, type RunSummary } from "../../src/interface/runs.ts";
+import { viewFromRecord } from "../../src/interface/store.ts";
+import { createFakeApp } from "../fakes/engine.ts";
+import { KEYS, mount, type Mounted } from "./helpers.ts";
 
 let runsDir: string;
 
@@ -297,5 +302,67 @@ describe("readRun", () => {
     const got = (await readRun(runs[1] as RunSummary)) as Rec;
     expect(got.run_id).toBe("a");
     expect(got.question).toBe("é".repeat(100));
+  });
+});
+
+describe("a conversation's records (v1 step 4)", () => {
+  /** Prompt 0 and follow-up 1 of one conversation: the same run_id, each with its own question and turns. */
+  function conversation(): { first: Rec; second: Rec } {
+    const first = rec({ run_id: "r_conv", started_at: 10, question: "What is in a.txt?", prompt_index: 0, conversation: true, turns: [{ turn: 1, reply: "first reply", code: "submit('hello')", stdout: "", error: null }] });
+    const second = rec({
+      run_id: "r_conv",
+      started_at: 20,
+      question: "And how long is it?",
+      prompt_index: 1,
+      conversation: true,
+      answer: "6",
+      turns: [{ turn: 1, reply: "second reply", code: "submit(len(context))", stdout: "", error: null }],
+    });
+    return { first, second };
+  }
+
+  test("/runs lists both records, the second with follow-up 1: before its question", async () => {
+    const { first, second } = conversation();
+    log("interactive", [first, second]);
+    const runs = await listRuns(runsDir);
+    expect(runs.map((r) => [r.runId, r.promptIndex])).toEqual([["r_conv", 1], ["r_conv", 0]]);
+    expect(runRow(runs[0]!, "…")).toContain("  follow-up 1: And how long is it?");
+    expect(runRow(runs[1]!, "…")).toContain("  What is in a.txt?");
+    expect(runRow(runs[1]!, "…")).not.toContain("follow-up");
+  });
+
+  test("on the /runs screen", { timeout: 20_000 }, async () => {
+    const app = await createFakeApp({ scenario: "simpleRead" });
+    let m: Mounted | undefined;
+    try {
+      const { first, second } = conversation();
+      const dir = join(app.deps.home, "runs", "interactive");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "runs.jsonl"), `${line(first)}\n${line(second)}\n`);
+      m = mount(app.deps);
+      await m.waitForText("idle");
+      await m.type("/runs");
+      await m.press(KEYS.enter);
+      const s = await m.waitForText("follow-up 1: And how long"); // the 40-column question cell cuts the rest
+      expect(s).toContain("What is in a.txt?");
+      // Enter replays the follow-up's own prompt: its question and its turns only
+      await m.press(KEYS.enter);
+      const replay = await m.waitForText("(read-only)");
+      expect(replay).toContain("And how long is it?");
+      expect(replay).toContain("(follow-up 1)");
+      expect(replay).toContain("second reply");
+      expect(replay).not.toContain("first reply");
+    } finally {
+      m?.unmount();
+      await app.dispose();
+    }
+  });
+
+  test("viewFromRecord shows the record's prompt only", () => {
+    const { second } = conversation();
+    const view = viewFromRecord(second);
+    expect(view.prompt).toBe(1);
+    expect(view.entries[0]).toEqual({ kind: "question", text: "And how long is it?", detail: "follow-up 1" });
+    expect(view.entries.filter((e) => e.kind === "reply").map((e) => (e.kind === "reply" ? e.text : ""))).toEqual(["second reply"]);
   });
 });

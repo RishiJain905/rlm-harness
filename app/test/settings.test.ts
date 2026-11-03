@@ -31,6 +31,7 @@ const DEFAULTS: Record<string, string | number | boolean> = {
   "providers.openai.base_url": "",
   "providers.openai.max_in_flight": 16,
   "display.verbose": false,
+  "conversation.follow_ups": true,
 };
 
 let dir: string;
@@ -86,6 +87,7 @@ describe("settings", () => {
       "providers.<id>.base_url",
       "providers.<id>.max_in_flight",
       "display.verbose",
+      "conversation.follow_ups",
     ]);
     for (const def of SCHEMA) expect(def.doc.length).toBeGreaterThan(0);
     const s = defaultSettings();

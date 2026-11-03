@@ -328,6 +328,8 @@ describe("the pool's exclusive groups (stub session, grader and probe)", () => {
               cost_usd: 0,
               infra_error: null,
               infra_kind: null,
+              prompt_index: 0,
+              open: false,
               wall_s: 0.05,
               log_path: "",
             };
@@ -385,6 +387,7 @@ describe("the pool's stops (stub session)", () => {
           const f: RunFinishedParams = {
             run_id: id, tag: r.tag ?? null, answer: 5, submitted: true, answer_valid: true, turns: 1, subcalls: 0,
             usage: { root: zero(), sub: zero() }, cost_usd: usd, infra_error: null, infra_kind: null, wall_s: 0.03, log_path: "",
+            prompt_index: 0, open: false,
           };
           bus.emit("engine.event", { method: "run.finished", params: f });
         }, 30);

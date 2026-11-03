@@ -64,6 +64,10 @@ describe("--json", () => {
       expect(finished.answer).toBe("42");
       expect(finished.infra_error).toBeNull();
       expect(finished.subcalls).toBe(1);
+      // scripts stay one-shot (v1 step 4, D-178): no conversation, and no run.closed
+      expect(started.conversation).toBe(false);
+      expect([finished.prompt_index, finished.open]).toEqual([0, false]);
+      expect(types).not.toContain("run.closed");
 
       const rec = await lastRecord(finished.log_path);
       expect(sorted(Object.keys(rec))).toEqual(sorted(RECORD_KEYS));

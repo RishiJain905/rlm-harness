@@ -1,8 +1,9 @@
 // KV cache: none; a test fake. It builds model.complete messages the way the engine does, but its bytes are never sent to a real provider.
 // The fake engine for step 7's interface tests: it speaks the real link (two in-memory Links, the engine
 // side with idPrefix "e") and drives the real Gateway on the scripted fake provider (§7.5). It answers
-// engine.info, run.start, run.cancel and run.vars, and plays a scenario with the events and ordering of
-// §5.4. The replies come from the fake-provider script derived from the scenario, never from here: the
+// engine.info, run.start, run.cancel, run.vars, run.say and run.close, and plays a scenario with the events and
+// ordering of §5.4. Only the `conversation` scenario keeps a run started with `conversation: true` open after its
+// answer (v1 step 4); every other scenario ends such a run after its first prompt, as an infra error would. The replies come from the fake-provider script derived from the scenario, never from here: the
 // engine side only runs the code it gets back, through a small reader of the few Python shapes the
 // scenarios use (llm, llm_batch, shell, open(..., "w"), fetch, print, submit).
 //
@@ -31,6 +32,7 @@ import {
   type ModelCompleteParams,
   type ModelCompleteResult,
   type ModelErrorData,
+  type RunSayResult,
   type RunStartParams,
   type RunStartResult,
   type RunSubcallParams,
@@ -43,10 +45,10 @@ import { buildRunParams, type StartRun } from "../../src/session.ts";
 import { defaultSettings, saveSettings, setSetting, type Settings } from "../../src/settings.ts";
 import { PROTOCOL_VERSION } from "../../src/version.ts";
 
-export type Scenario = "simpleRead" | "fanOut20" | "approvalShell" | "twoApprovals" | "slow" | "rootError" | "hold" | "compacting";
+export type Scenario = "simpleRead" | "fanOut20" | "approvalShell" | "twoApprovals" | "slow" | "rootError" | "hold" | "compacting" | "conversation";
 
 export interface FakeEngine {
-  /** Every request the engine received, in order (engine.info, run.start, run.cancel, run.vars). */
+  /** Every request the engine received, in order (engine.info, run.start, run.cancel, run.vars, run.say, run.close). */
   calls: { method: string; params: any }[];
   /** Send a notification from the engine side; `run_id` defaults to the current run. A `run.finished` for an active run also stops its play (after a `model.cancel`, as D-84 orders). */
   emit(method: string, params: object): void;
@@ -54,6 +56,8 @@ export interface FakeEngine {
   crash(code: number, stderr: string[]): void;
   /** The current or last run id. */
   readonly runId: string | null;
+  /** The engine forgets the current run without a word to the app, so its next run.say gets -32010 (v1 step 4). */
+  dropRun(): void;
 }
 
 export interface FakeApp {
@@ -165,7 +169,25 @@ export const SCENARIO_SCRIPTS: Record<Scenario, Record<string, unknown>> = {
     chunk_chars: 8,
     delay_ms: 5,
   },
+  /** v1 step 4: one root reply per prompt, each a submit; the second (follow-up 1) streams for about a second. Each
+   *  run starts at the top of the list again. */
+  conversation: {
+    root: [
+      { text: "Answering the first question.", tool_call: { code: "submit('first answer')" } },
+      { text: SLOW_TEXT, tool_call: { code: "submit('second answer')" } },
+      { text: "Answering the next one.", tool_call: { code: "submit('third answer')" } },
+      { text: "", tool_call: { code: "submit('fourth answer')" } },
+    ],
+    sub: [{ text: "unused" }],
+    chunk_chars: 4,
+    delay_ms: 15,
+  },
 };
+
+/** The engine's follow-up texts (engine/rlm_engine/followup.py), as the fake engine appends them. */
+const SUBMITTED_NOTE = "Your answer was submitted, and the user has seen it.";
+const UNANSWERED_NOTE = "That question ended without a submitted answer.";
+const FOLLOW_UP_WHERE: Record<string, string> = { read: ", and `context` is unchanged", repo: ", and the repository keeps your edits" };
 
 /** The `compacting` scenario's turn that a compaction precedes, and its plan (v1 architecture §4.1 on a 4,096 window). */
 export const COMPACT_AT = 4;
@@ -319,6 +341,16 @@ interface RunState {
   messages: Message[];
   turns: number;
   subcallsUsed: number;
+  /** v1 step 4: true when this run stays open after an answer (the `conversation` scenario and `conversation: true`). */
+  conversation: boolean;
+  /** The prompt playing, or the last one played. */
+  promptIndex: number;
+  /** An open conversation between prompts, waiting for run.say or run.close. */
+  waiting: boolean;
+  /** subcallsUsed when the prompt began: budgets start over each prompt, ids keep counting. */
+  subcallBase: number;
+  /** Whether the previous prompt submitted, for the follow-up's note. */
+  lastSubmitted: boolean;
   batches: number;
   usage: { root: Usage; sub: Usage };
   vars: Map<string, string | string[]>;
@@ -382,7 +414,31 @@ class EngineSide {
     link.handle("run.cancel", async (p: { run_id: string }) => {
       this.calls.push({ method: "run.cancel", params: p });
       const run = this.active(p.run_id);
-      this.finish(run, { infra: { kind: "cancelled", error: "cancelled: the run was cancelled" } });
+      if (run.waiting) this.close(run); // between prompts: run.closed, and no new run.finished
+      else this.finish(run, { infra: { kind: "cancelled", error: "cancelled: the run was cancelled" } });
+      return {};
+    });
+    link.handle("run.say", async (p: { run_id: string; text: unknown }) => {
+      this.calls.push({ method: "run.say", params: p });
+      const run = this.conversationOf(p.run_id);
+      if (typeof p.text !== "string" || p.text === "") throw new RpcError(ErrorCode.INVALID_PARAMS, "text must be a non-empty string");
+      if (!run.waiting) throw new RpcError(ErrorCode.RUN_BUSY, `run ${run.id} is still answering a prompt`);
+      run.waiting = false;
+      run.promptIndex += 1;
+      const text = p.text;
+      // the result is written first; the prompt's first model.complete follows it (§5.4)
+      const timer = setTimeout(() => {
+        this.timers.delete(timer);
+        void this.prompt(run, text);
+      }, 0);
+      this.timers.add(timer);
+      return { prompt_index: run.promptIndex };
+    });
+    link.handle("run.close", async (p: { run_id: string }) => {
+      this.calls.push({ method: "run.close", params: p });
+      const run = this.conversationOf(p.run_id);
+      if (!run.waiting) throw new RpcError(ErrorCode.RUN_BUSY, `run ${run.id} is still answering a prompt; use run.cancel`);
+      this.close(run);
       return {};
     });
     link.handle("run.vars", async (p: { run_id: string }) => {
@@ -424,6 +480,31 @@ class EngineSide {
     return run;
   }
 
+  /** An open conversation, or -32010 (unknown, over, or a one-shot run). */
+  private conversationOf(runId: unknown): RunState {
+    const run = this.active(runId);
+    if (!run.conversation) throw new RpcError(ErrorCode.UNKNOWN_RUN, `run ${run.id} is not an open conversation`);
+    return run;
+  }
+
+  /** The current run, gone without a word (the test's way to make run.say answer -32010). */
+  dropRun(): void {
+    const run = this.runId ? this.runs.get(this.runId) : undefined;
+    if (!run) return;
+    run.finished = true;
+    run.ac.abort();
+  }
+
+  /** The end of a conversation: model.cancel, then run.closed {prompts}. */
+  private close(run: RunState): void {
+    if (run.finished) return;
+    run.finished = true;
+    run.waiting = false;
+    run.ac.abort();
+    this.link.notify("model.cancel", { run_id: run.id });
+    this.link.notify("run.closed", { run_id: run.id, prompts: run.promptIndex + 1 });
+  }
+
   private start(p: RunStartParams): RunStartResult {
     if (!PROFILES.some((x) => x.name === p.profile)) {
       throw new RpcError(ErrorCode.UNKNOWN_PROFILE, `unknown profile ${JSON.stringify(p.profile)}: known are default, training-v4`);
@@ -454,6 +535,11 @@ class EngineSide {
       messages: [],
       turns: 0,
       subcallsUsed: 0,
+      conversation: p.conversation === true && this.scenario === "conversation",
+      promptIndex: 0,
+      waiting: false,
+      subcallBase: 0,
+      lastSubmitted: false,
       batches: 0,
       usage: { root: zeroUsage(), sub: zeroUsage() },
       vars: new Map(),
@@ -482,27 +568,45 @@ class EngineSide {
     if (run.finished) throw new Stopped();
   }
 
+  /** A prompt's end: an open conversation waits for run.say (`open: true`); anything else ends the run. */
+  private endPrompt(run: RunState, outcome: { answer?: string | number | null; submitted?: boolean; infra?: { kind: string; error: string } | null }): void {
+    if (run.finished) return;
+    if (!run.conversation || outcome.infra) return this.finish(run, outcome);
+    run.lastSubmitted = outcome.submitted ?? false;
+    run.waiting = true;
+    this.link.notify("run.finished", this.finishedParams(run, outcome, true)); // nothing is cancelled between prompts (D-203)
+  }
+
   private finish(run: RunState, outcome: { answer?: string | number | null; submitted?: boolean; infra?: { kind: string; error: string } | null }): void {
     if (run.finished) return;
     run.finished = true;
+    run.waiting = false;
     run.ac.abort();
-    const { root, sub } = run.usage;
     this.link.notify("model.cancel", { run_id: run.id }); // D-84: at the end of every run, before run.finished
-    this.link.notify("run.finished", {
+    this.link.notify("run.finished", this.finishedParams(run, outcome, false));
+    // a run asked to be a conversation that ends here sends run.closed last, as the engine does after an infra error
+    if (run.params.conversation === true) this.link.notify("run.closed", { run_id: run.id, prompts: run.promptIndex + 1 });
+  }
+
+  private finishedParams(run: RunState, outcome: { answer?: string | number | null; submitted?: boolean; infra?: { kind: string; error: string } | null }, open: boolean): object {
+    const { root, sub } = run.usage;
+    return {
       run_id: run.id,
       tag: run.params.tag ?? null,
       answer: outcome.answer ?? null,
       submitted: outcome.submitted ?? false,
       answer_valid: true,
       turns: run.turns,
-      subcalls: run.subcallsUsed,
+      subcalls: run.subcallsUsed - run.subcallBase,
       usage: { root: { ...root }, sub: { ...sub } },
       cost_usd: Math.round((root.cost_usd + sub.cost_usd) * 1e6) / 1e6,
       infra_error: outcome.infra?.error ?? null,
       infra_kind: outcome.infra?.kind ?? null,
       wall_s: Math.round(performance.now() - run.startedAt) / 1000,
       log_path: run.logPath,
-    });
+      prompt_index: run.promptIndex,
+      open,
+    };
   }
 
   // -- the play --
@@ -532,6 +636,7 @@ class EngineSide {
       log_path: run.logPath,
       window: p.window ?? { context_window: 0, max_output: 0 },
       compaction: p.profile === "training-v4" ? null : this.scenario === "compacting" ? { ...FAKE_COMPACT_PLAN } : defaultPlan(p.window),
+      conversation: p.conversation === true,
     });
     if (this.scenario === "hold") return; // nothing more until run.cancel
 
@@ -542,6 +647,33 @@ class EngineSide {
       { role: "system", content: FAKE_SYSTEM_PROMPT },
       { role: "user", content: first },
     ];
+    await this.turns(run);
+  }
+
+  /** Follow-up `run.promptIndex` (v1 step 4): the previous prompt closed with its note, the question, then the turns. */
+  private async prompt(run: RunState, text: string): Promise<void> {
+    if (run.finished) return;
+    run.turns = 0;
+    run.usage = { root: zeroUsage(), sub: zeroUsage() };
+    run.subcallBase = run.subcallsUsed;
+    run.startedAt = performance.now();
+    const note = run.lastSubmitted ? SUBMITTED_NOTE : UNANSWERED_NOTE;
+    const followUp =
+      `Follow-up from the user. The REPL still holds every variable from before${FOLLOW_UP_WHERE[run.params.mode] ?? ""}.\n\n${text}\n\n` +
+      `(${FAKE_LIMITS.max_turns} turns left, ${this.subcallsLeft(run)} sub-calls left) Answer this with submit(), as before.`;
+    const last = run.messages[run.messages.length - 1];
+    if (last?.role === "assistant" && last.tool_call) {
+      run.messages.push({ role: "tool", tool_call_id: last.tool_call.id, content: note }, { role: "user", content: followUp });
+    } else {
+      run.messages.push({ role: "user", content: `${note}\n\n${followUp}` });
+    }
+    await this.turns(run);
+  }
+
+  /** One prompt's turns, numbered from 1 (D-199), until submit, the turn limit or an error. */
+  private async turns(run: RunState): Promise<void> {
+    const p = run.params;
+    const repo = p.mode === "repo";
     const native = p.call_format === "native";
     try {
       for (let turn = 1; turn <= FAKE_LIMITS.max_turns; turn++) {
@@ -601,7 +733,7 @@ class EngineSide {
         }
         if (result.submitted) {
           this.event(run, "run.cell", cell(null));
-          this.finish(run, { answer: result.answer, submitted: true });
+          this.endPrompt(run, { answer: result.answer, submitted: true });
           return;
         }
         const turnsLeft = FAKE_LIMITS.max_turns - turn;
@@ -617,7 +749,7 @@ class EngineSide {
         this.event(run, "run.cell", cell(observation));
         this.event(run, "run.budget", { turns_left: turnsLeft, subcalls_left: this.subcallsLeft(run) });
       }
-      this.finish(run, {});
+      this.endPrompt(run, {});
     } catch (err) {
       if (run.finished || err instanceof Stopped) return;
       if (err instanceof RpcError && err.code === ErrorCode.CANCELLED) {
@@ -663,7 +795,7 @@ class EngineSide {
     run.messages = [...head, { role: "user", content: summary }, ...tail];
     this.event(run, "run.compacted", {
       turn,
-      prompt_index: 0,
+      prompt_index: run.promptIndex,
       child_id: null,
       before_tokens: before,
       after_tokens: Math.ceil(messageChars(run.messages) / 3),
@@ -675,7 +807,7 @@ class EngineSide {
   }
 
   private subcallsLeft(run: RunState): number {
-    return Math.max(0, FAKE_LIMITS.max_subcalls - run.subcallsUsed);
+    return Math.max(0, FAKE_LIMITS.max_subcalls - (run.subcallsUsed - run.subcallBase));
   }
 
   /** Runs one cell of the few shapes the scenarios use. Approvals next to each other go out together. */
@@ -747,7 +879,7 @@ class EngineSide {
     const origin = { turn, line: action.line };
     run.batches += 1;
     const batchId = `b${run.batches}`;
-    if (run.subcallsUsed + n > FAKE_LIMITS.max_subcalls) {
+    if (run.subcallsUsed - run.subcallBase + n > FAKE_LIMITS.max_subcalls) {
       const message = `sub-call budget exhausted: this run may make ${FAKE_LIMITS.max_subcalls} sub-calls`;
       this.event(run, "run.subcall", {
         subcall_id: null,
@@ -1065,6 +1197,16 @@ export async function createFakeApp(opts: FakeAppOptions = {}): Promise<FakeApp>
     async vars(runId: string): Promise<VarInfo[]> {
       return (await appLink.request<RunVarsResult>("run.vars", { run_id: runId })).vars;
     },
+    say(runId: string, text: string): Promise<RunSayResult> {
+      return appLink.request<RunSayResult>("run.say", { run_id: runId, text });
+    },
+    async closeRun(runId: string): Promise<void> {
+      try {
+        await appLink.request("run.close", { run_id: runId });
+      } catch (err) {
+        if (!(err instanceof RpcError && err.code === ErrorCode.UNKNOWN_RUN)) throw err;
+      }
+    },
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
@@ -1085,6 +1227,7 @@ export async function createFakeApp(opts: FakeAppOptions = {}): Promise<FakeApp>
     get runId() {
       return engineSide.runId;
     },
+    dropRun: () => engineSide.dropRun(),
   };
 
   const deps: AppDeps = { session, keys, catalog, approvals, home, cwd, size: opts.size, env };

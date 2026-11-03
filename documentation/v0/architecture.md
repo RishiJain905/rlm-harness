@@ -146,9 +146,10 @@ rlm-harness/
 |---|---|---|
 | -32700, -32600, -32601, -32602, -32603 | `PARSE_ERROR`, `INVALID_REQUEST`, `METHOD_NOT_FOUND`, `INVALID_PARAMS`, `INTERNAL_ERROR` | parse error, invalid request, unknown method, bad params, internal |
 | -32001 | `MODEL_ERROR` | `model.complete` failed; `data` is a ModelErrorData |
-| -32010 | `UNKNOWN_RUN` | `run.cancel` or `run.vars` for a run that doesn't exist or has finished |
+| -32010 | `UNKNOWN_RUN` | `run.cancel` or `run.vars` for a run that doesn't exist or has finished; `run.say` or `run.close` for a run that isn't an open conversation (v1 step 4) |
 | -32011 | `UNKNOWN_PROFILE` | `run.start` names no known profile |
 | -32012 | `BAD_INPUT` | missing input file, a repo path that isn't a folder, or a missing field |
+| -32013 | `RUN_BUSY` | `run.say` or `run.close` while a conversation's prompt is still running (protocol 2, v1 step 4) |
 | -32800 | `CANCELLED` | the request was cancelled (a run was cancelled, or the app is closing) |
 
 ## 4. Shared types
@@ -175,7 +176,9 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 | `engine.info` | `{}` | `{version, protocol, python, contract, contract_hash, training_hash, profiles: [{name, source: "builtin"\|"user", prompt_hash, profile_hash, agent_api, limits: {read, repo}}]}`. `contract*` and `profiles` were `null` and `[]` in step 2; since step 3 `contract` is `"v4"` and `profiles` lists the built-ins, then user profiles, each sorted by name. Since v1 step 2 each entry also has `agent_api` (bool) and `limits`, each mode's `contract.Limits.as_dict()`, which `rlmh eval`'s estimate caps its reference tokens with (D-198); added fields, so the protocol number stays | |
 | `run.start` | the run.start table below | `{run_id, log_path}`, returned once the worker is ready and before the first root call. `run_id` is `"r_"` plus 12 lowercase hex characters (D-38) | -32011, -32012 |
 | `run.cancel` | `{run_id}` | `{}`. The run finishes with `infra_error = "cancelled"` and `infra_kind = "cancelled"` | -32010 |
-| `run.vars` | `{run_id}` | `{vars: [{name, type, len: int\|null, chars: int}]}`: user-made globals only, with `chars = len(repr(v))` capped at 10⁶, measured only for exact built-in types without calling any of the model's code; anything else is `len: null, chars: 0` (D-140) | -32010 |
+| `run.vars` | `{run_id}` | `{vars: [{name, type, len: int\|null, chars: int}]}`: user-made globals only, with `chars = len(repr(v))` capped at 10⁶, measured only for exact built-in types without calling any of the model's code; anything else is `len: null, chars: 0` (D-140). It also answers while a conversation waits between prompts | -32010 |
+| `run.say` | `{run_id, text}` (protocol 2, v1 step 4) | `{prompt_index}`: the open conversation's next prompt starts, and the result is written before that prompt's first root `model.complete`, as `run.start`'s is (§5.4) | -32010 (no such open conversation), -32602 (`text` not a non-empty string), -32013 (a prompt is running) |
+| `run.close` | `{run_id}` (protocol 2, v1 step 4) | `{}`, after `run.closed` was sent (it waits up to 10 s) | -32010, -32013 (a prompt is running: use `run.cancel`) |
 | `debug.roundtrip` | `{count}` | `{texts: string[]}`. The engine sends `count` concurrent `model.complete` requests (`run_id: "debug"`, `role: "root"`, messages `[{role: "user", content: "ping <i>"}]`) and returns the answers in order. Registered only when `RLMH_DEBUG=1`; it exists for the link tests (step 2) | |
 
 **`run.start` params:**
@@ -197,6 +200,7 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 | `batch` | string | optional, default `"interactive"` | the run-log folder name (§9) |
 | `log_dir` | string | optional | absolute folder for `runs.jsonl`; wins over `batch` |
 | `window` | `{context_window: int, max_output: int}` | optional (protocol 2, v1 step 3), default zeros | the root model's catalog numbers, 0 when unknown; exactly these two keys, each a whole number of at least 0, or -32602. Compaction plans from it (v1 architecture §4.1) |
+| `conversation` | bool | optional (protocol 2, v1 step 4), default `false` | `true` keeps the run open after each prompt for `run.say` (v1 architecture §5); only the interactive app sends it. Any other type is -32602 |
 
 ### 5.2 Engine → app
 
@@ -211,18 +215,19 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 
 ### 5.3 Events: engine → app notifications
 
-Every event carries `run_id`. Turns are numbered from 1. `tag` is `null` when `run.start` had none, and `run.subcall.seconds` is `null` at `sent` (D-55).
+Every event carries `run_id`. Turns are numbered from 1, in each prompt of a conversation (D-199). `tag` is `null` when `run.start` had none, and `run.subcall.seconds` is `null` at `sent` (D-55).
 
 | Method | Params besides `run_id` | Sent |
 |---|---|---|
-| `run.started` | `tag, mode, profile, prompt_hash, profile_hash, contract_hash, call_format, root, sub, permission_mode, workspace, input: {chars, lines, sha256, files}, limits: {max_turns, max_subcalls, root_max_tokens, output_max_chars, cell_timeout_s, subcall_max_chars, subcall_max_tokens}, log_path`, and since protocol 2 `window` (as sent) and `compaction: {window, trigger, keep} \| null` (v1 architecture §3.3) | once, before the first root call. `input` is defined as training defined it: `chars = len(context)`, `lines = len(context.splitlines())`, `sha256` = hex of `sha256(context.encode("utf-8", "replace"))`. `files` is the list of input paths as given, with `/` separators, in read mode, and `[]` in repo mode |
+| `run.started` | `tag, mode, profile, prompt_hash, profile_hash, contract_hash, call_format, root, sub, permission_mode, workspace, input: {chars, lines, sha256, files}, limits: {max_turns, max_subcalls, root_max_tokens, output_max_chars, cell_timeout_s, subcall_max_chars, subcall_max_tokens}, log_path`, and since protocol 2 `window` (as sent), `compaction: {window, trigger, keep} \| null` (v1 architecture §3.3) and `conversation` (bool, v1 step 4) | once, before the first root call. `input` is defined as training defined it: `chars = len(context)`, `lines = len(context.splitlines())`, `sha256` = hex of `sha256(context.encode("utf-8", "replace"))`. `files` is the list of input paths as given, with `/` separators, in read mode, and `[]` in repo mode |
 | `run.reply` | `turn, text, tool_call, reasoning, finish_reason, usage, seconds` | after each root reply |
 | `run.cell` | `turn, code (null when the reply had none), output (stdout as the model sees it, truncation note included), error, observation (the next message's text, or null after a submit or the last turn), seconds (compute), restarted, crash, repo_changed` | after each cell, or after the no-code error |
 | `run.subcall` | `subcall_id, origin, batch, prompt_chars, status: "sent"\|"done"\|"error"\|"rejected", error, seconds` | sent by the bridge at `sent` and again at the end. A budget or oversize refusal is one `rejected` event, with `subcall_id: null` and `prompt_chars` set to the longest prompt |
 | `run.permission` | `turn, kind, detail, allowed, asked, remembered` | sent by `Permissions` for each decision on a guarded action, except writes inside the scratch folder; at most 200 per run |
 | `run.budget` | `turns_left, subcalls_left` | sent by the loop after each turn and by the bridge after each batch |
-| `run.finished` | `tag, answer, submitted, answer_valid, turns, subcalls, usage: {root: Usage, sub: Usage}, cost_usd, infra_error, infra_kind, wall_s, log_path` | once, after the run-log line is written; when that write fails it is still sent, with `infra_kind` `runlog` (D-137) |
-| `model.cancel` | (only `run_id`) | at the end of every run, before `run.finished` (D-84); the gateway aborts any calls still in flight |
+| `run.finished` | `tag, answer, submitted, answer_valid, turns, subcalls, usage: {root: Usage, sub: Usage}, cost_usd, infra_error, infra_kind, wall_s, log_path`, and since protocol 2 `prompt_index` and `open` (v1 step 4) | once per prompt, after that prompt's run-log line is written; when that write fails it is still sent, with `infra_kind` `runlog` (D-137). `turns`, `subcalls`, `usage` and `cost_usd` cover the prompt. `open: true` means a conversation waits for `run.say`; a one-shot run sends `prompt_index: 0, open: false` |
+| `run.closed` | `prompts` (protocol 2, v1 step 4) | once, when a conversation ends (`run.close`, `run.cancel`, an infra error, stdin closing), after its last `run.finished` if a prompt was running. Never for a run started with `conversation: false` |
+| `model.cancel` | (only `run_id`) | at the end of every run, before its last `run.finished` (D-84) and `run.closed`; the gateway aborts any calls still in flight. Not sent between a conversation's prompts (D-203) |
 
 ### 5.4 One run, in order
 
@@ -624,8 +629,16 @@ class RunSpec: run_id: str; mode: str; profile: Profile; root: dict; sub: dict; 
                test_hint: str | None; language: str | None; n_files: int | None; context: str | None
                tag: str | None; batch: str; log_path: Path; input_spans: list[dict] | None = None
                window: dict = {context_window: 0, max_output: 0}   # v1 step 3: run.start's window
-async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker) -> dict
-    # emits every §5.3 event, appends one run-log record and returns it; never raises except CancelledError
+               conversation: bool = False                         # v1 step 4: run.start's conversation
+class Inbox:                                   # v1 step 4: a conversation's questions; service.py makes one per conversation
+    prompt_index: int = 0; waiting: bool = False   # waiting: between prompts, so run.say may put
+    def put(self, text: str) -> int           # waiting = False, prompt_index += 1, returns it
+    def close(self) -> None                   # puts None: the conversation ends
+    async def next(self) -> str | None
+async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker, inbox: Inbox | None = None) -> dict
+    # emits every §5.3 event, appends one run-log record per prompt and returns the last; never raises except CancelledError
+# engine/rlm_engine/followup.py (v1 step 4): SUBMITTED_NOTE, UNANSWERED_NOTE, FOLLOW_UP, WHERE (pinned texts)
+def follow_up_messages(last: dict, *, submitted: bool, text: str, mode: str, turns_left: int, subcalls_left: int) -> list[dict]
 # engine/rlm_engine/runlog.py
 FORMAT_VERSION = 2                             # v1 step 3 (v1 architecture §3.4); /runs reads 1 and 2
 RECORD_KEYS: tuple[str, ...]                  # the top-level keys of the record below, in order
@@ -651,14 +664,19 @@ fetches: [{url, status, chars, error, seconds}], permissions: [Permissions.log e
 submitted, answer, answer_valid, usage: {root, sub}, cost_usd, cache: {read_tokens, write_tokens, hit_rate},
 timeouts, crashes, restarts, diff, infra_error, infra_kind, host_traceback,
 window: {context_window, max_output},       # format 2 (v1 step 3): run.start's window
-compactions: [run.compacted bodies without run_id], prompt_index, conversation   # step 3 writes 0 and false
+compactions: [run.compacted bodies without run_id], prompt_index, conversation   # step 4: one record per prompt
 ```
+
+Since v1 step 4 a conversation writes one record per prompt, with the same `run_id`; `question | task` is that
+prompt's text, `messages` is the whole list as the prompt left it, `diff` accumulates against `base_tree`, and
+`turns`, `subcalls`, `children`, `fetches`, `permissions`, `compactions`, `usage`, `cost_usd`, `cache`, `timeouts`,
+`crashes` and `restarts` cover the prompt (v1 architecture §3.4, D-199, D-246).
 
 ```ts
 // app/src/session.ts
 export interface StartRun { mode: "read" | "repo"; question?: string; inputs?: string[]; task?: string; repoPath?: string;
   testHint?: string; profile?: string; root?: ModelRef; sub?: ModelRef; permissionMode?: string; callFormat?: string;
-  interactive: boolean; tag?: string; batch?: string; logDir?: string }
+  interactive: boolean; tag?: string; batch?: string; logDir?: string; conversation?: boolean }   // conversation: v1 step 4, default false
 export class Session {
   static open(opts: { home: string; verbose?: boolean; approvals: (p: ApprovalParams) => Promise<ApprovalResult> }): Promise<Session>;
   readonly bus: Bus<AppEvents>; readonly gateway: Gateway;
@@ -668,6 +686,8 @@ export class Session {
   start(r: StartRun): Promise<{ run_id: string; log_path: string }>;   // fills defaults from settings, resolves call_format
   cancel(runId: string): Promise<void>;
   vars(runId: string): Promise<VarInfo[]>;
+  say(runId: string, text: string): Promise<RunSayResult>;           // v1 step 4: RPC errors pass through
+  closeRun(runId: string): Promise<void>;                             // v1 step 4: -32010 (already closed) resolves
   close(): Promise<void>;
 }
 ```
@@ -675,9 +695,9 @@ export class Session {
 Built at step 6 (2026-10-31). What steps 7, 8 and 9 can rely on, beyond the signatures:
 
 - **Order on the wire (§5.4).** The `run.start` result comes first, then `run.started`, then the first root `model.complete`. A gate in `service.py` holds the run's notifications and delays its model calls and approvals until the handler has returned, which works because `Link` writes the result in the same step (no post-reply hook was needed). A run whose worker never starts sends its result, then `model.cancel`, then `run.finished` (D-84).
-- **`run.cancel`** returns `{}` only after `run.finished` was sent (it waits up to 10 s). Closing the engine's stdin cancels every run and waits for each record.
+- **`run.cancel`** returns `{}` only after `run.finished` was sent (it waits up to 10 s); for a conversation waiting between prompts, only `run.closed` is sent. Closing the engine's stdin cancels every run, open conversations included, and waits for each record.
 - **`infra_kind`** is a ModelErrorData `kind` (root call or sub-call), `worker`, `internal` (a request handler failed), `workspace` (a git failure in snapshot or diff, D-85), `runlog` (the run-log line could not be written, D-137), `cancelled` or `host_bug`. `infra_error` is `"<kind>: <message>"`, the kind written once.
-- **The record.** `RECORD_KEYS` has `question` in the `question | task` slot: a repo-mode record has `task` there instead. A turn whose cell raised has its reply and `null` cell fields, and no `run.cell` was sent for it (D-86). `subcalls` are sorted by `subcall_id`; `run.finished.subcalls` is `bridge.subcalls_used`. `run.finished.answer` is the submitted JSON value, not always a string (D-89).
+- **The record.** `RECORD_KEYS` has `question` in the `question | task` slot: a repo-mode record has `task` there instead. A turn whose cell raised has its reply and `null` cell fields, and no `run.cell` was sent for it (D-86). `subcalls` are sorted by `subcall_id`; `run.finished.subcalls` is `bridge.prompt_used()`, the prompt's sub-call ids (`bridge.subcalls_used` for a one-shot run, D-246). `run.finished.answer` is the submitted JSON value, not always a string (D-89).
 - **`inputs.prepare`** runs once in `run.start` (in a thread) and again, as a no-op, in `loop.run`; a parity script that sends all four repo overrides makes no git call for them.
 - **`Session`** also exports `EngineStartError` (an engine that exits or doesn't answer `engine.info`, with its stderr tail). `open` throws `SettingsError`, `EngineNotFound`, `ProtocolMismatch` (the engine is killed) or `EngineStartError`. `start` throws `UsageError` before sending anything, or the engine's `RpcError`. `close` ends the engine's stdin and kills its tree after 2 s (D-93).
 - **`cli/run.ts`** also exports what `batch.ts` shares and step 7 may reuse: `RunWatcher` (keeps every `run.finished` by `run_id` from the moment it is made, and resolves `null` when the engine exits first), `onInterrupt`, `modelFlags`, `openFailed`. `createTtyApprover` returns an `Approver`: the approval function plus `interrupt()` (Ctrl-C denies the prompt on screen) and `close()`.
@@ -766,6 +786,7 @@ export async function ensureEngine(o: Omit<SetupOptions, "yes">): Promise<void>;
 | `providers.<id>.base_url` | string | the provider's own; `local`: `http://localhost:8000/v1` | for `local` and `custom` |
 | `providers.<id>.max_in_flight` | int | 16 | |
 | `display.verbose` | bool | false | shows engine stderr |
+| `conversation.follow_ups` | bool | true | v1 step 4 (D-178): a question in the interactive app continues the open conversation (same REPL and workspace); `false` gives a fresh run for every question. The v1 keys follow v0's in `SCHEMA` (v1 architecture §8) |
 
 ## 9. Folders at run time (`paths.ts`, decision 2b)
 

@@ -429,6 +429,20 @@ describe("replay (D-33)", () => {
     expect(server.requests[3]!.body.messages[1].content.map((b: any) => b.type)).toEqual(["text", "tool_use"]);
   });
 
+  test("a conversation keeps the thinking blocks across run.finished {open: true}, and drops them at run.closed (v1 step 4)", async () => {
+    r = await rig({ server, keys: ["anthropic"] });
+    const thinking = [{ thinking: "first thought", signature: "SIG+/=1" }];
+    server.script([() => anthropicStream({ thinking, text: "Let me look.", toolCall: { id: "toolu_1", arguments: { code: "print(1)" } } }), () => anthropicStream({ text: "done" })]);
+    const model = ref("anthropic", "claude-sonnet-5");
+    const res = await r.gateway.complete(params(model, { tools: [PYTHON_TOOL], thinking: "low" }));
+    r.bus.emit("engine.event", { method: "run.finished", params: { run_id: "r_0123456789ab", prompt_index: 0, open: true } });
+    await r.gateway.complete(followUp(res, model)); // the next prompt replays the conversation's earlier turns
+    expect(server.requests[1]!.body.messages[1].content[0].type).toBe("thinking");
+    r.bus.emit("engine.event", { method: "run.closed", params: { run_id: "r_0123456789ab", prompts: 2 } });
+    await r.gateway.complete(followUp(res, model));
+    expect(server.requests[2]!.body.messages[1].content.map((b: any) => b.type)).toEqual(["text", "tool_use"]);
+  });
+
   test("deepseek reasoning_content, only when the request has tools", async () => {
     r = await rig({ server, keys: ["deepseek"] });
     server.script([() => openaiStream({ reasoning: "deep thought", text: "", toolCall: { id: "call_d", arguments: { code: "1" } } }), () => openaiStream({ text: "ok" })]);

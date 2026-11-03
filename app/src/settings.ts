@@ -54,6 +54,13 @@ export const SCHEMA: readonly SettingDef[] = [
   { key: "providers.<id>.base_url", type: "string", default: "", doc: "API base URL, for local and custom providers" },
   { key: "providers.<id>.max_in_flight", type: "int", default: 16, doc: "Most calls in flight at once to this provider" },
   { key: "display.verbose", type: "bool", default: false, doc: "Show the engine's stderr" },
+  // v1 keys (v1 architecture §8)
+  {
+    key: "conversation.follow_ups",
+    type: "bool",
+    default: true,
+    doc: "A question in the interactive app continues the open conversation (same REPL and workspace). Off: every question starts fresh.",
+  },
 ];
 
 export type ThinkingSetting = (typeof THINKING)[number];
@@ -71,6 +78,7 @@ export interface Settings {
   call_format: (typeof CALL_FORMATS)[number];
   providers: Record<string, ProviderSettings>;
   display: { verbose: boolean };
+  conversation: { follow_ups: boolean };
 }
 
 export class SettingsError extends Error {

@@ -29,7 +29,8 @@ function date(seconds: number): string {
 export function runRow(r: RunSummary, more: string): string {
   // the row names the format; Enter says it was written by another format version
   const status = !READABLE_FORMATS.includes(r.format) ? `format ${r.format}` : r.infraKind ? `failed:${r.infraKind}` : "ok";
-  const text = r.text.replace(/\s+/g, " ");
+  // a follow-up's record (v1 step 4) names its prompt before its question
+  const text = `${r.promptIndex > 0 ? `follow-up ${r.promptIndex}: ` : ""}${r.text}`.replace(/\s+/g, " ");
   const start = text.length > 40 ? `${text.slice(0, 40 - more.length)}${more}` : text.padEnd(40);
   return `${date(r.startedAt)}  ${r.mode.padEnd(4)}  ${r.root.padEnd(24)}  ${formatCost(r.costUsd).padStart(8)}  ${String(r.turns).padStart(5)}  ${start}  ${status}`;
 }

@@ -1,9 +1,11 @@
 """KV cache: none
 
 The engine's methods on the link: `engine.info` (with the contract and profiles since step 3),
-`run.start`, `run.cancel` and `run.vars` (step 6), and `debug.roundtrip` for the link tests when `RLMH_DEBUG=1`.
+`run.start`, `run.cancel` and `run.vars` (step 6), `run.say` and `run.close` (v1 step 4), and `debug.roundtrip` for
+the link tests when `RLMH_DEBUG=1`.
 
-The engine keeps nothing between runs (D-35): `_runs` holds only the runs still going.
+The engine keeps nothing between runs (D-35): `_runs` holds only the runs still going, and an open conversation is a
+run still going until it closes.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from typing import Any, Callable
 from . import PROTOCOL_VERSION, __version__, contract, inputs, loop, profiles, runlog
 from .appport import AppPort
 from .errors import ModelError
-from .link import BAD_INPUT, INVALID_PARAMS, MODEL_ERROR, UNKNOWN_PROFILE, UNKNOWN_RUN, Link, RpcError
+from .link import BAD_INPUT, INVALID_PARAMS, MODEL_ERROR, RUN_BUSY, UNKNOWN_PROFILE, UNKNOWN_RUN, Link, RpcError
 from .permissions import MODES
 from .worker.manager import Worker
 
@@ -41,6 +43,8 @@ class _Run:
     worker: Any = None
     gate: _Gate | None = None
     cancelling: bool = False
+    inbox: loop.Inbox | None = None  # a conversation's (run.start with conversation: true)
+    closing: bool = False  # run.close has been asked
 
 
 class _Gate(AppPort):
@@ -103,6 +107,8 @@ class Engine:
         link.method("run.start", self._run_start)
         link.method("run.cancel", self._run_cancel)
         link.method("run.vars", self._run_vars)
+        link.method("run.say", self._run_say)
+        link.method("run.close", self._run_close)
         link.on_close(self._cancel_all)
         if self.debug:
             link.method("debug.roundtrip", self._debug_roundtrip)
@@ -120,13 +126,14 @@ class Engine:
             raise RpcError(BAD_INPUT, str(exc)) from None
 
         gate = _Gate(self.app)
-        entry = _Run(gate=gate)
+        entry = _Run(gate=gate, inbox=loop.Inbox() if spec.conversation else None)
 
         def capture(**kwargs: Any) -> Any:
             entry.worker = self.worker_factory(**kwargs)
             return entry.worker
 
-        entry.task = asyncio.create_task(loop.run(spec, gate, home=self.home, worker_factory=capture))
+        entry.task = asyncio.create_task(loop.run(spec, gate, home=self.home, worker_factory=capture,
+                                                  inbox=entry.inbox))
         self._runs[spec.run_id] = entry
         entry.task.add_done_callback(lambda _: self._runs.pop(spec.run_id, None))
         try:
@@ -146,6 +153,35 @@ class Engine:
         await asyncio.wait({entry.task}, timeout=CANCEL_WAIT_S)  # run.finished has been sent when this returns
         return {}
 
+    async def _run_say(self, params: dict) -> dict:
+        """The next question of an open conversation (v1 step 4). The result goes out as this handler returns, before
+        the prompt's first model.complete, which comes from the run's task in a later step (§5.4, D-84)."""
+        entry = self._open_conversation(params)
+        text = params.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise RpcError(INVALID_PARAMS, "text must be a non-empty string")
+        if not entry.inbox.waiting:
+            raise RpcError(RUN_BUSY, f"run {params.get('run_id')} is still answering a prompt")
+        return {"prompt_index": entry.inbox.put(text)}  # no await after the put
+
+    async def _run_close(self, params: dict) -> dict:
+        """End an open conversation between prompts; run.closed has been sent when this returns. A prompt that is
+        running is ended with run.cancel instead."""
+        entry = self._open_conversation(params)
+        if not entry.inbox.waiting:
+            raise RpcError(RUN_BUSY, f"run {params.get('run_id')} is still answering a prompt; use run.cancel")
+        entry.closing = True
+        entry.inbox.close()
+        await asyncio.wait({entry.task}, timeout=CANCEL_WAIT_S)
+        return {}
+
+    def _open_conversation(self, params: dict) -> _Run:
+        entry = self._runs.get(params.get("run_id"))  # type: ignore[arg-type]
+        if (entry is None or entry.task is None or entry.task.done() or entry.inbox is None or entry.closing
+                or entry.cancelling):
+            raise RpcError(UNKNOWN_RUN, f"no open conversation {params.get('run_id')!r}")
+        return entry
+
     async def _run_vars(self, params: dict) -> dict:
         entry = self._live_run(params)
         return {"vars": await entry.worker.vars() if entry.worker is not None else []}
@@ -157,7 +193,8 @@ class Engine:
         return entry
 
     async def _cancel_all(self) -> None:
-        """The link closed: cancel every run and wait for each, so no worker outlives stdin."""
+        """The link closed: cancel every run, open conversations included, and wait for each, so no worker outlives
+        stdin."""
         entries = list(self._runs.values())
         for entry in entries:
             _cancel(entry)
@@ -231,6 +268,8 @@ def _run_spec(params: dict, home: Path) -> loop.RunSpec:
         raise RpcError(INVALID_PARAMS, "n_files must be a whole number")
     if p.get("interactive") is not None and not isinstance(p["interactive"], bool):
         raise RpcError(INVALID_PARAMS, "interactive must be true or false")
+    if p.get("conversation") is not None and not isinstance(p["conversation"], bool):
+        raise RpcError(INVALID_PARAMS, "conversation must be true or false")
     window = p.get("window")
     if window is not None and not _is_window(window):
         raise RpcError(INVALID_PARAMS, "window must be {context_window, max_output}, both whole numbers")
@@ -275,6 +314,7 @@ def _run_spec(params: dict, home: Path) -> loop.RunSpec:
         **{key: p.get(key) if repo else None for key in _REPO_OVERRIDES},
         tag=p.get("tag"), batch=batch, log_path=log_path,
         window=dict(window) if window is not None else {"context_window": 0, "max_output": 0},
+        conversation=bool(p.get("conversation")),
     )
 
 

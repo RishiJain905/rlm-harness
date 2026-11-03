@@ -109,7 +109,8 @@ interface RunState {
   replay: Map<string, Replay>;
   fake: FakeRunState;
   calls: Set<AbortController>;
-  /** The engine said run.finished (or exited): only a finished run with no call left may be dropped from the history. */
+  /** The engine said run.finished with `open` false, or run.closed (or exited): only a finished run with no call left
+   *  may be dropped from the history. */
   finished: boolean;
 }
 
@@ -166,7 +167,10 @@ export class Gateway {
     this.fake = new FakeProvider(opts.env ?? process.env);
     this.gate = new BatchGate(LIMITS);
     this.bus.on("engine.event", (e) => {
-      if (e.method !== "run.finished" || typeof e.params?.run_id !== "string") return;
+      if (typeof e.params?.run_id !== "string") return;
+      // a conversation's run.finished {open: true} ends one prompt, not the run: its replay table, scripted position and
+      // totals carry on into the next prompt until run.closed (v1 step 4)
+      if (!(e.method === "run.finished" && e.params.open !== true) && e.method !== "run.closed") return;
       this.finishRun(this.runs.get(e.params.run_id));
       this.gate.dropRun(e.params.run_id);
       this.prune();

@@ -31,7 +31,8 @@ TIMEOUT = 90
 # §5.3, hard-coded on purpose: a change to the wire has to change this table too
 EVENT_KEYS = {
     "run.started": {"tag", "mode", "profile", "prompt_hash", "profile_hash", "contract_hash", "call_format", "root",
-                    "sub", "permission_mode", "workspace", "input", "limits", "log_path", "window", "compaction"},
+                    "sub", "permission_mode", "workspace", "input", "limits", "log_path", "window", "compaction",
+                    "conversation"},
     "run.compacted": {"turn", "prompt_index", "child_id", "before_tokens", "after_tokens", "dropped_messages",
                       "kept_messages", "summary_chars", "seconds"},  # v1 step 3; only a profile with [compaction] sends it
     "run.reply": {"turn", "text", "tool_call", "reasoning", "finish_reason", "usage", "seconds"},
@@ -40,7 +41,7 @@ EVENT_KEYS = {
     "run.permission": {"turn", "kind", "detail", "allowed", "asked", "remembered"},
     "run.budget": {"turns_left", "subcalls_left"},
     "run.finished": {"tag", "answer", "submitted", "answer_valid", "turns", "subcalls", "usage", "cost_usd",
-                     "infra_error", "infra_kind", "wall_s", "log_path"},
+                     "infra_error", "infra_kind", "wall_s", "log_path", "prompt_index", "open"},  # the last two: v1 step 4
 }
 
 

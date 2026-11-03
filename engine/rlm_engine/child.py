@@ -156,12 +156,20 @@ class Children:
         self.emit = emit
         self.window = window or {"context_window": 0, "max_output": 0}  # run.start's, for compaction.plan
         self.compactions = compactions if compactions is not None else []  # the run's record list, shared
-        self.started = 0
+        self.started = 0  # child ids count across a conversation's prompts (D-199)
+        self.prompt_base = 0  # `started` when this prompt began: max_runs counts from here (v1 step 4)
+        self.prompt_index = 0  # for the run.compacted bodies of this prompt's children
         self.runs: list[ChildRun] = []
         self._slots = asyncio.Semaphore(self.settings.max_parallel)
 
+    def start_prompt(self, prompt_index: int = 0) -> None:
+        """A conversation's next prompt (v1 step 4): `max_runs` starts over, the ids go on counting."""
+        self.prompt_base = self.started
+        self.prompt_index = prompt_index
+
     def records(self) -> list[dict]:
-        return [c.record() for c in sorted(self.runs, key=lambda c: c.child_id)]
+        """This prompt's children only."""
+        return [c.record() for c in sorted(self.runs, key=lambda c: c.child_id) if c.child_id > self.prompt_base]
 
     async def run(self, request: dict, parent: ChildRun | None) -> dict:
         """The reply fields for an `rlm` request: `{"answer": ..., "turns": n}` or `{"error": ...}`."""
@@ -179,7 +187,7 @@ class Children:
             return {"error": "rlm(tools=\"edit\") works only in coding tasks"}
         if parent is not None and TOOL_RANK[tools] > TOOL_RANK[parent.tools]:  # never more than the run that asks
             return {"error": f"an rlm() run with tools=\"{parent.tools}\" cannot start one with tools=\"{tools}\""}
-        if self.started >= self.settings.max_runs:
+        if self.started - self.prompt_base >= self.settings.max_runs:
             return {"error": f"this task has started all {self.settings.max_runs} rlm() runs it may; do the rest "
                              "with llm_batch or in this run"}
         child_no = self.started + 1
@@ -357,7 +365,7 @@ class Children:
         if result is None:
             return None
         messages[:] = result.messages
-        return {"turn": turn, "prompt_index": 0, "child_id": child.child_id, "before_tokens": before,
+        return {"turn": turn, "prompt_index": self.prompt_index, "child_id": child.child_id, "before_tokens": before,
                 "after_tokens": compaction.estimate(messages, None, 0), "dropped_messages": result.dropped,
                 "kept_messages": result.kept, "summary_chars": len(result.summary),
                 "seconds": round(time.monotonic() - started, 3)}

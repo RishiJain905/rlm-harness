@@ -13,6 +13,8 @@ export const ErrorCode = {
   UNKNOWN_RUN: -32010,
   UNKNOWN_PROFILE: -32011,
   BAD_INPUT: -32012,
+  /** v1 step 4: run.say or run.close while a prompt is still running. */
+  RUN_BUSY: -32013,
   CANCELLED: -32800,
 } as const;
 export type ErrorCodeName = keyof typeof ErrorCode;
@@ -159,6 +161,8 @@ export interface RunStartParams {
   log_dir?: string;
   /** The root model's catalog numbers, 0 when unknown (v1 step 3); the engine plans compaction from them. */
   window?: ModelWindow;
+  /** v1 step 4: true keeps the run open after each answer for run.say (the interactive app only). Default false. */
+  conversation?: boolean;
 }
 
 /** A model's catalog window: its context window and its largest output, in tokens; 0 means unknown. */
@@ -173,6 +177,22 @@ export interface RunStartResult {
 }
 
 export interface RunCancelParams {
+  run_id: string;
+}
+
+/** v1 step 4: the next question of an open conversation. */
+export interface RunSayParams {
+  run_id: string;
+  text: string;
+}
+
+/** Returned before that prompt's first model.complete. */
+export interface RunSayResult {
+  prompt_index: number;
+}
+
+/** v1 step 4: ends an open conversation; the result comes after run.closed was sent. */
+export interface RunCloseParams {
   run_id: string;
 }
 
@@ -297,6 +317,8 @@ export interface RunStartedParams {
   window: ModelWindow;
   /** This run's compaction numbers, or null when the profile has no `[compaction]` table. */
   compaction: CompactionPlan | null;
+  /** v1 step 4: as run.start sent it. */
+  conversation: boolean;
 }
 
 /** The numbers of v1 architecture §4.1, in tokens. */
@@ -406,6 +428,16 @@ export interface RunFinishedParams {
   infra_kind: string | null;
   wall_s: number;
   log_path: string;
+  /** v1 step 4: which prompt of the run this is (0 for a one-shot run), and whether a conversation now waits for
+   *  run.say. `turns`, `subcalls`, `usage` and `cost_usd` cover this prompt only. */
+  prompt_index: number;
+  open: boolean;
+}
+
+/** v1 step 4: sent once when a conversation ends; never for a run started with `conversation: false`. */
+export interface RunClosedParams {
+  run_id: string;
+  prompts: number;
 }
 
 export interface ModelCancelParams {
@@ -423,5 +455,6 @@ export type EngineEvents = {
   "run.permission": RunPermissionParams;
   "run.budget": RunBudgetParams;
   "run.finished": RunFinishedParams;
+  "run.closed": RunClosedParams;
   "model.cancel": ModelCancelParams;
 };

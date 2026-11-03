@@ -77,16 +77,35 @@ class Bridge:
         self.limits = profile.mode(mode).limits
         self.max_subcalls = self.limits.max_subcalls
         self.turn = 0  # set by the loop before each cell
-        self.subcalls_used = 0
+        self.subcalls_used = 0  # ids count across a conversation's prompts, so each stays unique in the run (D-199)
         self.records: list[SubcallRecord] = []
         self.fetches: list[dict] = []  # {url, status, chars, error, seconds}, one per fetch call
+        self.prompt_base = 0  # subcalls_used when this prompt started: budgets count from here (v1 step 4)
+        self.fetch_base = 0  # len(fetches) when this prompt started
+        self._record_base = 0  # len(records) when this prompt started
         self.infra_error: str | None = None
         self.infra_kind: str | None = None
         self.children: Any = None  # child.Children under agent_api (D-160); None refuses `rlm`
         self._batches = 0
 
+    def start_prompt(self) -> None:
+        """A conversation's next prompt (v1 step 4): the sub-call budget starts over, the ids go on counting."""
+        self.prompt_base = self.subcalls_used
+        self.fetch_base = len(self.fetches)
+        self._record_base = len(self.records)
+
+    def prompt_used(self) -> int:
+        """The sub-call ids this prompt has taken."""
+        return self.subcalls_used - self.prompt_base
+
     def subcalls_left(self) -> int:
-        return max(0, self.max_subcalls - self.subcalls_used)
+        return max(0, self.max_subcalls - self.prompt_used())
+
+    def prompt_records(self) -> list[SubcallRecord]:
+        """This prompt's sub-call records, by id. A record lands when its call ends, so this is every record that
+        arrived since `start_prompt`: the prompt's own, plus a call an earlier prompt left running (D-203), which
+        would otherwise be in no record at all (D-246)."""
+        return sorted(self.records[self._record_base:], key=lambda r: r.subcall_id)
 
     async def handle(self, request: dict) -> dict:
         """The reply fields for a worker `request`, or an `InfraError` (after `infra_error` and `infra_kind` are set)."""
@@ -123,7 +142,7 @@ class Bridge:
             return {"error": "prefixes must be a list of strings or nulls, one per prompt"}
         if self.infra_error:
             return {"error": INFRA_REPLY}
-        if self.subcalls_used + len(prompts) > self.max_subcalls:
+        if self.prompt_used() + len(prompts) > self.max_subcalls:
             return self._reject(prompts, request, contract.budget_exhausted_message(self.max_subcalls), child)
         if self.limits.subcall_oversize == "error":
             longest = max((len(_joined(prefix, p)) for prefix, p in zip(prefixes, prompts)), default=0)
@@ -205,7 +224,7 @@ class Bridge:
         reply fields of a refusal (an infra failure, or no sub-calls left)."""
         if self.infra_error:
             return {"error": INFRA_REPLY}
-        if self.subcalls_used + 1 > self.max_subcalls:
+        if self.prompt_used() + 1 > self.max_subcalls:
             return self._reject([task], request, contract.budget_exhausted_message(self.max_subcalls), parent)
         self.subcalls_used += 1
         subcall_id = self.subcalls_used

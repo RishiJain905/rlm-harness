@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ProtocolMismatch } from "../src/engine.ts";
+import { RpcError } from "../src/link.ts";
 import type { ApprovalParams, ApprovalResult, ModelRef, RunFinishedParams } from "../src/protocol.ts";
 import { buildRunParams, Session, thinkingOf, UsageError, type StartRun } from "../src/session.ts";
 import { defaultSettings, setSetting, type Settings } from "../src/settings.ts";
@@ -43,7 +44,14 @@ describe("buildRunParams", () => {
       call_format: "native", // auto: fake/scripted is an API model with tool calls
       interactive: false,
       window: { context_window: 0, max_output: 0 }, // no windowOf
+      conversation: false, // v1 step 4: one-shot unless the interactive app asks
     });
+  });
+
+  test("conversation is false by default and passes through when asked (v1 step 4)", () => {
+    expect(build(readRun, { "root.model": "fake/scripted" }).conversation).toBe(false);
+    expect(build({ ...readRun, conversation: true }, { "root.model": "fake/scripted" }).conversation).toBe(true);
+    expect(build({ ...readRun, conversation: false }, { "root.model": "fake/scripted" }).conversation).toBe(false);
   });
 
   test("window comes from windowOf for the root model (v1 step 3)", () => {
@@ -321,6 +329,42 @@ describe("with the real engine and the fake provider", () => {
         off();
         session.gateway.cancelRun = real;
       }
+    },
+    REAL,
+  );
+
+  test(
+    "a conversation (v1 step 4): start with conversation, say, then closeRun: two run.finished, one run.closed",
+    async () => {
+      script({ root: [{ text: "", tool_call: { code: "x = 41\nsubmit(1)" } }, { text: "", tool_call: { code: "submit(x + 1)" } }] });
+      const { run_id } = await session.start(readRun({ interactive: true, conversation: true }));
+      const mine = () => events.filter((e) => e.params.run_id === run_id);
+      const first = await finished(run_id);
+      expect([first.prompt_index, first.open, first.answer]).toEqual([0, true, 1]);
+      expect(mine().find((e) => e.method === "run.started")!.params.conversation).toBe(true);
+      // the REPL waits between prompts: its variables are there
+      expect((await session.vars(run_id)).map((v) => v.name)).toContain("x");
+      expect(await session.say(run_id, "And one more?")).toEqual({ prompt_index: 1 });
+      const second = await new Promise<RunFinishedParams>((resolve) => {
+        const check = () => {
+          const f = mine().filter((e) => e.method === "run.finished");
+          if (f.length === 2) {
+            off();
+            resolve(f[1]!.params);
+          }
+        };
+        const off = session.bus.on("engine.event", () => queueMicrotask(check));
+        check();
+      });
+      expect([second.prompt_index, second.open, second.answer]).toEqual([1, true, 42]);
+      await session.closeRun(run_id); // returns once run.closed was sent
+      const methods = mine().map((e) => e.method);
+      expect(methods.filter((m) => m === "run.finished").length).toBe(2);
+      expect(methods.filter((m) => m === "run.closed").length).toBe(1);
+      expect(methods[methods.length - 1]).toBe("run.closed");
+      expect(mine().find((e) => e.method === "run.closed")!.params.prompts).toBe(2);
+      await session.closeRun(run_id); // a closed run: -32010, swallowed
+      expect(await session.say(run_id, "again?").catch((e: unknown) => (e instanceof RpcError ? e.code : e))).toBe(-32010);
     },
     REAL,
   );

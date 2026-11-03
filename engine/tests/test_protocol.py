@@ -27,6 +27,7 @@ ERROR_CODES = {
     "UNKNOWN_RUN": -32010,
     "UNKNOWN_PROFILE": -32011,
     "BAD_INPUT": -32012,
+    "RUN_BUSY": -32013,
     "CANCELLED": -32800,
 }
 
@@ -37,6 +38,11 @@ REQUIRED = [
     "run.cancel:result",
     "run.vars:request",
     "run.vars:result",
+    "run.say:request",
+    "run.say:result",
+    "run.say:error:RUN_BUSY",
+    "run.close:request",
+    "run.close:result",
     "debug.roundtrip:request",
     "debug.roundtrip:result",
     "run.start:request:read",
@@ -69,6 +75,7 @@ REQUIRED = [
     "run.permission:notification",
     "run.budget:notification",
     "run.finished:notification",
+    "run.closed:notification",
     "model.cancel:notification",
 ]
 
@@ -78,6 +85,8 @@ METHODS = {
     "run.start": "app->engine",
     "run.cancel": "app->engine",
     "run.vars": "app->engine",
+    "run.say": "app->engine",
+    "run.close": "app->engine",
     "debug.roundtrip": "app->engine",
     "model.complete": "engine->app",
     "approval.request": "engine->app",
@@ -90,6 +99,7 @@ METHODS = {
     "run.permission": "engine->app",
     "run.budget": "engine->app",
     "run.finished": "engine->app",
+    "run.closed": "engine->app",
     "model.cancel": "engine->app",
 }
 
@@ -234,12 +244,17 @@ FIELDS = {
             "batch": STR,
             "log_dir": STR,
             "window": WINDOW,
+            "conversation": BOOL,
         },
     ),
     "run.start:result": obj({"run_id": STR, "log_path": STR}),
     "run.cancel:request": obj({"run_id": STR}),
     "run.cancel:result": obj({}),
     "run.vars:request": obj({"run_id": STR}),
+    "run.say:request": obj({"run_id": STR, "text": STR}),
+    "run.say:result": obj({"prompt_index": INT}),
+    "run.close:request": obj({"run_id": STR}),
+    "run.close:result": obj({}),
     "run.vars:result": obj({"vars": list_of(obj({"name": STR, "type": STR, "len": nullable(INT), "chars": INT}))}),
     "debug.roundtrip:request": obj({"count": INT}),
     "debug.roundtrip:result": obj({"texts": list_of(STR)}),
@@ -302,6 +317,7 @@ FIELDS = {
             "log_path": STR,
             "window": WINDOW,
             "compaction": nullable(obj({"window": INT, "trigger": INT, "keep": INT})),
+            "conversation": BOOL,
         }
     ),
     "run.compacted:notification": obj(
@@ -393,8 +409,11 @@ FIELDS = {
             "infra_kind": nullable(STR),
             "wall_s": NUM,
             "log_path": STR,
+            "prompt_index": INT,
+            "open": BOOL,
         }
     ),
+    "run.closed:notification": obj({"run_id": STR, "prompts": INT}),
     "model.cancel:notification": obj({"run_id": STR}),
 }
 

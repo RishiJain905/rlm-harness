@@ -39,6 +39,7 @@
         "permission_mode": "accept-edits",
         "call_format": "native",
         "interactive": true,
+        "conversation": true,
         "tag": "example-task-1",
         "batch": "interactive",
         "window": {"context_window": 200000, "max_output": 64000}
@@ -100,6 +101,36 @@
       "direction": "engine->app",
       "kind": "error",
       "message": {"jsonrpc": "2.0", "id": 4, "error": {"code": -32010, "message": "unknown run: r_0123456789ab"}}
+    },
+    {
+      "name": "run.say:request",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 6, "method": "run.say", "params": {"run_id": "r_0123456789ab", "text": "And how long is it?"}}
+    },
+    {
+      "name": "run.say:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 6, "result": {"prompt_index": 1}}
+    },
+    {
+      "name": "run.say:error:RUN_BUSY",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": 6, "error": {"code": -32013, "message": "run r_0123456789ab is still answering a prompt"}}
+    },
+    {
+      "name": "run.close:request",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 7, "method": "run.close", "params": {"run_id": "r_0123456789ab"}}
+    },
+    {
+      "name": "run.close:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 7, "result": {}}
     },
     {
       "name": "run.vars:request",
@@ -344,7 +375,8 @@
         "limits": {"max_turns": 10, "max_subcalls": 50, "root_max_tokens": 4096, "output_max_chars": 4000, "cell_timeout_s": 120, "subcall_max_chars": 200000, "subcall_max_tokens": 2048},
         "log_path": "/example/home/runs/interactive/runs.jsonl",
         "window": {"context_window": 200000, "max_output": 64000},
-        "compaction": {"window": 200000, "trigger": 130368, "keep": 31344}
+        "compaction": {"window": 200000, "trigger": 130368, "keep": 31344},
+        "conversation": true
       }}
     },
     {
@@ -466,8 +498,16 @@
         "infra_error": null,
         "infra_kind": null,
         "wall_s": 14.2,
-        "log_path": "/example/home/runs/interactive/runs.jsonl"
+        "log_path": "/example/home/runs/interactive/runs.jsonl",
+        "prompt_index": 0,
+        "open": true
       }}
+    },
+    {
+      "name": "run.closed:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.closed", "params": {"run_id": "r_0123456789ab", "prompts": 2}}
     },
     {
       "name": "model.cancel:notification",
