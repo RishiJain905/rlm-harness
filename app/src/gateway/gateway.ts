@@ -36,7 +36,9 @@ import { billedCost, emptyUsage, replyChars, requestChars, RunTotals, toUsage } 
 export type AppEvents = {
   "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number;
                   /** A root turn of an rlm() child (D-160): the interface adds it to the child's row instead of starting the row again. */
-                  child?: ChildTurn };
+                  child?: ChildTurn;
+                  /** A compaction's summary call (v1 step 3): the interface labels it "compacting" instead of a reply. */
+                  purpose?: "compact" };
   /** reset: a broken stream is retried whole; drop this call's text and reasoning so far. */
   "call.delta": { call_id: string; text?: string; reasoning?: string; reset?: true };
   "call.end": { call_id: string; run_id: string; usage: Usage; finish_reason: string; seconds: number; error?: ModelErrorData;
@@ -187,13 +189,16 @@ export class Gateway {
       ...(p.batch !== undefined ? { batch: p.batch } : {}),
       ...(p.origin !== undefined ? { origin: p.origin } : {}),
       ...(p.child !== undefined ? { child: p.child } : {}),
+      ...(p.purpose !== undefined ? { purpose: p.purpose } : {}),
       model: p.model,
       prompt: p.messages[p.messages.length - 1]?.content ?? "",
       started_at: startedAt,
     });
     p = this.capOutput(p); // before lastRoot, so /context shows the reply room actually asked for
     const run = this.run(p.run_id);
-    if (p.role === "root") run.lastRoot = p;
+    // A compaction's summary call (v1 step 3) is routed, cached and counted as the root call it is, but /context keeps
+    // showing the conversation itself: the summary request is the same list plus one request the next turn won't carry.
+    if (p.role === "root" && p.purpose === undefined) run.lastRoot = p;
     const ac = new AbortController();
     const onAbort = () => ac.abort(signal?.reason);
     if (signal?.aborted) ac.abort(signal.reason);

@@ -43,7 +43,7 @@ import { buildRunParams, type StartRun } from "../../src/session.ts";
 import { defaultSettings, saveSettings, setSetting, type Settings } from "../../src/settings.ts";
 import { PROTOCOL_VERSION } from "../../src/version.ts";
 
-export type Scenario = "simpleRead" | "fanOut20" | "approvalShell" | "twoApprovals" | "slow" | "rootError" | "hold";
+export type Scenario = "simpleRead" | "fanOut20" | "approvalShell" | "twoApprovals" | "slow" | "rootError" | "hold" | "compacting";
 
 export interface FakeEngine {
   /** Every request the engine received, in order (engine.info, run.start, run.cancel, run.vars). */
@@ -151,7 +151,25 @@ export const SCENARIO_SCRIPTS: Record<Scenario, Record<string, unknown>> = {
     root: [{ text: "", tool_call: { code: "submit('held')" } }],
     sub: [{ text: "unused" }],
   },
+  /** v1 step 3: before turn COMPACT_AT the play compacts once, with a `purpose: "compact"` call the script's `compact`
+   *  list answers, then run.compacted. */
+  compacting: {
+    root: [
+      { text: "Reading the first part.", tool_call: { code: `print('${"a".repeat(3000)}')` } },
+      { text: "Reading the second part.", tool_call: { code: `print('${"b".repeat(3000)}')` } },
+      { text: "Reading the third part.", tool_call: { code: `print('${"c".repeat(3000)}')` } },
+      { text: "", tool_call: { code: "submit('compacted answer')" } },
+    ],
+    sub: [{ text: "unused" }],
+    compact: [{ text: "SUMMARY of the work so far." }],
+    chunk_chars: 8,
+    delay_ms: 5,
+  },
 };
+
+/** The `compacting` scenario's turn that a compaction precedes, and its plan (v1 architecture §4.1 on a 4,096 window). */
+export const COMPACT_AT = 4;
+const FAKE_COMPACT_PLAN = { window: 4096, trigger: 3276, keep: 614 };
 
 // -- fixed engine facts --
 
@@ -220,6 +238,18 @@ export const FAKE_VARS: VarInfo[] = [
 
 function zeroUsage(): Usage {
   return { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0 };
+}
+
+/** v1 architecture §4.1 for the default profile's table: the plan run.started reports. */
+function defaultPlan(window: { context_window: number } | undefined): { window: number; trigger: number; keep: number } {
+  const w = Math.min(window && window.context_window > 0 ? window.context_window : Infinity, 262_144);
+  const out = FAKE_LIMITS.root_max_tokens;
+  return { window: w, trigger: Math.max(Math.min(Math.floor(0.8 * w), w - out - 65_536), Math.floor(w / 2)), keep: Math.floor(0.16 * (w - out)) };
+}
+
+/** Every content string plus every tool call's arguments, as compaction.estimate counts them. */
+function messageChars(messages: Message[]): number {
+  return messages.reduce((n, m) => n + m.content.length + (m.role === "assistant" && m.tool_call ? JSON.stringify(m.tool_call.arguments).length : 0), 0);
 }
 
 function addUsage(total: Usage, u: Usage | undefined): void {
@@ -500,6 +530,8 @@ class EngineSide {
       },
       limits: { ...FAKE_LIMITS },
       log_path: run.logPath,
+      window: p.window ?? { context_window: 0, max_output: 0 },
+      compaction: p.profile === "training-v4" ? null : this.scenario === "compacting" ? { ...FAKE_COMPACT_PLAN } : defaultPlan(p.window),
     });
     if (this.scenario === "hold") return; // nothing more until run.cancel
 
@@ -513,6 +545,7 @@ class EngineSide {
     const native = p.call_format === "native";
     try {
       for (let turn = 1; turn <= FAKE_LIMITS.max_turns; turn++) {
+        if (this.scenario === "compacting" && turn === COMPACT_AT) await this.compact(run, turn, native);
         const asked = performance.now();
         const reply = await this.link.request<ModelCompleteResult>(
           "model.complete",
@@ -598,6 +631,47 @@ class EngineSide {
       const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       this.finish(run, { infra: { kind: "host_bug", error: `host error: ${text}` } });
     }
+  }
+
+  /** The `compacting` scenario's one compaction: head, the summary message, and the newest turn (v1 architecture §4.2). */
+  private async compact(run: RunState, turn: number, native: boolean): Promise<void> {
+    const p = run.params;
+    const asked = performance.now();
+    const before = Math.ceil(messageChars(run.messages) / 3);
+    const reply = await this.link.request<ModelCompleteResult>(
+      "model.complete",
+      {
+        run_id: run.id,
+        role: "root",
+        purpose: "compact",
+        model: p.root,
+        messages: [...run.messages.map((m) => ({ ...m })), { role: "user", content: "Stop work on the task for this one reply. Write the summary." }],
+        tools: native ? [structuredClone(PYTHON_TOOL)] : [],
+        max_tokens: 512,
+        temperature: 0,
+        thinking: "off",
+        turn,
+      } satisfies ModelCompleteParams,
+      { signal: run.ac.signal },
+    );
+    this.check(run);
+    addUsage(run.usage.root, reply.usage);
+    const head = run.messages.slice(0, 2);
+    const tail = run.messages.slice(-2);
+    const dropped = run.messages.length - head.length - tail.length;
+    const summary = `[${dropped / 2} earlier turns were compacted to save context. Your summary of them follows.]\n\n${reply.text}\n\n[The newest turns follow as they were. The REPL still holds every variable.]`;
+    run.messages = [...head, { role: "user", content: summary }, ...tail];
+    this.event(run, "run.compacted", {
+      turn,
+      prompt_index: 0,
+      child_id: null,
+      before_tokens: before,
+      after_tokens: Math.ceil(messageChars(run.messages) / 3),
+      dropped_messages: dropped,
+      kept_messages: tail.length,
+      summary_chars: reply.text.length,
+      seconds: Math.round(performance.now() - asked) / 1000,
+    });
   }
 
   private subcallsLeft(run: RunState): number {
@@ -968,7 +1042,14 @@ export async function createFakeApp(opts: FakeAppOptions = {}): Promise<FakeApp>
       startCalls.push(r);
       let params: RunStartParams;
       try {
-        params = buildRunParams(r, { settings: this.settings, resolveCallFormat: (ref, s) => gateway.resolveCallFormat(ref, s) });
+        params = buildRunParams(r, {
+          settings: this.settings,
+          resolveCallFormat: (ref, s) => gateway.resolveCallFormat(ref, s),
+          windowOf: (ref) => {
+            const m = catalog.get(ref.provider, ref.model);
+            return { context_window: m?.context_window ?? 0, max_output: m?.max_output ?? 0 };
+          },
+        });
       } catch (err) {
         return Promise.reject(err);
       }
@@ -1100,7 +1181,7 @@ function usage(input: number, output: number, cacheRead: number, cost: number, r
   return { input_tokens: input, output_tokens: output, cache_read_tokens: cacheRead, cache_write_tokens: 0, reasoning_tokens: reasoning, cost_usd: cost };
 }
 
-/** A complete run-log record (format 1), keys in §7.8 order: a read-mode question, 2 turns, one 3-call batch, one permission. */
+/** A complete run-log record (format 2, v1 step 3), keys in §7.8 order: a read-mode question, 2 turns, one 3-call batch, one permission. */
 export function runRecord(over: Record<string, unknown> = {}): Record<string, any> {
   const runId = "r_3f9a0c1d2e4b";
   const workspace = `/tmp/rlmh-home/scratch/${runId}`;
@@ -1127,7 +1208,7 @@ export function runRecord(over: Record<string, unknown> = {}): Record<string, an
   const outputs = ["The ledger opens.", "The totals are checked.", "The answer is 42."];
   const reads = root.cache_read_tokens + sub.cache_read_tokens;
   const record: Record<string, any> = {
-    format: 1,
+    format: 2,
     run_id: runId,
     tag: null,
     batch: "interactive",
@@ -1227,6 +1308,10 @@ export function runRecord(over: Record<string, unknown> = {}): Record<string, an
     infra_error: null,
     infra_kind: null,
     host_traceback: null,
+    window: { context_window: 1_000_000, max_output: 0 },
+    compactions: [],
+    prompt_index: 0,
+    conversation: false,
   };
   return { ...record, ...over };
 }

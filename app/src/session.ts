@@ -19,6 +19,7 @@ import {
   type EngineInfo,
   type ModelCompleteParams,
   type ModelRef,
+  type ModelWindow,
   type PermissionMode,
   type RunStartParams,
   type RunStartResult,
@@ -76,9 +77,14 @@ export function thinkingOf(settings: Settings, role: "root" | "sub"): ModelRef["
 }
 
 type ResolveCallFormat = (ref: ModelRef, setting: "auto" | "fenced" | "native") => CallFormat;
+type WindowOf = (ref: ModelRef) => ModelWindow;
 
-/** Pure: the snake_case `run.start` params, with every default taken from `settings`. Throws UsageError. */
-export function buildRunParams(r: StartRun, deps: { settings: Settings; resolveCallFormat: ResolveCallFormat }): RunStartParams {
+/** Pure: the snake_case `run.start` params, with every default taken from `settings`. `windowOf` gives the root model's
+ *  catalog window (v1 step 3); without it, `window` is zeros, which the engine reads as unknown. Throws UsageError. */
+export function buildRunParams(
+  r: StartRun,
+  deps: { settings: Settings; resolveCallFormat: ResolveCallFormat; windowOf?: WindowOf },
+): RunStartParams {
   const { settings } = deps;
   if (r.mode !== "read" && r.mode !== "repo") throw new UsageError(`mode must be read or repo (got ${JSON.stringify(r.mode)})`);
   const root = r.root ?? settingRef(settings, "root");
@@ -115,6 +121,7 @@ export function buildRunParams(r: StartRun, deps: { settings: Settings; resolveC
   if (r.tag !== undefined) p.tag = r.tag;
   if (r.batch !== undefined) p.batch = r.batch;
   if (r.logDir !== undefined) p.log_dir = resolve(r.logDir);
+  p.window = deps.windowOf?.(root) ?? { context_window: 0, max_output: 0 };
   return p;
 }
 
@@ -213,7 +220,14 @@ export class Session {
   start(r: StartRun): Promise<RunStartResult> {
     let params: RunStartParams;
     try {
-      params = buildRunParams(r, { settings: this.settings, resolveCallFormat: (ref, s) => this.gateway.resolveCallFormat(ref, s) });
+      params = buildRunParams(r, {
+        settings: this.settings,
+        resolveCallFormat: (ref, s) => this.gateway.resolveCallFormat(ref, s),
+        windowOf: (ref) => {
+          const m = this.catalog.get(ref.provider, ref.model);
+          return { context_window: m?.context_window ?? 0, max_output: m?.max_output ?? 0 };
+        },
+      });
     } catch (err) {
       return Promise.reject(err);
     }

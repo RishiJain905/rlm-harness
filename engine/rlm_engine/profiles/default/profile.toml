@@ -14,6 +14,12 @@ max_turns = 30                # each child's turn limit; rlm(max_turns=) can onl
 max_depth = 1                 # the root's children cannot start children of their own
 max_parallel = 4              # children running at once; the rest wait
 
+[compaction]              # default profile
+window = 262144           # W': compact as if the model's window were at most this many tokens
+keep_ratio = 0.16         # DeepSeek Harness: keep the newest 16% of (W' - out) verbatim
+reserve = 65536           # DeepSeek Harness's margin
+summary_max_tokens = 8192
+
 [read]                        # contract.READ_LIMITS_V4 with more turns and output tokens (D-152)
 max_turns = 50
 max_subcalls = 80

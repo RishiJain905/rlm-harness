@@ -46,6 +46,7 @@ REQUIRED = [
     "model.complete:request:sub",
     "model.complete:request:sub-prefix",
     "model.complete:request:child",
+    "model.complete:request:compact",
     "model.complete:result",
     "approval.request:request",
     "approval.request:result",
@@ -60,6 +61,7 @@ REQUIRED = [
     "rpc:error:INTERNAL_ERROR",
     "rpc:error:CANCELLED",
     "run.started:notification",
+    "run.compacted:notification",
     "run.reply:notification",
     "run.cell:notification",
     "run.subcall:notification",
@@ -80,6 +82,7 @@ METHODS = {
     "model.complete": "engine->app",
     "approval.request": "engine->app",
     "run.started": "engine->app",
+    "run.compacted": "engine->app",
     "run.reply": "engine->app",
     "run.cell": "engine->app",
     "run.subcall": "engine->app",
@@ -156,6 +159,7 @@ MODEL_ERROR_DATA = obj(
 )
 ORIGIN = obj({"turn": INT, "line": nullable(INT)}, {"child": INT})  # child: a request an rlm() run made (D-160)
 BATCH = obj({"id": STR, "index": INT, "size": INT})
+WINDOW = obj({"context_window": INT, "max_output": INT})  # the root model's catalog numbers, 0 when unknown (v1 step 3)
 MESSAGES = {
     "system": obj({"role": enum("system"), "content": STR}),
     "user": obj({"role": enum("user"), "content": STR}),
@@ -229,6 +233,7 @@ FIELDS = {
             "tag": STR,
             "batch": STR,
             "log_dir": STR,
+            "window": WINDOW,
         },
     ),
     "run.start:result": obj({"run_id": STR, "log_path": STR}),
@@ -251,7 +256,7 @@ FIELDS = {
             "turn": INT,
         },
         {"subcall_id": INT, "origin": ORIGIN, "batch": BATCH, "prefix": obj({"chars": INT, "key": STR}),
-         "child": obj({"id": INT, "turn": INT, "max_turns": INT, "depth": INT})},
+         "child": obj({"id": INT, "turn": INT, "max_turns": INT, "depth": INT}), "purpose": enum("compact")},
     ),
     "model.complete:result": obj(
         {
@@ -295,6 +300,22 @@ FIELDS = {
                 }
             ),
             "log_path": STR,
+            "window": WINDOW,
+            "compaction": nullable(obj({"window": INT, "trigger": INT, "keep": INT})),
+        }
+    ),
+    "run.compacted:notification": obj(
+        {
+            "run_id": STR,
+            "turn": INT,
+            "prompt_index": INT,
+            "child_id": nullable(INT),
+            "before_tokens": INT,
+            "after_tokens": INT,
+            "dropped_messages": INT,
+            "kept_messages": INT,
+            "summary_chars": INT,
+            "seconds": NUM,
         }
     ),
     "run.reply:notification": obj(
@@ -429,7 +450,7 @@ def method_of(ex: dict) -> str:
 
 def test_file_shape() -> None:
     data = json.loads(EXAMPLES_PATH.read_text(encoding="utf-8"))
-    assert data["protocol"] == 1 == PROTOCOL_VERSION
+    assert data["protocol"] == 2 == PROTOCOL_VERSION
     assert set(data) == {"protocol", "examples"}
     names = [ex["name"] for ex in EXAMPLES]
     assert len(names) == len(set(names)), "duplicate names"
@@ -521,6 +542,9 @@ def test_fields() -> None:
     assert sorted(m["role"] for m in root["messages"]) == ["assistant", "system", "tool", "user"]
     assert sub["role"] == "sub" and {"subcall_id", "origin", "batch"} <= set(sub)
     assert sub["tools"] == [] and [m["role"] for m in sub["messages"]] == ["user"]
+    compact = names["model.complete:request:compact"]["message"]["params"]
+    assert compact["purpose"] == "compact" and compact["role"] == "root"
+    assert compact["messages"][-1]["role"] == "user"
 
 
 def test_python_tool() -> None:

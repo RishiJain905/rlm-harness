@@ -8,7 +8,9 @@ import { open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 /** Mirrors the engine's `runlog.FORMAT_VERSION`; a record with another number is still listed. */
-export const RUN_LOG_FORMAT = 1;
+export const RUN_LOG_FORMAT = 2;
+/** The formats /runs opens (v1 step 3): format 1 is format 2 without the four keys `upgradeRecord` fills in. */
+export const READABLE_FORMATS: readonly number[] = [1, 2];
 
 const MAX_RUNS = 200;
 const PRUNE_AT = 2000; // keeps the working list small while a huge log streams past
@@ -133,7 +135,15 @@ export async function listRuns(runsDir: string): Promise<RunSummary[]> {
   return found.sort(newestFirst).slice(0, MAX_RUNS);
 }
 
-/** The record at `summary`'s byte range. Throws if the file changed since `listRuns`. */
+/** A format 1 record as format 2 (architecture v1 §3.4): `window: null, compactions: [], prompt_index: 0,
+ *  conversation: false`. Any other record comes back as it is. */
+export function upgradeRecord<T extends object>(record: T): T {
+  const r = record as Record<string, unknown>;
+  if (r.format !== 1) return record;
+  return { ...r, window: null, compactions: [], prompt_index: 0, conversation: false } as T;
+}
+
+/** The record at `summary`'s byte range, format 1 upgraded to format 2. Throws if the file changed since `listRuns`. */
 export async function readRun(summary: RunSummary): Promise<object> {
   const { file, offset, length } = summary;
   const handle = await open(file, "r");
@@ -149,5 +159,5 @@ export async function readRun(summary: RunSummary): Promise<object> {
   } finally {
     await handle.close();
   }
-  return record as object;
+  return upgradeRecord(record as object);
 }

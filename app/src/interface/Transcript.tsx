@@ -64,6 +64,10 @@ export function transcriptLines(entries: readonly Entry[], width: number, theme:
       case "note":
         block(e.text, "", 6, e.tone === "info" ? { dim: true } : { color: paint(theme, e.tone === "warn" ? "yellow" : "red") });
         break;
+      case "compacting":
+        out.push([]);
+        out.push([span(`${theme.on} compacting${theme.more}`, { bold: true }), span(` ${spinner}`, { color: paint(theme, "cyan") })]);
+        break;
     }
   }
   return out;

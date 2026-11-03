@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RUN_LOG_FORMAT, listRuns, readRun, type RunSummary } from "../../src/interface/runs.ts";
+import { READABLE_FORMATS, RUN_LOG_FORMAT, listRuns, readRun, upgradeRecord, type RunSummary } from "../../src/interface/runs.ts";
 
 let runsDir: string;
 
@@ -23,7 +23,7 @@ type Rec = Record<string, unknown>;
 /** A minimal run-log record with the fields the summary reads (architecture §7.8). */
 function rec(over: Rec = {}): Rec {
   return {
-    format: 1,
+    format: RUN_LOG_FORMAT,
     run_id: "r_000000000001",
     tag: null,
     batch: "interactive",
@@ -82,7 +82,7 @@ describe("listRuns", () => {
       file: interactive,
       runId: "r2",
       batch: "interactive",
-      format: 1,
+      format: RUN_LOG_FORMAT,
       startedAt: 300,
       mode: "read",
       root: "deepseek/deepseek-chat",
@@ -144,6 +144,19 @@ describe("listRuns", () => {
   test("an empty log file gives nothing", async () => {
     log("interactive", []);
     expect(await listRuns(runsDir)).toEqual([]);
+  });
+
+  test("format 1 and format 2 are both readable; a format 1 record gets format 2's four keys (v1 step 3)", async () => {
+    expect(READABLE_FORMATS).toEqual([1, 2]);
+    expect(RUN_LOG_FORMAT).toBe(2);
+    const v2 = { window: { context_window: 1_000_000, max_output: 0 }, compactions: [{ turn: 3 }], prompt_index: 0, conversation: false };
+    log("interactive", [rec({ run_id: "one", format: 1, started_at: 5 }), rec({ run_id: "two", format: 2, started_at: 6, ...v2 })]);
+    const runs = await listRuns(runsDir);
+    expect(runs.map((r) => [r.runId, r.format])).toEqual([["two", 2], ["one", 1]]);
+    expect(await readRun(runs[1]!)).toEqual({ ...JSON.parse(line(rec({ run_id: "one", format: 1, started_at: 5 }))), window: null, compactions: [], prompt_index: 0, conversation: false });
+    expect(await readRun(runs[0]!)).toEqual(JSON.parse(line(rec({ run_id: "two", format: 2, started_at: 6, ...v2 }))));
+    // only format 1 is filled in; another number comes back as written
+    expect(upgradeRecord({ format: 99, run_id: "x" })).toEqual({ format: 99, run_id: "x" });
   });
 
   test("a record with another format version is listed with that version", async () => {

@@ -48,6 +48,7 @@ const REQUIRED = [
   "model.complete:request:sub",
   "model.complete:request:sub-prefix",
   "model.complete:request:child",
+  "model.complete:request:compact",
   "model.complete:result",
   "approval.request:request",
   "approval.request:result",
@@ -62,6 +63,7 @@ const REQUIRED = [
   "rpc:error:INTERNAL_ERROR",
   "rpc:error:CANCELLED",
   "run.started:notification",
+  "run.compacted:notification",
   "run.reply:notification",
   "run.cell:notification",
   "run.subcall:notification",
@@ -82,6 +84,7 @@ const METHODS: Record<string, string> = {
   "model.complete": "engine->app",
   "approval.request": "engine->app",
   "run.started": "engine->app",
+  "run.compacted": "engine->app",
   "run.reply": "engine->app",
   "run.cell": "engine->app",
   "run.subcall": "engine->app",
@@ -150,6 +153,8 @@ const MODEL_ERROR_DATA = obj({
 });
 const ORIGIN = obj({ turn: "int", line: nullable("int") }, { child: "int" });
 const BATCH = obj({ id: "str", index: "int", size: "int" });
+/** The root model's catalog numbers, 0 when unknown (v1 step 3). */
+const WINDOW = obj({ context_window: "int", max_output: "int" });
 const MESSAGES: Record<string, Spec> = {
   system: obj({ role: oneOf("system"), content: "str" }),
   user: obj({ role: oneOf("user"), content: "str" }),
@@ -210,6 +215,7 @@ const FIELDS: Record<string, Spec> = {
       tag: "str",
       batch: "str",
       log_dir: "str",
+      window: WINDOW,
     },
   ),
   "run.start:result": obj({ run_id: "str", log_path: "str" }),
@@ -237,6 +243,7 @@ const FIELDS: Record<string, Spec> = {
       batch: BATCH,
       prefix: obj({ chars: "int", key: "str" }),
       child: obj({ id: "int", turn: "int", max_turns: "int", depth: "int" }),
+      purpose: oneOf("compact"),
     },
   ),
   "model.complete:result": obj({
@@ -274,6 +281,20 @@ const FIELDS: Record<string, Spec> = {
       subcall_max_tokens: "int",
     }),
     log_path: "str",
+    window: WINDOW,
+    compaction: nullable(obj({ window: "int", trigger: "int", keep: "int" })),
+  }),
+  "run.compacted:notification": obj({
+    run_id: "str",
+    turn: "int",
+    prompt_index: "int",
+    child_id: nullable("int"),
+    before_tokens: "int",
+    after_tokens: "int",
+    dropped_messages: "int",
+    kept_messages: "int",
+    summary_chars: "int",
+    seconds: "num",
   }),
   "run.reply:notification": obj({
     run_id: "str",
@@ -392,7 +413,7 @@ const methodOf = (ex: Example) => ex.name.split(":")[0]!;
 
 describe("protocol examples", () => {
   test("file_shape", () => {
-    expect(FILE.protocol).toBe(1);
+    expect(FILE.protocol).toBe(2);
     expect(FILE.protocol).toBe(PROTOCOL_VERSION);
     expect(Object.keys(FILE).sort()).toEqual(["examples", "protocol"]);
     expect(byName.size).toBe(EXAMPLES.length); // unique names
@@ -486,6 +507,11 @@ describe("protocol examples", () => {
     expect(sub.tools).toEqual([]);
     expect(sub.messages.map((m: { role: string }) => m.role)).toEqual(["user"]);
     expect("child" in sub).toBe(false);
+    // the summary call of a compaction (v1 step 3): a root call with purpose "compact", ending with the request
+    const compact = byName.get("model.complete:request:compact")!.message.params;
+    expect(compact.purpose).toBe("compact");
+    expect(compact.role).toBe("root");
+    expect(compact.messages.at(-1).role).toBe("user");
     // an rlm() child's root turn (D-160): role sub, a growing conversation with the python tool, its own batch of one
     const child = byName.get("model.complete:request:child")!.message.params;
     expect(child.role).toBe("sub");

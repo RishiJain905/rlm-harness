@@ -1,10 +1,11 @@
-"""KV cache: appends to one message list, never edits or reorders an earlier message, and the system prompt and tool list are fixed for the run.
+"""KV cache: appends to one message list and edits it only at a compaction (compaction.py), which keeps the system prompt and first message byte for byte; the tool list is fixed for the run.
 
 One run: training's `run_episode` (rlm_rl/env.py at RLM commit 0b9af69) against any model through the app, with
 `_cap_output` copied. Left out, as the build plan lists: token ids, logprobs, rewards, detectors, the grader,
 broken-reply redraws and format penalties. Added: the §5.3 events, the run-log record (§7.8), native tool calls
 (callformat, 6b), the permission modes, a scratch folder that is removed when the run ends (D-12), and under a
-profile's agent_api the rlm() children (child.py, D-160).
+profile's agent_api the rlm() children (child.py, D-160), and under a profile's [compaction] the summary that replaces the
+middle of a conversation that outgrows its window (compaction.py, v1 step 3).
 
 `run` never raises, except CancelledError, and that only after the record is written and `run.finished` sent.
 """
@@ -21,11 +22,11 @@ import stat
 import sys
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import PROTOCOL_VERSION, __version__, callformat, contract, inputs, workspace
+from . import PROTOCOL_VERSION, __version__, callformat, compaction, contract, inputs, workspace
 from .appport import AppPort
 from .bridge import Bridge
 from .child import Children
@@ -68,6 +69,8 @@ class RunSpec:
     batch: str
     log_path: Path
     input_spans: list[dict] | None = None  # read mode: each input's place in `context` (inputs.prepare, D-157)
+    # the root model's catalog numbers from run.start, 0 when unknown (v1 step 3)
+    window: dict = field(default_factory=lambda: {"context_window": 0, "max_output": 0})
 
 
 async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker) -> dict:
@@ -87,6 +90,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
     diff: str | None = None
     messages: list[dict] = []
     turns: list[dict] = []
+    compactions: list[dict] = []  # run.compacted bodies without run_id, for the record
     root_usage = _zero_usage()
     submitted, answer, answer_valid = False, None, True
     infra_kind: str | None = None
@@ -102,6 +106,8 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
         inputs.prepare(spec)
         mode_settings = spec.profile.mode(spec.mode)
         limits = mode_settings.limits
+        plan = (compaction.plan(spec.profile.compaction, spec.window, limits.root_max_tokens)
+                if spec.profile.compaction else None)
         shell = workspace.find_shell()
         scratch.mkdir(parents=True, exist_ok=True)
         if repo_mode:
@@ -125,7 +131,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
                 run_id=spec.run_id, app=app, profile=spec.profile, mode=spec.mode, root=spec.root,
                 call_format=spec.call_format, bridge=bridge, permissions=perms, shell=shell, scratch=scratch,
                 repo_path=spec.repo_path, base_tree=base_tree, test_hint=spec.test_hint, language=spec.language,
-                worker_factory=worker_factory, emit=emit)
+                worker_factory=worker_factory, emit=emit, window=spec.window, compactions=compactions)
             init_extra = children.init_extra(mode=spec.mode, task=spec.task, tool_names=None,
                                              input_files=spec.input_spans or [Path(p).as_posix() for p in spec.inputs])
         worker = worker_factory(mode=spec.mode, context=spec.context, workspace=workspace_path, scratch=scratch,
@@ -141,12 +147,25 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
             "root": spec.root, "sub": spec.sub, "permission_mode": spec.permission_mode,
             "workspace": str(workspace_path), "input": _input_info(spec),
             "limits": {key: getattr(limits, key) for key in EVENT_LIMITS}, "log_path": str(spec.log_path),
+            "window": dict(spec.window), "compaction": plan.as_event() if plan else None,
         })
 
         edited = False  # a repo run has changed a file in its workspace (pace_nudge)
+        last_usage: dict | None = None  # the latest reply's usage, for compaction.estimate
+        chars_since = 0  # observation characters appended since that reply
+        compacting = plan is not None  # off for the rest of the prompt after a compaction that barely helped
         for index in range(limits.max_turns):
             turn = index + 1
             bridge.turn = worker.turn = turn
+            if compacting and index:
+                before = compaction.estimate(messages, last_usage, chars_since)
+                if before > plan.trigger:
+                    body = await _compact(spec, app, messages, plan, turn, before, root_usage)
+                    if body is not None:
+                        last_usage, chars_since = None, 0
+                        compactions.append(body)
+                        emit("run.compacted", body)
+                        compacting = body["after_tokens"] <= compaction.NO_LOOP_RATIO * before
             asked = time.monotonic()
             reply = await app.complete({
                 "run_id": spec.run_id, "role": "root", "model": spec.root, "messages": list(messages),
@@ -160,6 +179,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
             messages.append(assistant)
             usage = reply.get("usage") or _zero_usage()
             _add_usage(root_usage, usage)
+            last_usage, chars_since = usage, 0
             emit("run.reply", {
                 "turn": turn, "text": reply.get("text") or "", "tool_call": reply.get("tool_call"),
                 "reasoning": reply.get("reasoning"), "finish_reason": reply.get("finish_reason"), "usage": usage,
@@ -199,6 +219,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
                                                             turns_left, bridge.subcalls_left(),
                                                             max_chars=limits.output_max_chars, pace=pace)
                 messages.append(callformat.observation_message(assistant, entry["observation"]))
+                chars_since += len(entry["observation"])
             emit("run.cell", _cell_event(turn, code, result, entry["observation"]))
             emit("run.budget", {"turns_left": turns_left, "subcalls_left": bridge.subcalls_left()})
 
@@ -227,8 +248,8 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
             record = _record(
                 spec, started_at=started_at, wall_s=round(time.monotonic() - clock, 3), limits=limits,
                 workspace_path=workspace_path, base_tree=base_tree, messages=messages, turns=turns,
-                root_usage=root_usage, bridge=bridge, children=children, perms=perms, worker=worker, submitted=submitted,
-                answer=answer, answer_valid=answer_valid, diff=diff, infra_error=infra_error,
+                compactions=compactions, root_usage=root_usage, bridge=bridge, children=children, perms=perms,
+                worker=worker, submitted=submitted, answer=answer, answer_valid=answer_valid, diff=diff, infra_error=infra_error,
                 infra_kind=infra_kind, host_traceback=host_traceback,
             )
         except Exception as exc:  # still one line in the log, so the run is never silently missing
@@ -247,6 +268,41 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker)
 
 
 # ---------------------------------------------------------------------------------------------- the turn
+
+
+async def _compact(spec: RunSpec, app: AppPort, messages: list[dict], plan: compaction.Plan, turn: int, before: int,
+                   root_usage: dict) -> dict | None:
+    """One compaction before root turn `turn` (§4.2): `messages` is replaced in place and the run.compacted body
+    (without run_id) returned, or None when there was nothing to drop. The summary call is the run's own root call
+    with `purpose: "compact"`, so its prefix is a cache hit; its usage counts in `usage.root`, and it is not a turn.
+    A `bad_request` or `context_window` error gives the mechanical summary (D-200); any other ModelError stops the
+    run, as a root call's does."""
+    settings = spec.profile.compaction
+    started = time.monotonic()
+
+    async def summarize(request: list[dict]) -> str:
+        try:
+            reply = await app.complete({
+                "run_id": spec.run_id, "role": "root", "purpose": "compact", "model": spec.root, "messages": request,
+                "tools": callformat.tools_for(spec.call_format), "max_tokens": settings.summary_max_tokens,
+                "temperature": spec.profile.root_temperature, "thinking": "off", "turn": turn,
+            })
+        except ModelError as exc:
+            if exc.kind in ("bad_request", "context_window"):
+                return ""
+            raise
+        _add_usage(root_usage, reply.get("usage"))
+        return reply.get("text") or ""
+
+    result = await compaction.compact(messages, keep_tokens=plan.keep, summarize=summarize,
+                                      summary_max_tokens=settings.summary_max_tokens)
+    if result is None:
+        return None
+    messages[:] = result.messages
+    return {"turn": turn, "prompt_index": 0, "child_id": None, "before_tokens": before,
+            "after_tokens": compaction.estimate(messages, None, 0), "dropped_messages": result.dropped,
+            "kept_messages": result.kept, "summary_chars": len(result.summary),
+            "seconds": round(time.monotonic() - started, 3)}
 
 
 def _cap_output(result: CellResult, max_chars: int) -> None:
@@ -322,7 +378,7 @@ def _input_info(spec: RunSpec) -> dict:
 
 
 def _record(spec: RunSpec, *, started_at: float, wall_s: float, limits: contract.Limits | None, workspace_path: Path,
-            base_tree: str | None, messages: list[dict], turns: list[dict], root_usage: dict, bridge: Bridge | None,
+            base_tree: str | None, messages: list[dict], turns: list[dict], compactions: list[dict], root_usage: dict, bridge: Bridge | None,
             children: Children | None, perms: Permissions | None, worker: Any, submitted: bool, answer: Any, answer_valid: bool, diff: str | None,
             infra_error: str | None, infra_kind: str | None, host_traceback: str | None) -> dict:
     """The run-log record, keys in runlog.RECORD_KEYS order (§7.8)."""
@@ -378,6 +434,10 @@ def _record(spec: RunSpec, *, started_at: float, wall_s: float, limits: contract
         "infra_error": infra_error,
         "infra_kind": infra_kind,
         "host_traceback": host_traceback,
+        "window": dict(spec.window),
+        "compactions": compactions,
+        "prompt_index": 0,  # step 4 fills these two for conversations
+        "conversation": False,
     }
 
 

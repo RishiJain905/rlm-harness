@@ -4,10 +4,12 @@
 
 import type { Bus } from "../bus.ts";
 import type { AppEvents } from "../gateway/gateway.ts";
+import { thousands } from "../interface/format.ts";
 import type {
   ModelRef,
   RunCellParams,
   RunChildParams,
+  RunCompactedParams,
   RunFinishedParams,
   RunPermissionParams,
   RunReplyParams,
@@ -76,6 +78,14 @@ export function attachPlain(bus: Bus<AppEvents>, out: LineSink): () => void {
           `run ${p.run_id} started: ${p.mode} mode, profile ${p.profile}, root ${refText(p.root)}, sub ${refText(p.sub)}, ` +
             `${p.call_format} calls, ${p.input.chars.toLocaleString("en-US")} input chars`,
           `log: ${p.log_path}`,
+        ]);
+        break;
+      }
+      case "run.compacted": {
+        const p = params as RunCompactedParams;
+        const who = p.child_id === null ? "" : `child ${p.child_id} `;
+        say(p.run_id, [
+          `${who}turn ${p.turn}: compacted ${p.dropped_messages} messages, ~${thousands(p.before_tokens)}k to ~${thousands(p.after_tokens)}k tokens, ${secs(p.seconds)}`,
         ]);
         break;
       }

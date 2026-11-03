@@ -1,5 +1,5 @@
 {
-  "protocol": 1,
+  "protocol": 2,
   "examples": [
     {
       "name": "engine.info:request",
@@ -13,7 +13,7 @@
       "kind": "result",
       "message": {"jsonrpc": "2.0", "id": 1, "result": {
         "version": "0.1.0",
-        "protocol": 1,
+        "protocol": 2,
         "python": "3.12.8",
         "contract": "v4",
         "contract_hash": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -40,7 +40,8 @@
         "call_format": "native",
         "interactive": true,
         "tag": "example-task-1",
-        "batch": "interactive"
+        "batch": "interactive",
+        "window": {"context_window": 200000, "max_output": 64000}
       }}
     },
     {
@@ -223,6 +224,34 @@
       }}
     },
     {
+      "name": "model.complete:request:compact",
+      "direction": "engine->app",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": "e7", "method": "model.complete", "params": {
+        "run_id": "r_0123456789ab",
+        "role": "root",
+        "purpose": "compact",
+        "model": {"provider": "anthropic", "model": "example-root-model", "thinking": null},
+        "messages": [
+          {"role": "system", "content": "Example system prompt."},
+          {"role": "user", "content": "Example question?\n\nThe input is in `context`."},
+          {"role": "assistant", "content": "Let me look at the input first.", "tool_call": {"id": "call_1", "name": "python", "arguments": {"code": "print(len(context))"}}},
+          {"role": "tool", "tool_call_id": "call_1", "content": "48210\n\nExample turns and sub-calls left."},
+          {"role": "user", "content": "Stop work on the task for this one reply. Example compaction request."}
+        ],
+        "tools": [
+          {"name": "python",
+           "description": "Run one cell of Python in the persistent REPL. Variables persist between calls. The result is what the cell printed, followed by your remaining turns and sub-calls.",
+           "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "The Python code to run."}},
+                          "required": ["code"], "additionalProperties": false}}
+        ],
+        "max_tokens": 8192,
+        "temperature": 1.0,
+        "thinking": "off",
+        "turn": 9
+      }}
+    },
+    {
       "name": "model.complete:result",
       "direction": "app->engine",
       "kind": "result",
@@ -313,7 +342,26 @@
         "workspace": "/example/home/scratch/r_0123456789ab",
         "input": {"chars": 48210, "lines": 1022, "sha256": "7777777777777777777777777777777777777777777777777777777777777777", "files": ["/example/input.txt"]},
         "limits": {"max_turns": 10, "max_subcalls": 50, "root_max_tokens": 4096, "output_max_chars": 4000, "cell_timeout_s": 120, "subcall_max_chars": 200000, "subcall_max_tokens": 2048},
-        "log_path": "/example/home/runs/interactive/runs.jsonl"
+        "log_path": "/example/home/runs/interactive/runs.jsonl",
+        "window": {"context_window": 200000, "max_output": 64000},
+        "compaction": {"window": 200000, "trigger": 130368, "keep": 31344}
+      }}
+    },
+    {
+      "name": "run.compacted:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.compacted", "params": {
+        "run_id": "r_0123456789ab",
+        "turn": 9,
+        "prompt_index": 0,
+        "child_id": null,
+        "before_tokens": 131022,
+        "after_tokens": 33870,
+        "dropped_messages": 12,
+        "kept_messages": 4,
+        "summary_chars": 2310,
+        "seconds": 14.2
       }}
     },
     {

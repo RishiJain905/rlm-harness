@@ -262,3 +262,53 @@ def test_contract_info(tmp_path: Path) -> None:
     default = next(x for x in info["profiles"] if x["name"] == "default")
     assert default["agent_api"] is True and default["limits"]["repo"]["max_turns"] == 150
     json.dumps(info)  # it goes on the wire as it is
+
+
+# ---------------------------------------------------------------------------------------------- [compaction] (v1 step 3)
+
+COMPACTION = "[compaction]\nwindow = 262144\nkeep_ratio = 0.16\nreserve = 65536\nsummary_max_tokens = 8192\n"
+DEFAULT_PROMPT_HASH = "b01b49ac2baa38f81177e7b5a51f2bb848e9e3137f6ea1b28a19affbfa2091f7"  # v0.2.0's, before the table
+TRAINING_PROFILE_HASH = "b5ffa4b69d4c260b53e740a24919f37c7c9254032b6e9e90edb016da1ad8fa59"
+
+
+def test_compaction_table(tmp_path: Path) -> None:
+    default = builtin("default", tmp_path)
+    assert default.compaction == p.CompactionSettings(window=262144, keep_ratio=0.16, reserve=65536,
+                                                      summary_max_tokens=8192)
+    assert default.prompt_hash() == DEFAULT_PROMPT_HASH  # the table is not in the prompt
+    training = builtin("training-v4", tmp_path)
+    assert training.compaction is None
+    assert training.prompt_hash() == contract.TRAINING_HASH
+    assert training.profile_hash() == TRAINING_PROFILE_HASH
+    user_profile(tmp_path, "small", VALID + COMPACTION.replace("262144", "4096").replace("0.16", "0.5")
+                 + "[read]\nroot_max_tokens = 256\n[repo]\nroot_max_tokens = 4095\n")
+    small = p.load_profile("small", tmp_path)
+    assert (small.compaction.window, small.compaction.keep_ratio) == (4096, 0.5)
+    user_profile(tmp_path, "plain", VALID)
+    assert p.load_profile("plain", tmp_path).compaction is None
+
+
+@pytest.mark.parametrize(
+    ("toml", "key"),
+    [
+        (COMPACTION.replace("reserve = 65536\n", ""), "reserve"),
+        (COMPACTION + "colour = 1\n", "colour"),
+        (COMPACTION.replace("0.16", "0"), "keep_ratio"),
+        (COMPACTION.replace("0.16", "0.6"), "keep_ratio"),
+        (COMPACTION.replace("0.16", "true"), "keep_ratio"),
+        (COMPACTION.replace("262144", "1000"), "window"),
+        (COMPACTION.replace("262144", "4194305"), "window"),
+        (COMPACTION.replace("262144", "262144.0"), "window"),
+        (COMPACTION.replace("65536", "-1"), "reserve"),
+        (COMPACTION.replace("8192", "255"), "summary_max_tokens"),
+        (COMPACTION.replace("8192", "32769"), "summary_max_tokens"),
+        (COMPACTION.replace("262144", "4096") + "[read]\nroot_max_tokens = 4096\n", "root_max_tokens"),
+        (COMPACTION.replace("262144", "8192") + "[repo]\nroot_max_tokens = 9000\n", "root_max_tokens"),
+        ("compaction = 1\n", "compaction"),
+    ],
+)
+def test_compaction_errors(tmp_path: Path, toml: str, key: str) -> None:
+    user_profile(tmp_path, "bad", VALID + toml)
+    with pytest.raises(p.ProfileError) as err:
+        p.load_profile("bad", tmp_path)
+    assert "'bad'" in str(err.value) and key in str(err.value)

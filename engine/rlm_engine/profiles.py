@@ -23,7 +23,7 @@ from . import contract
 BUILTIN_DIR = Path(__file__).resolve().parent / "profiles"
 
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-_TOP_KEYS = ("contract", "guidance", "cache_api", "agent_api", "rlm", "root", "sub", "read", "repo")
+_TOP_KEYS = ("contract", "guidance", "cache_api", "agent_api", "rlm", "compaction", "root", "sub", "read", "repo")
 _LIMIT_FIELDS = tuple(f.name for f in dataclasses.fields(contract.Limits))
 _THINKING = {"off": None, "low": "low", "medium": "medium", "high": "high"}  # TOML has no null: off means none
 _OVERSIZE = ("truncate", "error")
@@ -60,6 +60,21 @@ _RLM_FIELDS = tuple(f.name for f in dataclasses.fields(RlmSettings))
 
 
 @dataclass(frozen=True)
+class CompactionSettings:
+    """The [compaction] table (v1 step 3, D-171): compact as if the model's window were at most `window` tokens,
+    keep the newest `keep_ratio` of (window - output) verbatim, with DeepSeek Harness's `reserve` margin, and give the
+    summary call `summary_max_tokens`."""
+
+    window: int
+    keep_ratio: float
+    reserve: int
+    summary_max_tokens: int
+
+
+_COMPACTION_FIELDS = tuple(f.name for f in dataclasses.fields(CompactionSettings))
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     source: str  # "builtin" or "user"
@@ -72,6 +87,7 @@ class Profile:
     cache_api: bool = False  # cache-shaped sub-calls in the REPL (D-119); training-v4 never has them
     agent_api: bool = False  # ask_files, schema=, llm_async, rlm, review, check, outline (D-157 to D-162); never training-v4
     rlm: RlmSettings = RlmSettings()
+    compaction: CompactionSettings | None = None  # None: the run never compacts (training-v4, D-171)
     file_hash: str = ""  # profile_hash() of the bytes this profile was loaded from
 
     def system_prompt(self, shell_name: str = "sh") -> str:
@@ -172,6 +188,13 @@ def _load(name: str, folder: Path, source: str) -> Profile:
     if guidance_path:
         guidance_bytes = _read(name, guidance_path)
         guidance = _decode(name, f"guidance file {guidance_path.name!r}", guidance_bytes).strip()
+    read = _mode(name, "read", data, contract.READ_LIMITS_V4)
+    repo = _mode(name, "repo", data, contract.EDIT_LIMITS_V4)
+    compaction = _compaction(name, data)
+    if compaction is not None:
+        for key, settings in (("read", read), ("repo", repo)):
+            if settings.limits.root_max_tokens >= compaction.window:
+                raise ProfileError(f"profile {name!r}: [{key}] root_max_tokens must be below [compaction] window")
     return Profile(
         name=name,
         source=source,
@@ -179,11 +202,12 @@ def _load(name: str, folder: Path, source: str) -> Profile:
         guidance=guidance,
         root_temperature=_temperature(name, "root", data),
         sub_temperature=_temperature(name, "sub", data),
-        read=_mode(name, "read", data, contract.READ_LIMITS_V4),
-        repo=_mode(name, "repo", data, contract.EDIT_LIMITS_V4),
+        read=read,
+        repo=repo,
         cache_api=_bool(name, "cache_api", data.get("cache_api", False)),
         agent_api=_bool(name, "agent_api", data.get("agent_api", False)),
         rlm=_rlm(name, data),
+        compaction=compaction,
         file_hash=hashlib.sha256(toml_bytes + b"\x00" + guidance_bytes).hexdigest(),
     )
 
@@ -278,6 +302,32 @@ def _rlm(name: str, data: dict) -> RlmSettings:
             raise ProfileError(f"profile {name!r}: [rlm] {field} must be an integer of at least {least}")
         changes[field] = value
     return RlmSettings(**changes)
+
+
+def _compaction(name: str, data: dict) -> CompactionSettings | None:
+    """The [compaction] table, or None when the profile has none. All four keys are required (v1 step 3)."""
+    if "compaction" not in data:
+        return None
+    table = _table(name, "compaction", data)
+    for field in table:
+        if field not in _COMPACTION_FIELDS:
+            raise ProfileError(f"profile {name!r}: unknown key {field!r} in [compaction]")
+    missing = [field for field in _COMPACTION_FIELDS if field not in table]
+    if missing:
+        raise ProfileError(f"profile {name!r}: [compaction] is missing {', '.join(missing)}")
+
+    def integer(field: str, least: int, most: int | None = None) -> int:
+        value = table[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < least or (most is not None and value > most):
+            span = f"from {least:,} to {most:,}" if most is not None else f"of at least {least:,}"
+            raise ProfileError(f"profile {name!r}: [compaction] {field} must be an integer {span}")
+        return value
+
+    keep_ratio = table["keep_ratio"]
+    if isinstance(keep_ratio, bool) or not isinstance(keep_ratio, (int, float)) or not 0 < keep_ratio <= 0.5:
+        raise ProfileError(f"profile {name!r}: [compaction] keep_ratio must be a number above 0 and at most 0.5")
+    return CompactionSettings(window=integer("window", 4096, 4_194_304), keep_ratio=float(keep_ratio),
+                              reserve=integer("reserve", 0), summary_max_tokens=integer("summary_max_tokens", 256, 32768))
 
 
 def _limit(where: str, field: str, value: object) -> object:

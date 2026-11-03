@@ -137,6 +137,14 @@ def test_start_errors(tmp_path: Path) -> None:
         (read_params(home, root={"provider": "fake"}), -32602),
         (read_params(home, batch="../up"), -32602),
         (read_params(home, log_dir="relative/logs"), -32012),
+        # window (v1 step 3): an object with exactly two whole numbers, checked with the other types
+        (read_params(home, window=[4096, 0]), -32602),
+        (read_params(home, window={"context_window": 4096}), -32602),
+        (read_params(home, window={"context_window": 4096, "max_output": 0, "extra": 1}), -32602),
+        (read_params(home, window={"context_window": -1, "max_output": 0}), -32602),
+        (read_params(home, window={"context_window": 4096.0, "max_output": 0}), -32602),
+        (read_params(home, window={"context_window": True, "max_output": 0}), -32602),
+        (read_params(home, profile="no-such-profile", window="big"), -32602),
     ]
 
     async def main() -> None:
@@ -310,3 +318,28 @@ def test_stdin_close_cancels(tmp_path: Path) -> None:
     run(main(), TIMEOUT)
     (record,) = RunLog(home / "runs" / "interactive" / "runs.jsonl").records()
     assert record["infra_error"] == "cancelled"
+
+
+def test_start_window(tmp_path: Path) -> None:
+    """run.start's window (v1 step 3): absent gives zeros, present is echoed in run.started and the record."""
+    home = tmp_path / "home"
+    home.mkdir()
+    app = FakeApp(script={"root": [fenced("submit('x')")]})
+    window = {"context_window": 1048576, "max_output": 65536}
+
+    async def main() -> list[str]:
+        ids = []
+        async with Served(home, app) as s:
+            for extra in ({}, {"window": window}):
+                msg = await s.call("run.start", read_params(home, **extra))
+                await finished(app, msg["result"]["run_id"])
+                ids.append(msg["result"]["run_id"])
+        return ids
+
+    ids = run(main(), TIMEOUT)
+    started = {p["run_id"]: p for p in app.sent("run.started")}
+    assert started[ids[0]]["window"] == {"context_window": 0, "max_output": 0}
+    assert started[ids[1]]["window"] == window
+    assert started[ids[1]]["compaction"] is None  # training-v4
+    records = {r["run_id"]: r for r in RunLog(home / "runs" / "interactive" / "runs.jsonl").records()}
+    assert records[ids[1]]["window"] == window and records[ids[1]]["format"] == 2

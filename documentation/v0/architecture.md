@@ -66,7 +66,7 @@ rlm-harness/
     bun.lock, tsconfig.json          2
     src/
       main.ts                        2 +6 +7 +10  argv dispatch (§10)
-      version.ts                     2 ◆     APP_VERSION, PROTOCOL_VERSION = 1
+      version.ts                     2 ◆     APP_VERSION, PROTOCOL_VERSION = 1 (2 since v1 step 3)
       paths.ts                       2 ◆     home(), runsDir(), profilesDir(), … (§9)
       protocol.ts                    2 ◆     TS types for §4-§6, error codes
       link.ts                        2       JSON-RPC peer over a pair of streams
@@ -133,7 +133,7 @@ rlm-harness/
 - **Framing.** JSON-RPC 2.0, one UTF-8 JSON object per line terminated by `\n`, no batches. Lines may be long: a `run.start` result is small, but `model.complete` params carry the whole conversation.
 - **Ids.** The app numbers its requests with integers from 1, and the engine with strings `"e1"`, `"e2"`, …. A message with `result` or `error` and no `method` answers one of the receiver's own requests.
 - **Notifications** have no `id` and get no answer. All engine events are notifications, and so is `model.cancel`.
-- **Version.** `PROTOCOL_VERSION = 1` in `version.ts` and `rlm_engine/__init__.py`. `engine.info` returns it, and the app refuses to run against a different one.
+- **Version.** `PROTOCOL_VERSION = 1` in `version.ts` and `rlm_engine/__init__.py`. `engine.info` returns it, and the app refuses to run against a different one. v1 step 3 made it 2 (D-177): `run.start.window`, `model.complete.purpose`, `run.started.window` and `.compaction`, and `run.compacted`, pinned in [../v1/architecture.md](../v1/architecture.md) §3.
 - **Concurrency.** Both sides handle requests concurrently. A slow `model.complete` never blocks a `run.cancel`.
 - **Engine stdin** is read on a thread that hands each line to the asyncio loop, because asyncio pipe reading isn't reliable on Windows (D-30).
 
@@ -196,12 +196,13 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 | `tag` | string | optional | echoed in `run.started`, `run.finished` and the run log; `rlmh batch` puts the task id here |
 | `batch` | string | optional, default `"interactive"` | the run-log folder name (§9) |
 | `log_dir` | string | optional | absolute folder for `runs.jsonl`; wins over `batch` |
+| `window` | `{context_window: int, max_output: int}` | optional (protocol 2, v1 step 3), default zeros | the root model's catalog numbers, 0 when unknown; exactly these two keys, each a whole number of at least 0, or -32602. Compaction plans from it (v1 architecture §4.1) |
 
 ### 5.2 Engine → app
 
 | Method | Params | Result |
 |---|---|---|
-| `model.complete` | `{run_id, role: "root"\|"sub", model: ModelRef, messages: Message[], tools: ToolDef[], max_tokens, temperature, thinking: "off"\|"low"\|"medium"\|"high", turn}`, and for sub-calls also `{subcall_id: int, origin: Origin, batch: Batch}` | `{text, tool_call: ToolCall\|null, reasoning: string\|null, usage: Usage, finish_reason: "stop"\|"length"\|"tool_call"\|"content_filter"\|"other", served_model: string, seconds}`, or error -32001 |
+| `model.complete` | `{run_id, role: "root"\|"sub", model: ModelRef, messages: Message[], tools: ToolDef[], max_tokens, temperature, thinking: "off"\|"low"\|"medium"\|"high", turn}`, and for sub-calls also `{subcall_id: int, origin: Origin, batch: Batch}`; a compaction's summary call adds `purpose: "compact"` (protocol 2, v1 step 3) | `{text, tool_call: ToolCall\|null, reasoning: string\|null, usage: Usage, finish_reason: "stop"\|"length"\|"tool_call"\|"content_filter"\|"other", served_model: string, seconds}`, or error -32001 |
 | `approval.request` | `{run_id, kind: "write"\|"shell"\|"network", detail, turn, inside_workspace}` | `{allow: bool, remember_for_run: bool}` |
 
 - **`thinking` is resolved by the engine:** the ref's value, else the profile's `subcall_thinking` for sub-calls, else `"off"` (D-08).
@@ -214,7 +215,7 @@ Every event carries `run_id`. Turns are numbered from 1. `tag` is `null` when `r
 
 | Method | Params besides `run_id` | Sent |
 |---|---|---|
-| `run.started` | `tag, mode, profile, prompt_hash, profile_hash, contract_hash, call_format, root, sub, permission_mode, workspace, input: {chars, lines, sha256, files}, limits: {max_turns, max_subcalls, root_max_tokens, output_max_chars, cell_timeout_s, subcall_max_chars, subcall_max_tokens}, log_path` | once, before the first root call. `input` is defined as training defined it: `chars = len(context)`, `lines = len(context.splitlines())`, `sha256` = hex of `sha256(context.encode("utf-8", "replace"))`. `files` is the list of input paths as given, with `/` separators, in read mode, and `[]` in repo mode |
+| `run.started` | `tag, mode, profile, prompt_hash, profile_hash, contract_hash, call_format, root, sub, permission_mode, workspace, input: {chars, lines, sha256, files}, limits: {max_turns, max_subcalls, root_max_tokens, output_max_chars, cell_timeout_s, subcall_max_chars, subcall_max_tokens}, log_path`, and since protocol 2 `window` (as sent) and `compaction: {window, trigger, keep} \| null` (v1 architecture §3.3) | once, before the first root call. `input` is defined as training defined it: `chars = len(context)`, `lines = len(context.splitlines())`, `sha256` = hex of `sha256(context.encode("utf-8", "replace"))`. `files` is the list of input paths as given, with `/` separators, in read mode, and `[]` in repo mode |
 | `run.reply` | `turn, text, tool_call, reasoning, finish_reason, usage, seconds` | after each root reply |
 | `run.cell` | `turn, code (null when the reply had none), output (stdout as the model sees it, truncation note included), error, observation (the next message's text, or null after a submit or the last turn), seconds (compute), restarted, crash, repo_changed` | after each cell, or after the no-code error |
 | `run.subcall` | `subcall_id, origin, batch, prompt_chars, status: "sent"\|"done"\|"error"\|"rejected", error, seconds` | sent by the bridge at `sent` and again at the end. A budget or oversize refusal is one `rejected` event, with `subcall_id: null` and `prompt_chars` set to the longest prompt |
@@ -540,6 +541,7 @@ def observation_message(assistant: dict, text: str) -> dict        # tool messag
 @dataclass(frozen=True) class Profile:
     name: str; source: str; path: Path; guidance: str; root_temperature: float; sub_temperature: float
     read: ModeSettings; repo: ModeSettings
+    compaction: CompactionSettings | None   # v1 step 3: the [compaction] table {window, keep_ratio, reserve, summary_max_tokens}; None in training-v4
     def system_prompt(self, shell_name: str = "sh") -> str   # v4 + ("\n\n" + guidance) if guidance; {shell} filled in
     def prompt_hash(self) -> str      # the training method over this profile's texts and limits, {shell} left unfilled
     def profile_hash(self) -> str     # sha256(toml bytes + b"\x00" + guidance bytes), CRLF normalised to LF first
@@ -620,11 +622,12 @@ Built at step 4 (2026-10-31). What step 6 can rely on, beyond the signatures:
 class RunSpec: run_id: str; mode: str; profile: Profile; root: dict; sub: dict; permission_mode: str; call_format: str
                interactive: bool; question: str | None; inputs: list[Path]; task: str | None; repo_path: Path | None
                test_hint: str | None; language: str | None; n_files: int | None; context: str | None
-               tag: str | None; batch: str; log_path: Path
+               tag: str | None; batch: str; log_path: Path; input_spans: list[dict] | None = None
+               window: dict = {context_window: 0, max_output: 0}   # v1 step 3: run.start's window
 async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker) -> dict
     # emits every §5.3 event, appends one run-log record and returns it; never raises except CancelledError
 # engine/rlm_engine/runlog.py
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2                             # v1 step 3 (v1 architecture §3.4); /runs reads 1 and 2
 RECORD_KEYS: tuple[str, ...]                  # the top-level keys of the record below, in order
 def log_path(home: Path, batch: str, log_dir: Path | None) -> Path
 class RunLog:
@@ -646,7 +649,9 @@ subcalls: [{subcall_id, origin, batch, prompt, output, error, seconds, usage}],
 children: [{child_id, subcall_id, parent_child, depth, task, tools, max_turns, turns, submitted, answer, error, usage, seconds}],   # rlm() runs (D-160); [] without agent_api
 fetches: [{url, status, chars, error, seconds}], permissions: [Permissions.log entries],
 submitted, answer, answer_valid, usage: {root, sub}, cost_usd, cache: {read_tokens, write_tokens, hit_rate},
-timeouts, crashes, restarts, diff, infra_error, infra_kind, host_traceback
+timeouts, crashes, restarts, diff, infra_error, infra_kind, host_traceback,
+window: {context_window, max_output},       # format 2 (v1 step 3): run.start's window
+compactions: [run.compacted bodies without run_id], prompt_index, conversation   # step 3 writes 0 and false
 ```
 
 ```ts

@@ -1,5 +1,5 @@
-"""KV cache: a child run appends to its own message list and never edits an earlier message; its system prompt and tool
-list are the parent's, fixed for the run.
+"""KV cache: a child run appends to its own message list and edits it only at a compaction (compaction.py), which keeps
+its system prompt and first message byte for byte; its system prompt and tool list are the parent's, fixed for the run.
 
 rlm() child runs (D-160), for the `default` profile's agent_api. A child is a run inside the run: a worker and a REPL of
 its own, the parent's root model, the parent's system prompt, its own turn limit, and the parent's sub-call budget. It
@@ -16,6 +16,10 @@ Each child is one sub-call in the parent's budget and one row in the app (`run.s
 as `model.complete` with role "sub" and a `child` field, and `run.child` reports its cells. Its own sub-calls draw on
 the same budget, with `origin.child` set. `max_runs`, `max_depth` and `max_parallel` come from the profile's [rlm]; only the root's own children count against
 `max_parallel`, and a child can start only children with tools no wider than its own.
+
+Under a profile's [compaction] a child compacts as the run does (v1 step 3): before each of its turns, on the run's
+`window` and the child's own limits, with the summary call sent as role "sub" with its `child` field and
+`purpose: "compact"`; its usage counts as the child's, and `run.compacted` carries the child's id.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import callformat, contract, inputs
+from . import callformat, compaction, contract, inputs
 from .bridge import Bridge, SubcallRecord
 from .errors import InfraError, ModelError
 from .permissions import RENAME_SEP, Permissions
@@ -132,7 +136,7 @@ class Children:
     def __init__(self, *, run_id: str, app: Any, profile: Profile, mode: str, root: dict, call_format: str,
                  bridge: Bridge, permissions: Permissions, shell: Any, scratch: Path, repo_path: Path | None,
                  base_tree: str | None, test_hint: str | None, language: str | None, worker_factory: Any,
-                 emit: Any) -> None:
+                 emit: Any, window: dict | None = None, compactions: list[dict] | None = None) -> None:
         self.run_id = run_id
         self.app = app
         self.profile = profile
@@ -150,6 +154,8 @@ class Children:
         self.language = language
         self.worker_factory = worker_factory
         self.emit = emit
+        self.window = window or {"context_window": 0, "max_output": 0}  # run.start's, for compaction.plan
+        self.compactions = compactions if compactions is not None else []  # the run's record list, shared
         self.started = 0
         self.runs: list[ChildRun] = []
         self._slots = asyncio.Semaphore(self.settings.max_parallel)
@@ -254,18 +260,36 @@ class Children:
                 "test_hint": self.test_hint if mode == "repo" else None, "input_files": input_files or [],
                 "tool_names": tool_names}
 
+    def _request(self, child: ChildRun, turn: int, messages: list[dict]) -> dict:
+        """A child's `model.complete` params: role "sub" with its sub-call id, origin, batch and `child`."""
+        return {"run_id": self.run_id, "role": "sub", "model": self.root, "messages": messages,
+                "tools": callformat.tools_for(self.call_format), "turn": turn, "subcall_id": child.subcall_id,
+                "origin": dict(child.origin), "batch": dict(child.batch),
+                "child": {"id": child.child_id, "turn": turn, "max_turns": child.max_turns, "depth": child.depth}}
+
     async def _turns(self, child: ChildRun, worker: Any, messages: list[dict], limits: contract.Limits) -> None:
+        settings = self.profile.compaction
+        plan = compaction.plan(settings, self.window, limits.root_max_tokens) if settings else None
+        last_usage: dict | None = None  # as loop.run keeps them (v1 step 3)
+        chars_since = 0
+        compacting = plan is not None
         for index in range(child.max_turns):
             turn = index + 1
             worker.turn = child.turn = turn
+            if compacting and index:
+                before = compaction.estimate(messages, last_usage, chars_since)
+                if before > plan.trigger:
+                    body = await self._compact(child, turn, messages, plan, before)
+                    if body is not None:
+                        last_usage, chars_since = None, 0
+                        self.compactions.append(body)
+                        self.emit("run.compacted", body)
+                        compacting = body["after_tokens"] <= compaction.NO_LOOP_RATIO * before
             asked = time.monotonic()
             try:
                 reply = await self.app.complete({
-                    "run_id": self.run_id, "role": "sub", "model": self.root, "messages": list(messages),
-                    "tools": callformat.tools_for(self.call_format), "max_tokens": limits.root_max_tokens,
+                    **self._request(child, turn, list(messages)), "max_tokens": limits.root_max_tokens,
                     "temperature": self.profile.root_temperature, "thinking": self.root.get("thinking") or "off",
-                    "turn": turn, "subcall_id": child.subcall_id, "origin": dict(child.origin), "batch": dict(child.batch),
-                    "child": {"id": child.child_id, "turn": turn, "max_turns": child.max_turns, "depth": child.depth},
                 })
             except ModelError as exc:
                 if exc.kind == "bad_request":  # the model's to see, as a sub-call's is (D-06)
@@ -276,10 +300,8 @@ class Children:
             assistant = callformat.assistant_message(self.call_format, reply)
             messages.append(assistant)
             usage = reply.get("usage") or {}
-            for key in USAGE_KEYS:
-                value = usage.get(key)
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    child.usage[key] += value
+            _add_usage(child.usage, usage)
+            last_usage, chars_since = usage, 0
             # in the record now, with empty cell fields, so a stop mid-cell still shows the reply (as loop.py does)
             entry = {"turn": turn, "reply": reply.get("text") or "", "tool_call": reply.get("tool_call"),
                      "reasoning": reply.get("reasoning"), "finish_reason": reply.get("finish_reason"), "usage": usage,
@@ -303,9 +325,42 @@ class Children:
                                                             self.bridge.subcalls_left(),
                                                             max_chars=limits.output_max_chars)
                 messages.append(callformat.observation_message(assistant, entry["observation"]))
+                chars_since += len(entry["observation"])
             self._event(child, "turn", entry)
         child.error = (f"the rlm() run used all {child.max_turns} of its turns without calling submit(); give it a "
                        "smaller task or more turns")
+
+    async def _compact(self, child: ChildRun, turn: int, messages: list[dict], plan: compaction.Plan,
+                       before: int) -> dict | None:
+        """loop._compact for a child: the summary call is the child's own request with `purpose: "compact"`, its usage
+        is the child's (so it lands in usage.sub), a `bad_request` or `context_window` gives the mechanical summary
+        (D-200), and any other ModelError stops the run, as a child turn's does."""
+        settings = self.profile.compaction
+        started = time.monotonic()
+
+        async def summarize(request: list[dict]) -> str:
+            try:
+                reply = await self.app.complete({
+                    **self._request(child, turn, request), "purpose": "compact",
+                    "max_tokens": settings.summary_max_tokens, "temperature": self.profile.root_temperature,
+                    "thinking": "off",
+                })
+            except ModelError as exc:
+                if exc.kind in ("bad_request", "context_window"):
+                    return ""
+                raise InfraError(exc.kind, exc.message) from None
+            _add_usage(child.usage, reply.get("usage") or {})
+            return reply.get("text") or ""
+
+        result = await compaction.compact(messages, keep_tokens=plan.keep, summarize=summarize,
+                                          summary_max_tokens=settings.summary_max_tokens)
+        if result is None:
+            return None
+        messages[:] = result.messages
+        return {"turn": turn, "prompt_index": 0, "child_id": child.child_id, "before_tokens": before,
+                "after_tokens": compaction.estimate(messages, None, 0), "dropped_messages": result.dropped,
+                "kept_messages": result.kept, "summary_chars": len(result.summary),
+                "seconds": round(time.monotonic() - started, 3)}
 
     def _event(self, child: ChildRun, status: str, entry: dict | None = None) -> None:
         self.emit("run.child", {
@@ -316,6 +371,13 @@ class Children:
             "answer": child.answer if status == "done" else None,
             "seconds": round(child.seconds, 3) if status in ("done", "error") else None,
         })
+
+
+def _add_usage(total: dict, usage: dict) -> None:
+    for key in USAGE_KEYS:
+        value = usage.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            total[key] += value
 
 
 def _error_text(exc: BaseException) -> str:

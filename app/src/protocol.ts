@@ -157,6 +157,14 @@ export interface RunStartParams {
   tag?: string;
   batch?: string;
   log_dir?: string;
+  /** The root model's catalog numbers, 0 when unknown (v1 step 3); the engine plans compaction from them. */
+  window?: ModelWindow;
+}
+
+/** A model's catalog window: its context window and its largest output, in tokens; 0 means unknown. */
+export interface ModelWindow {
+  context_window: number;
+  max_output: number;
 }
 
 export interface RunStartResult {
@@ -213,6 +221,9 @@ export interface ModelCompleteParams {
   /** A root turn of an `rlm()` child run (D-160): `role` is "sub", `subcall_id` is the child's row, and the conversation
    *  grows turn by turn like a root's, so the gateway caches and routes it as one (cache.ts routeKey). */
   child?: ChildTurn;
+  /** The summary call of a compaction (v1 step 3). The gateway treats it as the role it carries: same routing key, same
+   *  cache markers, same accounting. */
+  purpose?: "compact";
 }
 
 /** Which child run a `model.complete` turn belongs to: its id, this turn and the child's limit, and its depth (1: the
@@ -282,6 +293,32 @@ export interface RunStartedParams {
   input: RunInputInfo;
   limits: RunLimits;
   log_path: string;
+  /** As run.start sent it (v1 step 3). */
+  window: ModelWindow;
+  /** This run's compaction numbers, or null when the profile has no `[compaction]` table. */
+  compaction: CompactionPlan | null;
+}
+
+/** The numbers of v1 architecture §4.1, in tokens. */
+export interface CompactionPlan {
+  window: number;
+  trigger: number;
+  keep: number;
+}
+
+/** One compaction (v1 step 3): the loop replaced the middle of the conversation with the model's summary. `child_id`
+ *  names the `rlm()` child whose conversation it was, or null for the root's. */
+export interface RunCompactedParams {
+  run_id: string;
+  turn: number;
+  prompt_index: number;
+  child_id: number | null;
+  before_tokens: number;
+  after_tokens: number;
+  dropped_messages: number;
+  kept_messages: number;
+  summary_chars: number;
+  seconds: number;
 }
 
 export interface RunReplyParams {
@@ -378,6 +415,7 @@ export interface ModelCancelParams {
 /** Every engine notification, by method. */
 export type EngineEvents = {
   "run.started": RunStartedParams;
+  "run.compacted": RunCompactedParams;
   "run.reply": RunReplyParams;
   "run.cell": RunCellParams;
   "run.subcall": RunSubcallParams;

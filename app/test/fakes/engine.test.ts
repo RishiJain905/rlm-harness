@@ -250,7 +250,7 @@ describe("the app around it", () => {
     await finished(log, second);
     expect(app.engine.calls.filter((c) => c.method === "run.start")[1]!.params.permission_mode).toBe("default");
     expect(app.startCalls).toHaveLength(2);
-    expect(await app.session.info()).toMatchObject({ protocol: 1, contract: "v4" });
+    expect(await app.session.info()).toMatchObject({ protocol: 2, contract: "v4" });
   });
 
   test("bad input and unknown profile reject start", async () => {
@@ -327,7 +327,7 @@ describe("helpers", () => {
       "profile", "profile_hash", "mode", "call_format", "root", "sub", "permission_mode", "limits", "started_at",
       "wall_s", "question", "input", "workspace", "base_tree", "messages", "turns", "subcalls", "children", "fetches",
       "permissions", "submitted", "answer", "answer_valid", "usage", "cost_usd", "cache", "timeouts", "crashes",
-      "restarts", "diff", "infra_error", "infra_kind", "host_traceback",
+      "restarts", "diff", "infra_error", "infra_kind", "host_traceback", "window", "compactions", "prompt_index", "conversation",
     ]);
     expect(r.turns).toHaveLength(2);
     expect(r.subcalls).toHaveLength(3);

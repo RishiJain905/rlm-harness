@@ -18,6 +18,12 @@ export interface FakeScript {
    *  with `child` is served entry `child.turn - 1` of its list; past the end (or with no list) it fails as an exhausted
    *  root script does. Child turns never move the root or sub counts, so `errors` never matches them. */
   children?: Record<string, FakeTurn[]>;
+  /** A compaction's summary calls (`purpose: "compact"`, v1 step 3), root's and children's alike, in order: each call
+   *  takes the next entry, error or not. `{text}` answers with it; `{error: <kind>}` fails the call with that ModelError
+   *  kind (status null), as an `errors` entry does. A call past the end (or with no list) answers "summary". Compact
+   *  calls never take a root, child or sub entry and never move the root or sub counts, so `errors` never matches them
+   *  (engine/tests/fakeapp.py does the same). */
+  compact?: { text?: string; error?: ModelErrorKind }[];
   chunk_chars?: number;
   delay_ms?: number;
   errors?: { role: "root" | "sub"; at: number; kind: ModelErrorKind; status?: number | null }[];
@@ -27,11 +33,12 @@ export interface FakeScript {
 export interface FakeRunState {
   script: FakeScript | null;
   rootServed: number;
+  compactServed: number;
   calls: { root: number; sub: number };
 }
 
 export function newFakeRunState(): FakeRunState {
-  return { script: null, rootServed: 0, calls: { root: 0, sub: 0 } };
+  return { script: null, rootServed: 0, compactServed: 0, calls: { root: 0, sub: 0 } };
 }
 
 /** A failure the gateway turns into a ModelError as it is, with no retries. */
@@ -64,6 +71,12 @@ export class FakeProvider {
   async complete(p: ModelCompleteParams, state: FakeRunState, onText: (text: string) => void, signal: AbortSignal): Promise<FakeReply> {
     state.script ??= this.load();
     const script = state.script;
+    if (p.purpose === "compact") {
+      const entry = script.compact?.[state.compactServed];
+      if (entry) state.compactServed += 1;
+      if (entry?.error !== undefined) throw new FakeError(entry.error, `fake script error: ${entry.error} at compact call ${state.compactServed}`);
+      return this.stream(script, { text: entry ? (entry.text ?? "") : "summary", tool_call: null, finish_reason: "stop" }, onText, signal);
+    }
     if (p.child) return this.stream(script, childReply(script, p.child), onText, signal);
     const n = ++state.calls[p.role];
     const scripted = script.errors?.find((e) => e.role === p.role && e.at === n);

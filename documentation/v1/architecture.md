@@ -209,10 +209,10 @@ Here `last` is the previous reply's usage. When that reply has no usage, the est
 
 ### 4.2 How
 
-`compaction.compact(messages, *, keep_tokens, summarize) -> Compacted | None`. It is pure apart from the `summarize` callback, so tests drive it without a model.
+`compaction.compact(messages, *, keep_tokens, summarize, summary_max_tokens=8192) -> Compacted | None`. It is pure apart from the `summarize` callback, so tests drive it without a model. It builds the summary request itself (COMPACT_REQUEST with `max_words = summary_max_tokens // 5`), and `summarize` returns `""` for a failed call the run can go on from (D-200, D-244).
 
 1. **Head.** `messages[:2]`, the system prompt and the first user message, stay byte for byte. The cached prefix survives.
-2. **Tail.** Walk back from the end and keep whole turns while their `chars / 3` fits in `keep_tokens`. A turn is an assistant message plus the observation that follows it. The tail always holds at least the newest turn, and it starts at an assistant message. A native tool call is never separated from its tool result.
+2. **Tail.** Walk back from the end and keep whole turns while their `chars / 3` fits in `keep_tokens`. A turn is an assistant message plus the observation that follows it (and any other message before the next assistant message; anything before the first assistant message, such as an earlier summary, is middle, D-244). The tail always holds at least the newest turn, and it starts at an assistant message. A native tool call is never separated from its tool result.
 3. **Middle.** Everything between head and tail. When it is empty, return `None`: the run goes on, and the gateway's window check stays the last guard.
 4. **Summary.** `summarize(messages + [{role: "user", content: COMPACT_REQUEST}])` makes one `model.complete` call:
    - `purpose: "compact"`, with the run's own model, tools, temperature and routing, so the whole prefix is a cache hit

@@ -32,7 +32,7 @@ except ImportError:  # Windows
     fcntl = None  # type: ignore[assignment]
     import msvcrt
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2  # v1 step 3: four keys appended (v1 architecture §3.4)
 
 # The top-level keys of a record, in order (architecture §7.8). Read-mode records carry `question` where repo-mode
 # records carry `task`: "question" stands for that slot here, and a repo-mode record has `task` in its place.
@@ -41,7 +41,8 @@ RECORD_KEYS: tuple[str, ...] = (
     "profile", "profile_hash", "mode", "call_format", "root", "sub", "permission_mode", "limits", "started_at",
     "wall_s", "question", "input", "workspace", "base_tree", "messages", "turns", "subcalls", "children", "fetches",
     "permissions", "submitted", "answer", "answer_valid", "usage", "cost_usd", "cache", "timeouts", "crashes",
-    "restarts", "diff", "infra_error", "infra_kind", "host_traceback",
+    "restarts", "diff", "infra_error", "infra_kind", "host_traceback", "window", "compactions", "prompt_index",
+    "conversation",
 )
 
 _BATCH_RE = re.compile(r"[A-Za-z0-9._-]+")

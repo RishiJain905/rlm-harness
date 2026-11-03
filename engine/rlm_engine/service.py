@@ -231,6 +231,9 @@ def _run_spec(params: dict, home: Path) -> loop.RunSpec:
         raise RpcError(INVALID_PARAMS, "n_files must be a whole number")
     if p.get("interactive") is not None and not isinstance(p["interactive"], bool):
         raise RpcError(INVALID_PARAMS, "interactive must be true or false")
+    window = p.get("window")
+    if window is not None and not _is_window(window):
+        raise RpcError(INVALID_PARAMS, "window must be {context_window, max_output}, both whole numbers")
 
     profile = None
     if p.get("profile") is not None:
@@ -271,7 +274,14 @@ def _run_spec(params: dict, home: Path) -> loop.RunSpec:
         repo_path=repo_path,
         **{key: p.get(key) if repo else None for key in _REPO_OVERRIDES},
         tag=p.get("tag"), batch=batch, log_path=log_path,
+        window=dict(window) if window is not None else {"context_window": 0, "max_output": 0},
     )
+
+
+def _is_window(value: Any) -> bool:
+    """run.start's `window` (v1 step 3): exactly the root model's two catalog numbers, each 0 or more."""
+    return (isinstance(value, dict) and set(value) == {"context_window", "max_output"}
+            and all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in value.values()))
 
 
 def _is_model_ref(value: Any) -> bool:

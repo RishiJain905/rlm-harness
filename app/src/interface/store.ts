@@ -15,6 +15,7 @@ import type {
   RunBudgetParams,
   RunCellParams,
   RunChildParams,
+  RunCompactedParams,
   RunFinishedParams,
   RunLimits,
   RunPermissionParams,
@@ -26,7 +27,7 @@ import type {
 import type { Session } from "../session.ts";
 import { saveSettings, setSetting, type Settings } from "../settings.ts";
 import type { ApprovalQueue } from "./approvals.ts";
-import { cacheTone, contextTone, formatClock, formatCost, formatTokens, unicodeSupported, type StatusSegment } from "./format.ts";
+import { cacheTone, contextTone, formatClock, formatCost, formatTokens, thousands, unicodeSupported, type StatusSegment } from "./format.ts";
 
 /** Store changes reach React at most this often, so 20 streams don't repaint per chunk. */
 export const FLUSH_MS = 50;
@@ -121,7 +122,9 @@ export type Entry =
   | { kind: "permission"; text: string; allowed: boolean }
   | { kind: "answer"; text: string }
   | { kind: "error"; text: string; lines: string[] }
-  | { kind: "note"; text: string; tone: "info" | "warn" | "error" };
+  | { kind: "note"; text: string; tone: "info" | "warn" | "error" }
+  /** The live tail while a compaction's summary call runs (v1 step 3), in place of a reply. */
+  | { kind: "compacting" };
 
 export interface Totals {
   root: Usage;
@@ -215,10 +218,12 @@ export class RunStore {
   private readonly listeners = new Set<() => void>();
   private readonly off: (() => void)[] = [];
   /** Gateway call ids of this run: the root's live tail, or a sub-call row's key. */
-  private readonly calls = new Map<string, { role: "root" } | { role: "sub"; key: string; child?: ChildCall }>();
+  private readonly calls = new Map<string, { role: "root"; compact?: true } | { role: "sub"; key: string; child?: ChildCall; compact?: true }>();
   /** `── turn k ──` with box-drawing, or `-- turn k --` in ASCII mode, as the theme draws its rules. */
   private readonly unicode: boolean;
   private lastReply: Usage | null = null;
+  /** after_tokens of the root's latest compaction, the context until the next reply says otherwise (v1 step 3). */
+  private compactedTo: number | null = null;
   private rejected = 0;
   /** Engine events that came while starting with no run id yet, for startResolved() to replay. */
   private early: { method: string; params: any }[] = [];
@@ -247,6 +252,7 @@ export class RunStore {
     this.calls.clear();
     this.early = [];
     this.lastReply = null;
+    this.compactedTo = null;
     this.rejected = 0;
     this.changed();
   }
@@ -262,6 +268,7 @@ export class RunStore {
     this.calls.clear();
     this.early = [];
     this.lastReply = null;
+    this.compactedTo = null;
     this.rejected = 0;
     this.changed();
   }
@@ -360,6 +367,9 @@ export class RunStore {
       case "run.child":
         this.child(params as RunChildParams);
         break;
+      case "run.compacted":
+        this.compacted(params as RunCompactedParams);
+        break;
       case "run.permission":
         this.permission(params as RunPermissionParams);
         break;
@@ -392,6 +402,7 @@ export class RunStore {
     const v = this.v;
     v.turns = Math.max(v.turns, p.turn);
     this.lastReply = p.usage;
+    this.compactedTo = null;
     v.rootOpen = false;
     for (const [id, c] of this.calls) if (c.role === "root") this.calls.delete(id);
     const entry: Entry = { kind: "reply", turn: p.turn, text: p.text, reasoning: p.reasoning ?? "", live: false };
@@ -463,6 +474,21 @@ export class RunStore {
     }
   }
 
+  /** run.compacted (v1 step 3): a note where it happened; the root's also resets the context estimate. */
+  private compacted(p: RunCompactedParams): void {
+    const v = this.v;
+    v.entries = v.entries.filter((e) => e.kind !== "compacting");
+    v.entries.push(compactedNote(p));
+    if (p.child_id === null) {
+      this.lastReply = null;
+      this.compactedTo = p.after_tokens;
+      return;
+    }
+    // a child's: also in its row, before the turn it preceded, as viewFromRecord puts it
+    const row = this.v.blocks.find((b) => b.id === `rlm${p.child_id}`)?.rows[0];
+    if (row) row.text = withLine(row.text, childCompactedLine(p));
+  }
+
   private permission(p: RunPermissionParams): void {
     this.v.permissions.push(p);
     if (p.asked || !p.allowed) this.v.entries.push({ kind: "permission", text: permissionLine(p), allowed: p.allowed });
@@ -475,7 +501,7 @@ export class RunStore {
     v.failKind = v.phase === "failed" ? (p.infra_kind ?? "other") : null;
     v.endedAt = Date.now();
     v.rootOpen = false;
-    v.entries = v.entries.filter((e) => !(e.kind === "reply" && e.live));
+    v.entries = v.entries.filter((e) => !(e.kind === "reply" && e.live) && e.kind !== "compacting");
     for (const b of v.blocks) {
       for (const r of b.rows) {
         if (r.status === "queued" || r.status === "streaming") {
@@ -490,11 +516,23 @@ export class RunStore {
 
   private onCallStart(e: AppEvents["call.start"]): void {
     if (this.v.runId === null || e.run_id !== this.v.runId || this.v.readOnly) return;
-    if (e.role === "root") {
+    if (e.role === "root" && e.purpose === "compact") {
+      // a compaction's summary call: "compacting…" as the live tail; its text is the summary, not a reply
+      this.calls.set(e.call_id, { role: "root", compact: true });
+      this.v.rootOpen = true;
+      this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live) && x.kind !== "compacting");
+      this.v.entries.push({ kind: "compacting" });
+    } else if (e.role === "root") {
       this.calls.set(e.call_id, { role: "root" });
       this.v.rootOpen = true;
-      this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live));
+      this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live) && x.kind !== "compacting");
       this.v.entries.push({ kind: "reply", turn: this.v.turns + 1, text: "", reasoning: "", live: true });
+    } else if (e.subcall_id !== undefined && e.child && e.purpose === "compact") {
+      // a child's summary call: no turn line and no text in its row, only its usage (the row's sums the child's calls)
+      const batch = e.batch ?? { id: `rlm${e.child.id}`, index: 0, size: 1 };
+      const row = this.row(e.subcall_id, batch.id, batch.index, batch.size, e.origin ?? { turn: this.v.turns, line: null });
+      this.calls.set(e.call_id, { role: "sub", key: row.key, compact: true });
+      return;
     } else if (e.subcall_id !== undefined && e.child) {
       // a child's turn adds to its row: a turn line, then this turn's reply; the row ends with run.child, not here
       const batch = e.batch ?? { id: `rlm${e.child.id}`, index: 0, size: 1 };
@@ -527,10 +565,13 @@ export class RunStore {
     const c = this.calls.get(e.call_id);
     if (!c) return;
     let target: { text: string; reasoning: string } | undefined;
-    if (c.role === "root") {
+    if (c.role === "root" && c.compact) {
+      return;
+    } else if (c.role === "root") {
       const live = this.v.entries.find((x) => x.kind === "reply" && x.live);
       target = live?.kind === "reply" ? live : undefined;
     } else {
+      if (c.compact) return;
       const row = this.findRow(c.key);
       target = row;
       if (row && c.child) {
@@ -568,12 +609,13 @@ export class RunStore {
     if (c.role === "root") {
       this.v.rootOpen = false;
       this.calls.delete(e.call_id);
-      if (e.error) this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live));
+      if (c.compact) this.v.entries = this.v.entries.filter((x) => x.kind !== "compacting");
+      else if (e.error) this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live));
     } else {
       const row = this.findRow(c.key);
       if (!row) return;
-      if (c.child) {
-        // one turn of the child ended: its usage adds up; the row's status and time wait for run.child
+      if (c.child || c.compact) {
+        // one turn (or a summary call) of the child ended: its usage adds up; the row's status and time wait for run.child
         this.calls.delete(e.call_id);
         if (e.error) row.error ??= e.error.message;
         else row.usage = sumUsage(row.usage, e.usage);
@@ -650,6 +692,8 @@ export class RunStore {
       v.totals = this.deps.session.gateway.totals(v.runId);
       if (this.lastReply) {
         v.ctx = { tokens: this.lastReply.input_tokens + this.lastReply.output_tokens, estimated: false };
+      } else if (this.compactedTo !== null) {
+        v.ctx = { tokens: this.compactedTo, estimated: true };
       } else {
         const req = this.deps.session.gateway.lastRootRequest(v.runId);
         if (req) v.ctx = { tokens: Math.ceil(requestChars(req) / 4), estimated: true };
@@ -771,6 +815,26 @@ function cellNotes(p: { restarted: boolean; crash: string | null; repo_changed: 
   if (p.crash) notes.push(`crash: ${p.crash}`);
   if (p.repo_changed) notes.push("the repository changed");
   return notes;
+}
+
+/** `text` with `line` and a newline after it, on a line of its own. */
+function withLine(text: string, line: string): string {
+  return `${text}${text === "" || text.endsWith("\n") ? "" : "\n"}${line}\n`;
+}
+
+/** A compaction inside an rlm() child, as a line of its row's text. */
+function childCompactedLine(p: { dropped_messages: number; before_tokens: number; after_tokens: number }): string {
+  return `(${compactedText(p)})`;
+}
+
+function compactedText(p: { dropped_messages: number; before_tokens: number; after_tokens: number }): string {
+  return `Compacted ${p.dropped_messages} messages to save context: ~${thousands(p.before_tokens)}k to ~${thousands(p.after_tokens)}k tokens.`;
+}
+
+/** The transcript's note for a compaction, live or from a record's `compactions`; a child's names the child. */
+export function compactedNote(p: { dropped_messages: number; before_tokens: number; after_tokens: number; child_id?: number | null }): Entry {
+  const text = compactedText(p);
+  return { kind: "note", text: typeof p.child_id === "number" ? `rlm${p.child_id}: ${text}` : text, tone: "info" };
 }
 
 export function permissionLine(p: { turn: number; kind: string; detail: string; allowed: boolean; asked: boolean; remembered: boolean }): string {
@@ -926,9 +990,21 @@ export function viewFromRecord(record: Record<string, any>, opts: { unicode?: bo
   const turns: any[] = Array.isArray(record.turns) ? record.turns : [];
   const perms: RunPermissionParams[] = Array.isArray(record.permissions) ? record.permissions : [];
   v.permissions = perms;
+  // format 2 (v1 step 3): each compaction before the turn it preceded; the root's in the transcript, a child's in its row
+  const compactions: any[] = (Array.isArray(record.compactions) ? record.compactions : []).filter(
+    (c: any) => isObj(c) && typeof c.turn === "number" && typeof c.dropped_messages === "number",
+  );
+  const rootCompactions = compactions.filter((c) => typeof c.child_id !== "number");
+  const shown = new Set<unknown>();
   for (const t of turns) {
     const turn = typeof t.turn === "number" ? t.turn : v.turns + 1;
     v.turns = Math.max(v.turns, turn);
+    for (const c of rootCompactions) {
+      if (c.turn === turn && !shown.has(c)) {
+        shown.add(c);
+        v.entries.push(compactedNote({ ...c, child_id: null }));
+      }
+    }
     v.entries.push({ kind: "reply", turn, text: str(t.reply) ?? "", reasoning: str(t.reasoning) ?? "", live: false });
     if (typeof t.code === "string") v.cellCode[turn] = t.code;
     if (t.code !== null || t.error !== null) {
@@ -945,6 +1021,9 @@ export function viewFromRecord(record: Record<string, any>, opts: { unicode?: bo
       if (p.turn === turn && (p.asked || !p.allowed)) v.entries.push({ kind: "permission", text: permissionLine(p), allowed: p.allowed });
     }
   }
+
+  // a compaction whose turn never came (the run ended first) still shows, after the last turn
+  for (const c of rootCompactions) if (!shown.has(c)) v.entries.push(compactedNote({ ...c, child_id: null }));
 
   const subcalls: any[] = Array.isArray(record.subcalls) ? record.subcalls : [];
   for (const s of subcalls) {
@@ -989,9 +1068,11 @@ export function viewFromRecord(record: Record<string, any>, opts: { unicode?: bo
     const cells: ChildCell[] = [];
     let text = "";
     let reasoning = "";
+    const own = compactions.filter((c) => c.child_id === id);
     for (const t of turns) {
       const turn = typeof t.turn === "number" ? t.turn : cells.length + 1;
       const sep = turnLine(turn, opts.unicode ?? true);
+      for (const c of own) if (c.turn === turn) text = withLine(text, childCompactedLine(c)).slice(0, -1);
       text += `${text === "" ? "" : "\n"}${sep}\n${str(t.reply) ?? ""}`;
       if (str(t.reasoning)) reasoning += `${reasoning === "" ? "" : "\n"}${sep}\n${t.reasoning}`;
       if (t.code !== null || t.error !== null) cells.push({ turn, code: str(t.code), output: str(t.stdout), error: str(t.error) });

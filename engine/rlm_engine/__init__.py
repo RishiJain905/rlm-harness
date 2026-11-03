@@ -6,4 +6,4 @@ The rlm-harness engine. The app starts it with `python -X utf8 -m rlm_engine ser
 from __future__ import annotations
 
 __version__ = "0.2.0"
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2

@@ -27,6 +27,12 @@ function scale(value: number): number {
   return value < 100 ? Math.round(value * 10) / 10 : Math.round(value);
 }
 
+/** A token count in thousands, for the compaction lines (`~<n>k`, v1 step 3): one decimal under 100k, none from 100k.
+ *  `131022` is `131`, `33870` is `33.9`, `3276` is `3.3`, `400` is `0.4`. */
+export function thousands(n: number): string {
+  return String(scale(Math.max(0, n) / 1e3));
+}
+
 /** `999`, `1k`, `12.3k`, `123k`, `1M`, `1.2M`. A value that rounds to 1000k prints as `1M`. */
 export function formatTokens(n: number): string {
   if (!(n > 0)) return "0";
