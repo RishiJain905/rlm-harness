@@ -202,6 +202,9 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
                 submitted, answer, answer_valid = False, None, True
                 messages.extend(follow)
                 chars_since += sum(len(m["content"]) for m in follow)
+            # a follow-up's question message, which a compaction must not take away (D-248); None in prompt 0, whose
+            # question is in the head
+            question = (follow[-1], text) if prompt else None
             edited = False  # a repo run has changed a file in its workspace during this prompt (pace_nudge)
             compacting = plan is not None  # off for the rest of the prompt after a compaction that barely helped
             for index in range(limits.max_turns):
@@ -210,7 +213,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
                 if compacting and (index or prompt):
                     before = compaction.estimate(messages, last_usage, chars_since)
                     if before > plan.trigger:
-                        body = await _compact(spec, app, messages, plan, turn, before, root_usage, prompt)
+                        body = await _compact(spec, app, messages, plan, turn, before, root_usage, prompt, question)
                         if body is not None:
                             last_usage, chars_since = None, 0
                             compactions.append(body)
@@ -368,12 +371,13 @@ class _Bases:
 
 
 async def _compact(spec: RunSpec, app: AppPort, messages: list[dict], plan: compaction.Plan, turn: int, before: int,
-                   root_usage: dict, prompt_index: int = 0) -> dict | None:
+                   root_usage: dict, prompt_index: int = 0, question: tuple[dict, str] | None = None) -> dict | None:
     """One compaction before root turn `turn` (§4.2): `messages` is replaced in place and the run.compacted body
     (without run_id) returned, or None when there was nothing to drop. The summary call is the run's own root call
     with `purpose: "compact"`, so its prefix is a cache hit; its usage counts in `usage.root`, and it is not a turn.
     A `bad_request` or `context_window` error gives the mechanical summary (D-200); any other ModelError stops the
-    run, as a root call's does."""
+    run, as a root call's does. `question` is a follow-up's `(message, text)`: when the compaction dropped that
+    message, `followup.KEPT_FOLLOW_UP` repeats the text right after the summary (D-248)."""
     settings = spec.profile.compaction
     started = time.monotonic()
 
@@ -396,6 +400,8 @@ async def _compact(spec: RunSpec, app: AppPort, messages: list[dict], plan: comp
     if result is None:
         return None
     messages[:] = result.messages
+    if question is not None and question[0] not in messages:
+        messages.insert(3, followup.kept_message(question[1]))  # after the head and the summary, before the tail
     return {"turn": turn, "prompt_index": prompt_index, "child_id": None, "before_tokens": before,
             "after_tokens": compaction.estimate(messages, None, 0), "dropped_messages": result.dropped,
             "kept_messages": result.kept, "summary_chars": len(result.summary),

@@ -58,3 +58,13 @@ def test_where_by_mode() -> None:
         (got,) = follow_up_messages(last, submitted=True, text="t", mode=mode, turns_left=1, subcalls_left=1)
         assert f"from before{where}.\n\n" in got["content"]
     assert followup.WHERE["read"] != followup.WHERE["repo"]
+
+
+def test_kept_follow_up() -> None:
+    """D-248: the repeat of a follow-up's question after a compaction dropped it."""
+    assert followup.KEPT_FOLLOW_UP == (
+        "[The follow-up you are answering now was in the turns the summary replaced. Here it is again.]\n\n{text}")
+    assert followup.kept_message("and how long?") == {
+        "role": "user",
+        "content": "[The follow-up you are answering now was in the turns the summary replaced. Here it is again.]"
+                   "\n\nand how long?"}

@@ -241,7 +241,7 @@ The record's `compactions` holds every `run.compacted` body. Each compaction cou
   - The turn budget and the sub-call budget start over. `submit()` works again, and the answer from earlier prompts is cleared.
   - Mode, profile, models and workspace stay as prompt 0 set them.
   - Step 4 pins the texts of `SUBMITTED_NOTE`, `UNANSWERED_NOTE` and `FOLLOW_UP`.
-- **Compaction (§4) covers the whole conversation.** The head stays prompt 0's system and first user message.
+- **Compaction (§4) covers the whole conversation.** The head stays prompt 0's system and first user message. A follow-up's note and `FOLLOW_UP` belong to the turn before them (D-244), so when a compaction in prompt *k* drops that turn, the loop adds `followup.KEPT_FOLLOW_UP` with prompt *k*'s text right after the summary: the model always sees the question it is answering, whichever summary was written (D-248).
 - **The wall cap.** The worker's wall cap is per cell (`manager.py`), so it already holds for each prompt, with no change.
 - **Ending a conversation.** `run.close`, `run.cancel` or the engine's stdin closing ends it. The worker closes, model calls are cancelled, the scratch folder goes, and `run.closed` is sent. A cancel during a prompt also writes that prompt's `cancelled` record first, as in v0.
 - **In the app.**

@@ -4,8 +4,10 @@ Follow-ups (v1 step 4, architecture §5). In a conversation, `run.say` starts th
 same message list. The previous prompt is closed with a note first (D-201): `SUBMITTED_NOTE` when it submitted, else
 `UNANSWERED_NOTE`, as the tool result of a native tool call (every call needs exactly one result, D-04), otherwise at
 the start of the user message. Then `FOLLOW_UP` carries the user's text, the mode's `WHERE` phrase and the new
-prompt's budgets. These texts belong to the profile layer, not prompt v4: no hash covers them, and a one-shot run
-never sends them.
+prompt's budgets. A compaction keeps the note and `FOLLOW_UP` with the turn before them (D-244), so when it drops that
+turn, `KEPT_FOLLOW_UP` repeats the question right after the summary (D-248): the model always sees the question it is
+answering, whichever summary was written. These texts belong to the profile layer, not prompt v4: no hash covers
+them, and a one-shot run never sends them.
 """
 
 from __future__ import annotations
@@ -18,6 +20,10 @@ FOLLOW_UP = (
     "({turns_left} turns left, {subcalls_left} sub-calls left) Answer this with submit(), as before."
 )
 WHERE = {"read": ", and `context` is unchanged", "repo": ", and the repository keeps your edits"}
+KEPT_FOLLOW_UP = (
+    "[The follow-up you are answering now was in the turns the summary replaced. Here it is again.]\n\n"
+    "{text}"
+)
 
 
 def follow_up_messages(last: dict, *, submitted: bool, text: str, mode: str, turns_left: int,
@@ -29,3 +35,8 @@ def follow_up_messages(last: dict, *, submitted: bool, text: str, mode: str, tur
     if call:
         return [{"role": "tool", "tool_call_id": call["id"], "content": note}, {"role": "user", "content": follow}]
     return [{"role": "user", "content": note + "\n\n" + follow}]
+
+
+def kept_message(text: str) -> dict:
+    """The user message that repeats a follow-up's question after a compaction dropped it (D-248)."""
+    return {"role": "user", "content": KEPT_FOLLOW_UP.format(text=text)}

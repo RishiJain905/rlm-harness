@@ -637,7 +637,8 @@ class Inbox:                                   # v1 step 4: a conversation's que
     async def next(self) -> str | None
 async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker, inbox: Inbox | None = None) -> dict
     # emits every §5.3 event, appends one run-log record per prompt and returns the last; never raises except CancelledError
-# engine/rlm_engine/followup.py (v1 step 4): SUBMITTED_NOTE, UNANSWERED_NOTE, FOLLOW_UP, WHERE (pinned texts)
+# engine/rlm_engine/followup.py (v1 step 4): SUBMITTED_NOTE, UNANSWERED_NOTE, FOLLOW_UP, WHERE, KEPT_FOLLOW_UP (pinned texts)
+def kept_message(text: str) -> dict   # D-248: a follow-up's question again, after a compaction dropped it
 def follow_up_messages(last: dict, *, submitted: bool, text: str, mode: str, turns_left: int, subcalls_left: int) -> list[dict]
 # engine/rlm_engine/runlog.py
 FORMAT_VERSION = 2                             # v1 step 3 (v1 architecture §3.4); /runs reads 1 and 2

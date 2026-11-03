@@ -20,7 +20,7 @@ import pytest
 from conftest import compact_profile, needs_git, run
 from fakeapp import FakeApp
 from rlm_engine import loop
-from rlm_engine.followup import FOLLOW_UP, SUBMITTED_NOTE, UNANSWERED_NOTE, WHERE
+from rlm_engine.followup import FOLLOW_UP, SUBMITTED_NOTE, UNANSWERED_NOTE, WHERE, kept_message
 from rlm_engine.profiles import BUILTIN_DIR, load_profile
 from rlm_engine.runlog import RunLog
 from rlm_engine.worker.manager import Worker
@@ -433,6 +433,66 @@ def test_compaction_spans_prompts(home: Path) -> None:
     assert r0["compactions"] == []
     assert r1["compactions"] == [{k: v for k, v in e.items() if k != "run_id"} for e in events]
     assert r1["submitted"] and r1["infra_error"] is None
+    # the follow-up's question sat with prompt 0's last turn, which the summary replaced: it comes right back (D-248)
+    assert not any(m["content"].endswith(follow("Print a lot.", turns_left=12)) for m in after["messages"])
+    assert after["messages"][3] == kept_message("Print a lot.")
+
+
+@pytest.mark.parametrize("summary", [{"text": "SUMMARY of the work so far."}, {"error": "context_window"}],
+                         ids=["model-summary", "fallback"])
+def test_follow_up_survives_compaction(home: Path, summary: dict) -> None:
+    """Every request of a follow-up holds its own question exactly once, through each compaction, with the model's
+    summary and with the mechanical one (D-200, D-248). Prompt 2's compaction drops prompt 1's repeat as part of the
+    middle, and repeats prompt 2's own question instead."""
+    compact_profile(home)
+    questions = ["Print a lot, then submit.", "Now print more."]
+    app = FakeApp(script={"root": [fenced("submit('first')")] + printing(10) + printing(10),
+                          "compact": [summary] * 10})
+
+    async def main() -> None:
+        async with Served(home, app) as s:
+            run_id = (await s.call("run.start", params(home, profile="compact-test")))["result"]["run_id"]
+            await sent(app, "run.finished", run_id)
+            for k, text in enumerate(questions, 2):
+                await s.call("run.say", {"run_id": run_id, "text": text})
+                await sent(app, "run.finished", run_id, k)
+            await s.call("run.close", {"run_id": run_id})
+
+    run(main(), TIMEOUT)
+    events = app.sent("run.compacted")
+    assert {e["prompt_index"] for e in events} == {1, 2}  # prompt 2 may compact twice: its own repeat goes and comes back
+    by_prompt: list[list[dict]] = []
+    for request in roots(app):
+        if request["turn"] == 1:
+            by_prompt.append([])
+        by_prompt[-1].append(request)
+    assert [len(p) for p in by_prompt] == [1, 11, 11]
+    for text, requests in zip(questions, by_prompt[1:]):
+        for request in requests:
+            texts = [m["content"] for m in request["messages"]]
+            assert sum(text in t for t in texts) == 1, (text, request["turn"], texts)
+    after = next(r for r in by_prompt[2] if r["turn"] == events[-1]["turn"])
+    assert after["messages"][3] == kept_message(questions[1])
+    assert not any(questions[0] in m["content"] for m in after["messages"])  # prompt 1's question went with the middle
+    _, r1, r2 = records(home)
+    assert r1["submitted"] and r2["submitted"] and r2["infra_error"] is None
+    assert sum(questions[1] in m["content"] for m in r2["messages"]) == 1
+
+
+def test_prompt_zero_compaction_adds_nothing(home: Path) -> None:
+    """Prompt 0's question is in the head, which a compaction never drops: no repeat is added."""
+    compact_profile(home)
+    app = FakeApp(script={"root": printing(10), "compact": [{"text": "SUMMARY."}]})
+
+    async def main() -> None:
+        async with Served(home, app) as s:
+            run_id = (await s.call("run.start", params(home, profile="compact-test")))["result"]["run_id"]
+            await sent(app, "run.finished", run_id)
+            await s.call("run.close", {"run_id": run_id})
+
+    run(main(), TIMEOUT)
+    assert app.sent("run.compacted")
+    assert not any(m["content"].startswith("[The follow-up") for r in roots(app) for m in r["messages"])
 
 
 # ---------------------------------------------------------------------------------------------- the wire
