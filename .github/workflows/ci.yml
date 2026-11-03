@@ -115,7 +115,7 @@ jobs:
         run: |
           info="$("$BIN" info)"
           echo "$info"
-          echo "$info" | bun -e 'const j = JSON.parse(await Bun.stdin.text()); if (j.engine.protocol !== 1 || j.app.version !== j.engine.version) { console.error("info mismatch"); process.exit(1); } console.log("info ok");'
+          echo "$info" | bun -e 'const j = JSON.parse(await Bun.stdin.text()); if (j.engine.protocol !== 2 || j.app.version !== j.engine.version) { console.error("info mismatch"); process.exit(1); } console.log("info ok");'
       - name: Smoke info without RLMH_ENGINE
         # The binary must not mistake this checkout for a source run.
         run: |

@@ -134,7 +134,7 @@ ls -d "$RLMH_HOME"/python/cpython-3.12.* >/dev/null || fail "no $RLMH_HOME/pytho
 "$npm_bin" info </dev/null | node -e '
   let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
     const j = JSON.parse(s);
-    if (j.engine.protocol !== 1 || j.engine.version !== process.argv[1] || !/^3\.12\./.test(j.engine.python)) { console.error(s); process.exit(1); }
+    if (j.engine.protocol !== 2 || j.engine.version !== process.argv[1] || !/^3\.12\./.test(j.engine.python)) { console.error(s); process.exit(1); }
     console.log("info ok");
   });' "$version"
 
