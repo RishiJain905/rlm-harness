@@ -39,7 +39,7 @@ JSON_RETRY = ("\n\nYour previous reply was:\n{reply}\n\nIt was not valid: {error
               "that matches this JSON Schema, and nothing else:\n{schema}")
 JSON_RETRY_EMPTY = ("\n\nYour previous attempt ran out of room before it answered. Do not think at length: reply now "
                     "with only a JSON value that matches this JSON Schema, and nothing else:\n{schema}")
-THINKING = ("off", "low", "medium", "high")
+THINKING = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
 _SCALARS = {str: "string", int: "integer", float: "number", bool: "boolean", type(None): "null", list: "array",
             dict: "object"}
@@ -319,7 +319,8 @@ def namespace(base: dict, *, request, limits: dict, async_line, repl_line, cell_
         """Ask a language model one question. With over=segment, the segment's text is sent first, cached. With
         schema= (str, int, list[str], {"key": type}, ["yes", "no"], or a JSON Schema dict) the reply is parsed as JSON
         and checked, asked once more if it does not match, and returned as a Python value; ValueError if it still fails.
-        thinking= ("off", "low", "medium", "high") sets how much the sub-call may think; None keeps the run's setting."""
+        thinking= ("off", "minimal", "low", "medium", "high", "xhigh", "max") sets how much the sub-call may think (a level
+        the model lacks becomes its nearest one); None keeps the run's setting."""
         thinking = _thinking(thinking)
         if schema is None:
             return base_llm(prompt, over=over, thinking=thinking)

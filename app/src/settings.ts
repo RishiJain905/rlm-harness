@@ -5,6 +5,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { PROVIDER_IDS } from "./gateway/providers.ts";
 import { settingsPath } from "./paths.ts";
+import { THINKING_LEVELS } from "./protocol.ts";
 
 export type SettingType = "string" | "enum" | "int" | "bool";
 export type SettingValue = string | number | boolean;
@@ -17,7 +18,7 @@ export interface SettingDef {
   doc: string;
 }
 
-const THINKING = ["default", "off", "low", "medium", "high"] as const;
+const THINKING = ["default", ...THINKING_LEVELS] as const;
 const PERMISSION_MODES = ["default", "accept-edits", "bypass"] as const;
 const CALL_FORMATS = ["auto", "fenced", "native"] as const;
 const LOCAL_BASE_URL = "http://localhost:8000/v1";

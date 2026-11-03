@@ -82,7 +82,7 @@ describe("slash commands", () => {
     await m.waitForText("scripted   window 1M");
     await m.press(KEYS.enter);
     await m.waitForText("Thinking for root fake/scripted");
-    await downs(m, 2); // default, off, low
+    await downs(m, 3); // default, off, minimal, low (the fake takes every level, D-250)
     await m.press(KEYS.enter);
     await m.waitForText("root is fake/scripted, thinking low.");
     let saved = loadSettings(app.deps.home);

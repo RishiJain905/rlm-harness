@@ -138,7 +138,7 @@ const nullable = (spec: Spec): Spec => ({ nullable: spec });
 const listOf = (spec: Spec): Spec => ({ list: spec });
 const oneOf = (...values: string[]): Spec => ({ oneOf: values });
 
-const THINKING = oneOf("off", "low", "medium", "high");
+const THINKING = oneOf("off", "minimal", "low", "medium", "high", "xhigh", "max");
 const FINISH_REASON = oneOf("stop", "length", "tool_call", "content_filter", "other");
 const PERMISSION_MODE = oneOf("default", "accept-edits", "bypass");
 const CALL_FORMAT = oneOf("fenced", "native");
@@ -546,7 +546,7 @@ describe("protocol examples", () => {
     // guards the checker itself: a missing key, an extra key and a bad enum all fail
     expect(() => check({ provider: "p", model: "m" }, MODEL_REF, "ref")).toThrow(/missing thinking/);
     expect(() => check({ provider: "p", model: "m", thinking: null, x: 1 }, MODEL_REF, "ref")).toThrow(/unexpected x/);
-    expect(() => check({ provider: "p", model: "m", thinking: "max" }, MODEL_REF, "ref")).toThrow(/not one of/);
+    expect(() => check({ provider: "p", model: "m", thinking: "huge" }, MODEL_REF, "ref")).toThrow(/not one of/);
     expect(() => check({ role: "robot", content: "" }, "message", "m")).toThrow(/not a Message/);
   });
 

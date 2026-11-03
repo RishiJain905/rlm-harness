@@ -127,10 +127,10 @@ def test_user_profile(tmp_path: Path) -> None:
     assert mine.prompt_hash() != contract.TRAINING_HASH
     assert [(x.name, x.source) for x in p.list_profiles(tmp_path)][-1] == ("mine", "user")
 
-    user_profile(tmp_path, "thinks", VALID + '[read]\nsubcall_thinking = "high"\nmax_subcalls = 0\n'
+    user_profile(tmp_path, "thinks", VALID + '[read]\nsubcall_thinking = "max"\nmax_subcalls = 0\n'
                  '[repo]\nsubcall_thinking = "off"\npace_nudge = true\n[root]\ntemperature = 0\n')
     thinks = p.load_profile("thinks", tmp_path)
-    assert (thinks.read.limits.subcall_thinking, thinks.read.limits.max_subcalls) == ("high", 0)
+    assert (thinks.read.limits.subcall_thinking, thinks.read.limits.max_subcalls) == ("max", 0)
     assert (thinks.repo.limits.subcall_thinking, thinks.repo.pace_nudge, thinks.root_temperature) == (None, True, 0.0)
     assert [x.name for x in p.list_profiles(tmp_path)] == ["default", "training-v4", "mine", "thinks"]
 

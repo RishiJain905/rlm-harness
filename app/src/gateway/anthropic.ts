@@ -30,7 +30,8 @@ const FAMILIES: [readonly string[], Family][] = [
 ];
 const CANT_TURN_OFF = /^(fable|mythos)-/;
 const OTHER: Family = { on: "adaptive", off: null, temperature: "off-only" };
-const BUDGET_SHARE: Record<Exclude<Thinking, "off">, number> = { low: 0.25, medium: 0.5, high: 0.75 };
+// budget models take low, medium and high (thinking.ts fits the rest); the others only follow a shape fallback
+const BUDGET_SHARE: Record<Exclude<Thinking, "off">, number> = { minimal: 0.25, low: 0.25, medium: 0.5, high: 0.75, xhigh: 0.75, max: 0.75 };
 const MIN_BUDGET = 1024;
 
 export function anthropicFamily(model: string): Family {

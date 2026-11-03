@@ -21,7 +21,9 @@ export type ErrorCodeName = keyof typeof ErrorCode;
 
 // -- §4 shared types --
 
-export type Thinking = "off" | "low" | "medium" | "high";
+/** Every thinking level, least first (D-250). A model takes only some of them; the gateway sends the nearest it has. */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type Thinking = (typeof THINKING_LEVELS)[number];
 
 /** `thinking: null` means the profile's default (D-08). */
 export interface ModelRef {

@@ -7,7 +7,8 @@ import { anthropicFamily, buildAnthropicRequest, thinkingBudget } from "../../sr
 import { RETRY } from "../../src/gateway/gateway.ts";
 import { buildOpenAIRequest } from "../../src/gateway/openai.ts";
 import { provider } from "../../src/gateway/providers.ts";
-import type { Message, ModelCompleteParams, Thinking, ToolDef } from "../../src/protocol.ts";
+import { fitThinking, thinkingRule } from "../../src/gateway/thinking.ts";
+import { THINKING_LEVELS, type Message, type ModelCompleteParams, type Thinking, type ToolDef } from "../../src/protocol.ts";
 import { anthropicStream, cutMidStream, httpError, openaiStream, startFakeProvider, type FakeServer } from "../fakes/http.ts";
 import { caught, params, recordSleeps, ref, rig, type Rig } from "./helpers.ts";
 
@@ -140,7 +141,7 @@ describe("streaming", () => {
 });
 
 describe("mapping tables", () => {
-  const LEVELS: Thinking[] = ["off", "low", "medium", "high"];
+  const LEVELS: Thinking[] = [...THINKING_LEVELS];
   const ROWS: { id: string; model: string; path: string; host: string; maxField: string; temperature: boolean; cache: Record<string, unknown> }[] = [
     { id: "openai", model: "gpt-4.1", path: "/v1/chat/completions", host: "api.openai.com", maxField: "max_completion_tokens", temperature: true, cache: { prompt_cache_key: "r_0123456789ab" } },
     { id: "openai", model: "gpt-5", path: "/v1/chat/completions", host: "api.openai.com", maxField: "max_completion_tokens", temperature: false, cache: { prompt_cache_key: "r_0123456789ab" } },
@@ -172,8 +173,9 @@ describe("mapping tables", () => {
     test(`${row.id} ${row.model}`, async () => {
       r = await rig({ server, keys: ["openai", "deepseek", "openrouter", "gemini"], settings: { "providers.custom.base_url": "http://custom.example:9000/v2" } });
       server.script(() => openaiStream({ text: "ok" }));
-      for (const level of LEVELS) {
-        await r.gateway.complete(params(ref(row.id, row.model), { thinking: level, max_tokens: 777, temperature: 0.3 }));
+      for (const asked of LEVELS) {
+        await r.gateway.complete(params(ref(row.id, row.model), { thinking: asked, max_tokens: 777, temperature: 0.3 }));
+        const level = fitThinking(asked, thinkingRule(row.id, row.model, r.catalog.get(row.id, row.model))); // D-250
         const req = server.requests[server.requests.length - 1]!;
         expect(req.path).toBe(row.path);
         expect(req.headers["x-orig-host"]).toBe(row.host);

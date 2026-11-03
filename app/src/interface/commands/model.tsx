@@ -7,6 +7,7 @@ import { useInput } from "ink";
 import { useEffect, useState } from "react";
 import type { ModelInfo } from "../../gateway/catalog.ts";
 import { PROVIDERS } from "../../gateway/providers.ts";
+import { thinkingRule } from "../../gateway/thinking.ts";
 import { SettingsError } from "../../settings.ts";
 import { formatTokens } from "../format.ts";
 import { applySetting, isActive } from "../store.ts";
@@ -15,7 +16,6 @@ import { fit, Frame, listLines } from "./common.tsx";
 import type { ScreenProps } from "./index.ts";
 
 type Role = "root" | "sub";
-const THINKING = ["default", "off", "low", "medium", "high"] as const;
 const SAME = "same as root";
 
 type Step =
@@ -58,7 +58,9 @@ export function ModelScreen(props: ScreenProps) {
     }
   };
 
-  const count = step.step === "roles" ? 2 : step.step === "provider" ? providers.length : step.step === "model" ? models.length : THINKING.length;
+  // the levels this model takes (D-250); "default" leaves it to the profile
+  const thinking = step.step === "thinking" ? ["default", "off", ...thinkingRule(...splitRef(step.ref), deps.catalog.get(...splitRef(step.ref))).levels] : [];
+  const count = step.step === "roles" ? 2 : step.step === "provider" ? providers.length : step.step === "model" ? models.length : thinking.length;
   useInput(
     (input, key) => {
       if (key.escape) {
@@ -81,13 +83,13 @@ export function ModelScreen(props: ScreenProps) {
           const m = models[sel];
           if (m) setStep({ step: "thinking", role: step.role, ref: `${step.provider}/${m.id}` });
         } else {
-          const known = deps.catalog.get(...(splitRef(step.ref) as [string, string]));
+          const known = deps.catalog.get(...splitRef(step.ref));
           save(
             [
               [`${step.role}.model`, step.ref],
-              [`${step.role}.thinking`, THINKING[sel]!],
+              [`${step.role}.thinking`, thinking[sel]!],
             ],
-            `${step.role} is ${step.ref}, thinking ${THINKING[sel]}.${known ? "" : " Window and prices unknown."}`,
+            `${step.role} is ${step.ref}, thinking ${thinking[sel]}.${known ? "" : " Window and prices unknown."}`,
           );
         }
         return;
@@ -122,7 +124,7 @@ export function ModelScreen(props: ScreenProps) {
     body.push(...listLines(rows, sel, room));
   } else {
     body.push([span(`Thinking for ${step.role} ${step.ref}`, { dim: true })]);
-    body.push(...listLines(THINKING.map((t) => [span(t)]), sel, room));
+    body.push(...listLines(thinking.map((t) => [span(t)]), sel, room));
   }
   if (message) body.push([], [span(fit(message.text, w, theme), { color: paint(theme, message.error ? "red" : "green") })]);
   return <Frame title="/model" hint="Up/Down  Enter chooses  Esc goes back" body={body} width={w} height={props.height} />;

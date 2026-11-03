@@ -33,7 +33,7 @@ from .permissions import KINDS, Permissions
 from .profiles import Profile
 
 OPS = ("llm", "llm_batch", "fetch", "approve", "rlm")
-THINKING = ("off", "low", "medium", "high")  # a request's own thinking level for its sub-calls (D-164)
+THINKING = ("off", "minimal", "low", "medium", "high", "xhigh", "max")  # a request's own thinking level for its sub-calls (D-164, D-250)
 INFRA_REPLY = "sub-call failed for an infrastructure reason; this episode will be discarded"
 PREFIX_SEPARATOR = "\n\n"  # cacheapi.SEPARATOR: between a sub-call's stable prefix and its prompt (D-119)
 

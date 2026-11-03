@@ -139,7 +139,8 @@ describe("settings", () => {
   test("set_setting", () => {
     const s = defaultSettings();
     const before = structuredClone(s);
-    for (const key of ["root.thinking", "sub.thinking"]) expectSettingsError(() => setSetting(s, key, "max"), key, "default, off, low, medium, high");
+    for (const key of ["root.thinking", "sub.thinking"]) expectSettingsError(() => setSetting(s, key, "huge"), key, "default, off, minimal, low, medium, high, xhigh, max");
+    for (const level of ["minimal", "xhigh", "max"]) expect(getSetting(setSetting(structuredClone(s), "root.thinking", level), "root.thinking")).toBe(level); // D-250
     expectSettingsError(() => setSetting(s, "permissions.mode", "yolo"), "permissions.mode", "default, accept-edits, bypass");
     expectSettingsError(() => setSetting(s, "call_format", "json"), "call_format", "auto, fenced, native");
     expect(getSetting(setSetting(s, "display.verbose", "true"), "display.verbose")).toBe(true);

@@ -183,7 +183,8 @@ def test_thinking_and_empty_replies(home: Path) -> None:
         "try:\n    llm('Blank one', schema=int, thinking='high')\nexcept ValueError as e:\n    print('ValueError')",
         "print(llm_batch(['Blank two', 'Give a number'], schema=int, thinking='medium'))",
         "print(llm('Give a number', thinking='low'))",
-        "try:\n    llm('x', thinking='max')\nexcept ValueError as e:\n    print(e)",
+        "try:\n    llm('x', thinking='huge')\nexcept ValueError as e:\n    print(e)",
+        "print(llm('Give a number', thinking='xhigh'), llm('Give a number', thinking='max'))",
         "submit(1)",
     ]
     app = FakeApp(script={"root": [fenced(c) for c in cells],
@@ -193,13 +194,13 @@ def test_thinking_and_empty_replies(home: Path) -> None:
     assert out[0] == "ValueError\n"
     assert out[1].endswith("[None, 41]\n")
     assert out[2] == "41\n"
-    assert out[3].startswith("thinking must be one of 'off', 'low', 'medium', 'high'")
+    assert out[3].startswith("thinking must be one of 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'")
     subs = [(r["messages"][-1]["content"], r["thinking"]) for r in app.requests if r["role"] == "sub"]
     blank = [(p, t) for p, t in subs if p.startswith("Blank one")]
     assert [t for _, t in blank] == ["high", "off"]  # the retry of an empty reply does not think (D-164)
     assert "ran out of room" in blank[1][0] and "Your previous reply was" not in blank[1][0]
     assert [t for p, t in subs if p.startswith("Blank two")] == ["medium", "off"]
-    assert [t for p, t in subs if p.startswith("Give a number")] == ["medium", "low"]
+    assert [t for p, t in subs if p.startswith("Give a number")] == ["medium", "low", "xhigh", "max"]  # D-250
 
 
 def test_training_v4_has_none_of_it(home: Path) -> None:

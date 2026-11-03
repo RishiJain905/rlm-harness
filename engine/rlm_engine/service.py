@@ -27,7 +27,7 @@ from .worker.manager import Worker
 
 MAX_ROUNDTRIP = 1000
 CANCEL_WAIT_S = 10
-THINKING = (None, "off", "low", "medium", "high")
+THINKING = (None, "off", "minimal", "low", "medium", "high", "xhigh", "max")  # D-250: the gateway fits a level to the model
 _OPTIONAL_STR = ("question", "task", "repo_path", "test_hint", "language", "context", "tag", "batch", "log_dir")
 _REPO_OVERRIDES = ("test_hint", "language", "n_files", "context")
 

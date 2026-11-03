@@ -31,6 +31,7 @@ import { KeyReadError, last4Of, type KeyStore, type ResolvedKey } from "./keys.t
 import { buildOpenAIRequest, DROPPABLE_FIELDS, streamOpenAI } from "./openai.ts";
 import { openRouterEndpoint, provider, providerName, type ProviderDef } from "./providers.ts";
 import { AttemptError, causeText, formatBytes, type Failure, type Replay, type StreamHooks, type StreamResult } from "./stream.ts";
+import { fitThinking, levelsFromEfforts, thinkingRule } from "./thinking.ts";
 import { billedCost, emptyUsage, replyChars, requestChars, RunTotals, toUsage } from "./usage.ts";
 
 export type AppEvents = {
@@ -458,13 +459,17 @@ export class Gateway {
   }
 
   private buildBody(c: Call, ticket: BatchTicket | null): Record<string, unknown> {
-    const { p, def, run } = c;
+    let { p } = c;
+    const { def, run } = c;
     const modelKey = `${def.id}\0${p.model.model}`;
     const dropped = this.dropped.get(modelKey) ?? new Set<string>();
     const replay = (m: Extract<Message, { role: "assistant" }>) => (m.tool_call ? run.replay.get(replayKey(m.content, m.tool_call.id, p)) : undefined);
     // a child's turns grow like the root's, so each turn marks the conversation so far for the next (D-160)
     const markers = p.role === "root" || p.child !== undefined || (ticket?.marker ?? false);
     const prefixMark = prefixWorthMarking(p, c.info?.cache_min_tokens ?? null);
+    // the level the model takes nearest to the one asked for (D-250); a sub-call's thinking= can name any level
+    const thinking = fitThinking(p.thinking, thinkingRule(def.id, p.model.model, c.info));
+    if (thinking !== p.thinking) p = { ...p, thinking };
     if (def.client === "anthropic") return buildAnthropicRequest(p, { shape: this.shapes.get(modelKey), dropped, markers, prefixMark, replay });
     return buildOpenAIRequest(p, { provider: def, info: c.info, dropped, replay, markers, prefixMark, endpoint: this.endpointFor(c) });
   }
@@ -900,6 +905,9 @@ function fetchedModel(providerId: string, id: string, row: Record<string, any>, 
     m.tool_call = row.supported_parameters.includes("tools");
     m.reasoning = row.supported_parameters.includes("reasoning");
   }
+  const levels = levelsFromEfforts(row.reasoning?.supported_efforts);
+  if (levels) m.thinking_levels = levels;
+  else delete m.thinking_levels;
   return m;
 }
 

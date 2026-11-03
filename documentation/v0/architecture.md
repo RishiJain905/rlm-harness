@@ -93,6 +93,7 @@ rlm-harness/
       gateway/cache.ts               5
       gateway/usage.ts               5
       gateway/stream.ts              5 ◆     what openai.ts and anthropic.ts share with gateway.ts: hooks, results, AttemptError
+      gateway/thinking.ts            D-250   the thinking levels each model takes, and the level sent for one it lacks
     catalog/models.json              5
     catalog/ATTRIBUTION.md           5 ◆
     scripts/build-catalog.ts         5 ◆     builds models.json from OMP's catalog
@@ -158,7 +159,7 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 
 | Type | Shape |
 |---|---|
-| **ModelRef** | `{provider: string, model: string, thinking: "off"\|"low"\|"medium"\|"high"\|null}`. `null` means the profile's default (D-08). The engine never looks inside it, except to record it |
+| **ModelRef** | `{provider: string, model: string, thinking: "off"\|"minimal"\|"low"\|"medium"\|"high"\|"xhigh"\|"max"\|null}` (D-250). `null` means the profile's default (D-08). The engine never looks inside it, except to record it |
 | **Message** | `{role:"system", content}` · `{role:"user", content}` · `{role:"assistant", content, tool_call?: ToolCall}` · `{role:"tool", tool_call_id, content}`. `content` is always a string, and an assistant message carries at most one tool call (D-04) |
 | **ToolCall** | `{id: string, name: string, arguments: object}`. For the `python` tool, `arguments` is `{code: string}` |
 | **ToolDef** | `{name, description, parameters}`, where `parameters` is a JSON Schema. v0 has exactly one: `PYTHON_TOOL` (§6.2) |
@@ -206,7 +207,7 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 
 | Method | Params | Result |
 |---|---|---|
-| `model.complete` | `{run_id, role: "root"\|"sub", model: ModelRef, messages: Message[], tools: ToolDef[], max_tokens, temperature, thinking: "off"\|"low"\|"medium"\|"high", turn}`, and for sub-calls also `{subcall_id: int, origin: Origin, batch: Batch}`; a compaction's summary call adds `purpose: "compact"` (protocol 2, v1 step 3) | `{text, tool_call: ToolCall\|null, reasoning: string\|null, usage: Usage, finish_reason: "stop"\|"length"\|"tool_call"\|"content_filter"\|"other", served_model: string, seconds}`, or error -32001 |
+| `model.complete` | `{run_id, role: "root"\|"sub", model: ModelRef, messages: Message[], tools: ToolDef[], max_tokens, temperature, thinking: "off"\|"minimal"\|"low"\|"medium"\|"high"\|"xhigh"\|"max", turn}`, and for sub-calls also `{subcall_id: int, origin: Origin, batch: Batch}`; a compaction's summary call adds `purpose: "compact"` (protocol 2, v1 step 3) | `{text, tool_call: ToolCall\|null, reasoning: string\|null, usage: Usage, finish_reason: "stop"\|"length"\|"tool_call"\|"content_filter"\|"other", served_model: string, seconds}`, or error -32001 |
 | `approval.request` | `{run_id, kind: "write"\|"shell"\|"network", detail, turn, inside_workspace}` | `{allow: bool, remember_for_run: bool}` |
 
 - **`thinking` is resolved by the engine:** the ref's value, else the profile's `subcall_thinking` for sub-calls, else `"off"` (D-08).
@@ -459,7 +460,8 @@ export const KEY_HOOKS: { restrict(file: string): Promise<void> };   // makes th
 // app/src/gateway/catalog.ts
 export interface ModelInfo { provider: string; id: string; name: string; context_window: number; max_output: number;
   price: { input: number; output: number; cache_read: number; cache_write: number };  // USD per 1M tokens
-  tool_call: boolean; reasoning: boolean; cache_min_tokens: number | null }
+  tool_call: boolean; reasoning: boolean; cache_min_tokens: number | null;
+  thinking_levels?: ("minimal" | "low" | "medium" | "high" | "xhigh" | "max")[] }  // OpenRouter's own list, kept by a refresh (D-250)
 export class Catalog { constructor(home: string); models(provider?: string): ModelInfo[]; get(provider: string, id: string): ModelInfo | undefined; merge(provider: string, fetched: ModelInfo[]): void }
 // app/src/gateway/providers.ts
 export interface ProviderDef { id: string; name: string; client: "openai" | "anthropic" | "fake"; baseUrl: string | null; envVar: string | null;
@@ -779,7 +781,7 @@ export async function ensureEngine(o: Omit<SetupOptions, "yes">): Promise<void>;
 | Key | Type | Default | |
 |---|---|---|---|
 | `root.model` | string `provider/model` | `""` | `""` means none picked yet; `run` then needs `--root` |
-| `root.thinking` | `default\|off\|low\|medium\|high` | `default` | `default` sends `thinking: null` |
+| `root.thinking` | `default\|off\|minimal\|low\|medium\|high\|xhigh\|max` | `default` | `default` sends `thinking: null`; the gateway sends the nearest level the model takes, and `/model` offers only those (D-250) |
 | `sub.model`, `sub.thinking` | as above | `""`, `default` | an empty `sub.model` uses `root.model` |
 | `profile` | string | `default` | |
 | `permissions.mode` | `default\|accept-edits\|bypass` | `accept-edits` (4b, S-27) | |

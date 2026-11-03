@@ -137,7 +137,7 @@ def enum(*values: str) -> tuple:
 
 
 MESSAGE = ("message",)
-THINKING = enum("off", "low", "medium", "high")
+THINKING = enum("off", "minimal", "low", "medium", "high", "xhigh", "max")
 FINISH_REASON = enum("stop", "length", "tool_call", "content_filter", "other")
 PERMISSION_MODE = enum("default", "accept-edits", "bypass")
 CALL_FORMAT = enum("fenced", "native")
