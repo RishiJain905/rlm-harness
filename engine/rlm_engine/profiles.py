@@ -43,6 +43,7 @@ class UnknownProfile(ProfileError):
 class ModeSettings:
     limits: contract.Limits
     pace_nudge: bool
+    submit_check: float = 0.0  # [read] only: hold a first submit() resting on less of `context` than this (D-251)
 
 
 @dataclass(frozen=True)
@@ -275,17 +276,22 @@ def _temperature(name: str, key: str, data: dict) -> float:
 def _mode(name: str, key: str, data: dict, base: contract.Limits) -> ModeSettings:
     changes: dict = {}
     pace_nudge = False
+    submit_check = 0.0
     for field, value in _table(name, key, data).items():
         where = f"profile {name!r}: [{key}] {field}"
         if field == "pace_nudge" and key == "repo":
             if not isinstance(value, bool):
                 raise ProfileError(f"{where} must be true or false")
             pace_nudge = value
+        elif field == "submit_check" and key == "read":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+                raise ProfileError(f"{where} must be a number from 0 (off) to 1")
+            submit_check = float(value)
         elif field in _LIMIT_FIELDS:
             changes[field] = _limit(where, field, value)
         else:
             raise ProfileError(f"profile {name!r}: unknown key {field!r} in [{key}]")
-    return ModeSettings(dataclasses.replace(base, **changes), pace_nudge)
+    return ModeSettings(dataclasses.replace(base, **changes), pace_nudge, submit_check)
 
 
 def _rlm(name: str, data: dict) -> RlmSettings:

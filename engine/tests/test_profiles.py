@@ -80,7 +80,8 @@ def test_default_guidance_text() -> None:
     raw = (p.BUILTIN_DIR / "default" / "guidance.md").read_bytes()
     assert b"\r\n" not in raw and not raw.startswith(b"\xef\xbb\xbf") and raw.endswith(b"\n")
     text = raw.decode("utf-8")
-    assert len(text.splitlines()) <= 24  # D-162: the delegation notes doubled it
+    assert len(text.splitlines()) <= 30  # D-162: the delegation notes doubled it; D-251 put the reading recipe first
+    assert text.startswith("Reading tasks") and "scan(" in text  # D-251
     assert "fetch(url) -> str" in text and "200,000" in text and "{shell}" in text
     for name in ("ask_files(", "schema=", "llm_async", "gather(", "rlm(", "outline(", "check(", "review("):
         assert name in text, name
@@ -133,6 +134,14 @@ def test_user_profile(tmp_path: Path) -> None:
     assert (thinks.read.limits.subcall_thinking, thinks.read.limits.max_subcalls) == ("max", 0)
     assert (thinks.repo.limits.subcall_thinking, thinks.repo.pace_nudge, thinks.root_temperature) == (None, True, 0.0)
     assert [x.name for x in p.list_profiles(tmp_path)] == ["default", "training-v4", "mine", "thinks"]
+    assert (mine.read.submit_check, thinks.read.submit_check) == (0.0, 0.0)  # off unless a profile sets it (D-251)
+
+
+def test_submit_check_setting(tmp_path: Path) -> None:
+    assert builtin("default", tmp_path).read.submit_check == 0.5  # D-251
+    assert builtin("training-v4", tmp_path).read.submit_check == 0.0
+    user_profile(tmp_path, "checks", VALID + "[read]\nsubmit_check = 1\n")
+    assert p.load_profile("checks", tmp_path).read.submit_check == 1.0
 
 
 @pytest.mark.parametrize(
@@ -147,6 +156,9 @@ def test_user_profile(tmp_path: Path) -> None:
         ('contract = "v3"\n', {}, "contract"),
         ("[read]\nmax_turns = 3\n", {}, "contract"),
         (VALID + "[read]\npace_nudge = true\n", {}, "pace_nudge"),
+        (VALID + "[repo]\nsubmit_check = 0.5\n", {}, "submit_check"),  # reading tasks only (D-251)
+        (VALID + "[read]\nsubmit_check = 1.5\n", {}, "submit_check"),
+        (VALID + "[read]\nsubmit_check = true\n", {}, "submit_check"),
         (VALID + '[repo]\nsubcall_oversize = "cut"\n', {}, "subcall_oversize"),
         (VALID + '[repo]\nsubcall_thinking = "none"\n', {}, "subcall_thinking"),
         (VALID + "[read]\ncpus = 0\n", {}, "cpus"),
@@ -267,7 +279,7 @@ def test_contract_info(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------------------------- [compaction] (v1 step 3)
 
 COMPACTION = "[compaction]\nwindow = 262144\nkeep_ratio = 0.16\nreserve = 65536\nsummary_max_tokens = 8192\n"
-DEFAULT_PROMPT_HASH = "b01b49ac2baa38f81177e7b5a51f2bb848e9e3137f6ea1b28a19affbfa2091f7"  # v0.2.0's, before the table
+DEFAULT_PROMPT_HASH = "0345b73d048cf7d4c841c3be40d5285af90ed8a9073f2f0fc67684cdb8520091"  # D-251's guidance (v0.2.0's was b01b49ac…)
 TRAINING_PROFILE_HASH = "b5ffa4b69d4c260b53e740a24919f37c7c9254032b6e9e90edb016da1ad8fa59"
 
 

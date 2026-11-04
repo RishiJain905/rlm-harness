@@ -544,7 +544,7 @@ def assistant_message(fmt: str, result: dict) -> dict              # Message; co
                                                                    # gateway's D-33 replay is keyed on it); never reasoning
 def observation_message(assistant: dict, text: str) -> dict        # tool message if assistant has tool_call, else user
 # engine/rlm_engine/profiles.py
-@dataclass(frozen=True) class ModeSettings: limits: contract.Limits; pace_nudge: bool
+@dataclass(frozen=True) class ModeSettings: limits: contract.Limits; pace_nudge: bool; submit_check: float = 0.0  # D-251
 @dataclass(frozen=True) class Profile:
     name: str; source: str; path: Path; guidance: str; root_temperature: float; sub_temperature: float
     read: ModeSettings; repo: ModeSettings
@@ -559,7 +559,7 @@ def list_profiles(home: Path) -> list[Profile]
 def load_profile(name: str, home: Path) -> Profile   # built-ins win over <home>/profiles of the same name
 ```
 
-- **profile.toml keys.** It takes the keys in [../legacy/v0-design.md § Profiles](../legacy/v0-design.md#profiles), plus optional `subcall_thinking` in either mode table and `pace_nudge` in `[repo]`. Each mode table starts from `READ_LIMITS_V4` or `EDIT_LIMITS_V4` and replaces only the keys it lists, so the hash still covers `cpus`, `memory_mb`, `pids` and `grader_timeout_s` (D-09). An unknown key is an error.
+- **profile.toml keys.** It takes the keys in [../legacy/v0-design.md § Profiles](../legacy/v0-design.md#profiles), plus optional `subcall_thinking` in either mode table, `pace_nudge` in `[repo]` and `submit_check` in `[read]` (a share from 0, off, to 1; D-251). Each mode table starts from `READ_LIMITS_V4` or `EDIT_LIMITS_V4` and replaces only the keys it lists, so the hash still covers `cpus`, `memory_mb`, `pids` and `grader_timeout_s` (D-09). An unknown key is an error.
 - **training-v4.** `[repo]` has `subcall_thinking = "low"` and `pace_nudge = true`.
 - **`prompt_hash()`** for `training-v4` equals `TRAINING_HASH`. It leaves `{shell}` unfilled, so it is the same on every machine. `profile_hash()` covers the LF-normalised `profile.toml`, a NUL byte and the guidance file.
 - **`engine.info`.** `service.contract_info(home)` gives its four contract fields and `Engine.info()` merges them in. A user profile that fails to load is left out with a warning on stderr (D-61).
@@ -642,6 +642,10 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
 # engine/rlm_engine/followup.py (v1 step 4): SUBMITTED_NOTE, UNANSWERED_NOTE, FOLLOW_UP, WHERE, KEPT_FOLLOW_UP (pinned texts)
 def kept_message(text: str) -> dict   # D-248: a follow-up's question again, after a compaction dropped it
 def follow_up_messages(last: dict, *, submitted: bool, text: str, mode: str, turns_left: int, subcalls_left: int) -> list[dict]
+# engine/rlm_engine/submitcheck.py (D-251): MIN_CONTEXT_CHARS = 20_000, HELD (the pinned note)
+def should_hold(threshold: float, *, total: int, seen: int, sent: int, turns_left: int, subcalls_left: int, segment_chars: int) -> bool
+def share(*, total: int, seen: int, sent: int) -> float   # (printed + sent to sub-calls) / len(context), at most 1
+def note(*, total: int, seen: int, sent: int, segment_chars: int) -> str
 # engine/rlm_engine/runlog.py
 FORMAT_VERSION = 2                             # v1 step 3 (v1 architecture §3.4); /runs reads 1 and 2
 RECORD_KEYS: tuple[str, ...]                  # the top-level keys of the record below, in order

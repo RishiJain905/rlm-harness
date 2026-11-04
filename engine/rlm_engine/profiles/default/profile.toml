@@ -29,6 +29,7 @@ cell_timeout_s = 120
 subcall_max_chars = 60000
 subcall_max_tokens = 16384
 subcall_oversize = "error"
+submit_check = 0.5            # hold a first submit() resting on under half of `context`, once (D-251)
 
 [repo]                        # contract.EDIT_LIMITS_V4 with more turns and output tokens (D-152)
 max_turns = 150

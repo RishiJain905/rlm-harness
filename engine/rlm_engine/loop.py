@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import PROTOCOL_VERSION, __version__, callformat, compaction, contract, followup, inputs, workspace
+from . import PROTOCOL_VERSION, __version__, callformat, compaction, contract, followup, inputs, submitcheck, workspace
 from .appport import AppPort
 from .bridge import Bridge
 from .child import Children
@@ -35,7 +35,7 @@ from .errors import InfraError, ModelError
 from .permissions import Permissions
 from .profiles import Profile
 from .runlog import FORMAT_VERSION, RunLog
-from .worker.manager import CellResult, Worker
+from .worker.manager import CellResult, Worker, segment_chars
 
 USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens",
               "cost_usd")
@@ -187,6 +187,8 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
 
         last_usage: dict | None = None  # the latest reply's usage, for compaction.estimate
         chars_since = 0  # characters appended since that reply
+        check = 0.0 if repo_mode else mode_settings.submit_check  # D-251
+        seen = 0  # characters the REPL has shown the root in this run (the submit check)
         while True:
             # one prompt: its own turns, usage, answer and budgets (D-199); the REPL and the messages go on
             bridge.start_prompt()
@@ -206,6 +208,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
             # question is in the head
             question = (follow[-1], text) if prompt else None
             edited = False  # a repo run has changed a file in its workspace during this prompt (pace_nudge)
+            held: tuple | None = None  # (answer, answer_valid) of a submit() the check held in this prompt (D-251)
             compacting = plan is not None  # off for the rest of the prompt after a compaction that barely helped
             for index in range(limits.max_turns):
                 turn = index + 1
@@ -251,6 +254,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
                 result = CellResult("", 0, contract.no_code_error()) if code is None else await worker.run_cell(code)
                 _cap_output(result, limits.output_max_chars)
                 edited = edited or bool(result.repo_changed)
+                seen += len(result.stdout or "") + len(result.error or "")
                 entry.update(stdout=result.stdout, stdout_chars=result.stdout_chars, error=result.error,
                              stderr=result.stderr, restarted=result.restarted, crash=result.crash,
                              repo_changed=result.repo_changed, compute_s=round(result.compute_s, 3),
@@ -260,14 +264,22 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
                     infra_kind, infra_error = _infra(bridge.infra_kind or "other", bridge.infra_error)
                     emit("run.cell", _cell_event(turn, code, result, None))
                     break
-                if result.submitted:
+                turns_left = limits.max_turns - index - 1
+                hold = None
+                if result.submitted and held is None and check:
+                    sizes = {"total": len(spec.context or ""), "seen": seen,
+                             "sent": sum(len(r.prompt) for r in bridge.records),
+                             "segment_chars": segment_chars(limits)}
+                    if submitcheck.should_hold(check, turns_left=turns_left, subcalls_left=bridge.subcalls_left(),
+                                               **sizes):
+                        held, hold = (result.answer, result.answer_valid), submitcheck.note(**sizes)
+                if result.submitted and hold is None:
                     submitted, answer, answer_valid = True, result.answer, result.answer_valid
                     emit("run.cell", _cell_event(turn, code, result, None))
                     break
-                turns_left = limits.max_turns - index - 1
                 if turns_left:
                     pace = (contract.pace_message(turns_left, limits.max_turns, edited)
-                            if repo_mode and mode_settings.pace_nudge else None)
+                            if repo_mode and mode_settings.pace_nudge else hold)
                     entry["observation"] = contract.observation(result.stdout, result.stdout_chars, result.error,
                                                                 turns_left, bridge.subcalls_left(),
                                                                 max_chars=limits.output_max_chars, pace=pace)
@@ -276,6 +288,8 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
                 emit("run.cell", _cell_event(turn, code, result, entry["observation"]))
                 emit("run.budget", {"turns_left": turns_left, "subcalls_left": bridge.subcalls_left()})
 
+            if held is not None and not submitted and infra_error is None:
+                submitted, (answer, answer_valid) = True, held  # out of turns after a hold: the held answer stands
             is_open = spec.conversation and inbox is not None and infra_error is None
             if children is not None and children.started and not is_open:
                 # rlm() children still running (rlm_async) end with the worker, before the diff, so none edits after

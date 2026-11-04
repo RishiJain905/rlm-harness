@@ -8,6 +8,8 @@ Delegation helpers for the `default` profile (D-157 to D-160). The worker instal
   that fails is asked again once, with the error.
 - `ask_files(files, question)` (D-157): one sub-call per file (or per part of a large file), the file's text sent as
   the cached prefix, so the root never reads or pastes the files itself.
+- `scan(question)` (D-251): one sub-call per segment of `context`, each copying out the passages that bear on the
+  question; returns them with their offsets in `context`, so a reading task can look at all of it in one line.
 - `llm_async`, `llm_batch_async`, `rlm_async` and `gather` (D-159): the same calls on a thread pool, returning
   futures, so a cell can start work and keep going.
 - `rlm(task, ...)` (D-160): a child run with a REPL of its own, run by the engine; returns what the child submits.
@@ -27,7 +29,7 @@ import threading
 import types
 import typing
 
-NAMES = ("ask_files", "llm_async", "llm_batch_async", "rlm", "rlm_async", "gather")
+NAMES = ("ask_files", "scan", "llm_async", "llm_batch_async", "rlm", "rlm_async", "gather")
 SEPARATOR = "\n\n"  # cacheapi.SEPARATOR: between a prefix and its prompt
 RLM_TOOLS = ("read", "edit", "none")
 ASYNC_WORKERS = 32
@@ -40,6 +42,13 @@ JSON_RETRY = ("\n\nYour previous reply was:\n{reply}\n\nIt was not valid: {error
 JSON_RETRY_EMPTY = ("\n\nYour previous attempt ran out of room before it answered. Do not think at length: reply now "
                     "with only a JSON value that matches this JSON Schema, and nothing else:\n{schema}")
 THINKING = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+# scan(): the prompt after each segment, and the default reply shape
+SCAN_PROMPT = ("Above is part {part} of {parts} of a longer text (characters {start:,} to {end:,}). The question about "
+               "the whole text is:\n{question}\n\nFrom this part only, copy out word for word every passage that helps "
+               "answer it: passages that answer it, that name or define something the question depends on, or that "
+               "contradict another reading. Give an empty list when nothing here bears on it. In note, say in one "
+               "sentence what the passages show.")
+SCAN_SCHEMA = {"quotes": list[str], "note": str}
 
 _SCALARS = {str: "string", int: "integer", float: "number", bool: "boolean", type(None): "null", list: "array",
             dict: "object"}
@@ -459,6 +468,45 @@ def namespace(base: dict, *, request, limits: dict, async_line, repl_line, cell_
                 out[name] = (out[name] or []) + [answer]
         return out
 
+    def scan(question: str, schema=None, thinking=None, size: int | None = None) -> list:
+        """Ask one question about every segment of `context` at once, one sub-call per segment (cached, as
+        llm_batch(..., over=segments()) is). Without schema=, each sub-call copies out the passages that bear on the
+        question, and scan returns the parts that had any: [{"part", "start", "end", "quotes": [{"text", "at"}],
+        "note"}], where "at" is the quote's offset in `context` (None when it is not word for word), so
+        context[at - 500:at + 500] shows it in place; a part whose reply failed is listed with "note": None. With
+        schema=, it returns every part as {"part", "start", "end", "answer"}, the answer parsed as llm_batch's is.
+        size= is segments()' size."""
+        if repo:
+            raise ValueError("scan() reads `context`, and a coding task has none; use ask_files or rlm instead")
+        parts = base["segments"](size)
+        question = str(question)
+        prompts = [SCAN_PROMPT.format(part=s.id + 1, parts=len(parts), start=s.start, end=s.end, question=question)
+                   for s in parts]
+        answers = llm_batch(prompts, over=parts, schema=SCAN_SCHEMA if schema is None else schema,
+                            thinking=thinking) if parts else []
+        if schema is not None:
+            return [{"part": s.id, "start": s.start, "end": s.end, "answer": a} for s, a in zip(parts, answers)]
+        found, failed, quotes, exact = [], 0, 0, 0
+        for s, a in zip(parts, answers):
+            if a is None:
+                failed += 1
+                found.append({"part": s.id, "start": s.start, "end": s.end, "quotes": [], "note": None})
+                continue
+            kept = []
+            for q in a["quotes"]:
+                q = q.strip()
+                if not q:
+                    continue
+                at = s.find(q)
+                kept.append({"text": q, "at": s.start + at if at >= 0 else None})
+            if kept:
+                quotes += len(kept)
+                exact += sum(k["at"] is not None for k in kept)
+                found.append({"part": s.id, "start": s.start, "end": s.end, "quotes": kept, "note": a["note"]})
+        print(f"scan: {len(parts)} parts, {len(found) - failed} with passages, {quotes} quotes ({exact} word for word)"
+              + (f", {failed} failed" if failed else ""))
+        return found
+
     def rlm_call(task: str, context: str | None = None, tools: str = "read", max_turns: int | None = None):
         """Start a child run on a task: it gets a REPL of its own, with `context` (and in a coding task the
         repository), its own turns and sub-calls, and returns what it submit()s. tools="read" can read the repository
@@ -510,5 +558,5 @@ def namespace(base: dict, *, request, limits: dict, async_line, repl_line, cell_
 
     rlm_call.__name__ = rlm_call.__qualname__ = "rlm"
     # rlm is there at every depth; the engine refuses a child's own rlm() past the profile's max_depth, saying why
-    return {"llm": llm, "llm_batch": llm_batch, "ask_files": ask_files, "llm_async": llm_async,
+    return {"llm": llm, "llm_batch": llm_batch, "ask_files": ask_files, "scan": scan, "llm_async": llm_async,
             "llm_batch_async": llm_batch_async, "gather": gather, "rlm": rlm_call, "rlm_async": rlm_async}

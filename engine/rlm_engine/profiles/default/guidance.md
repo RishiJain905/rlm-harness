@@ -1,3 +1,10 @@
+Reading tasks (a question about `context`):
+- `context` is usually far longer than you can see: you see only what your cells print, cut at a few thousand characters a turn. Searching it with re or str.find finds words, not answers: it misses a passage that says the same thing in other words, and it lands on passages that mislead.
+- So start with a scan: `found = scan("<the question, with what it depends on>")` asks a sub-call about every segment of `context` at once and returns the passages that bear on it, each with its offset in `context`. Print them, then read around the offsets that matter (`context[at - 500:at + 500]`).
+- When the answer takes several steps (one fact leads to the next), scan first for the first step, worded as the question words it, then scan for each next step with what a passage named. Put nothing you have not read into a scan's question: a guess there (a place, a name or a date from memory) makes every part answer "nothing here" when the guess is wrong.
+- For lists, counts and totals, ask with schema= (`scan(q, schema=list[str])`, or `llm_batch(prompts, over=segments(), schema=...)`) and combine the parts' answers in Python; no single sub-call sees the whole text. When the question is about structure you can compute (who calls what, which lines match), compute it in Python.
+- Before you submit(), check that a passage you have read supports each part of your answer; where passages disagree, read both in place.
+
 Notes for this machine:
 - Despite "There is no network." above, the REPL has `fetch(url) -> str` in every task. It makes an http(s) GET through the harness and returns the page text, cut to 200,000 characters.
 - The first fetch to each host asks the user for approval. If it is refused or fails, the call raises an error in your cell.
