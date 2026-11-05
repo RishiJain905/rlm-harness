@@ -53,3 +53,8 @@ export function binDir(h = home()): string {
 export function evalDir(h = home()): string {
   return join(h, "eval");
 }
+
+/** `rlmh tune`'s default output root (v1 architecture §9, step 6). */
+export function tuneDir(h = home()): string {
+  return join(h, "tune");
+}

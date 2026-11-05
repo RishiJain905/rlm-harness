@@ -1,4 +1,4 @@
-"""KV cache: appends to one message list (a follow-up's note and question only after its last message, followup.py) and edits it only at a compaction (compaction.py), which keeps the system prompt and first message byte for byte; the tool list is fixed for the run.
+"""KV cache: appends to one message list (a follow-up's note and question only after its last message, followup.py) and edits it only at a compaction (compaction.py), which keeps the system prompt and first message byte for byte; the tool list is fixed for the run. A gated nudge's hint (D-234) is appended to the end of one observation, like the pacing line; skills and scripts never enter the messages (the REPL prints a skill, and scripts are imported).
 
 One run: training's `run_episode` (rlm_rl/env.py at RLM commit 0b9af69) against any model through the app, with
 `_cap_output` copied. Left out, as the build plan lists: token ids, logprobs, rewards, detectors, the grader,
@@ -6,7 +6,9 @@ broken-reply redraws and format penalties. Added: the §5.3 events, the run-log 
 (callformat, 6b), the permission modes, a scratch folder that is removed when the run ends (D-12), and under a
 profile's agent_api the rlm() children (child.py, D-160), and under a profile's [compaction] the summary that replaces the
 middle of a conversation that outgrows its window (compaction.py, v1 step 3), and with `conversation` one run that
-answers several prompts on the same REPL, one record each (v1 step 4).
+answers several prompts on the same REPL, one record each (v1 step 4). Under agent_api a profile's `scripts/` is copied
+into the run's scratch folder for the worker to import (v1 step 6, D-233), and, behind the gate, its nudge rules add a
+hint to an observation (D-234).
 
 `run` never raises, except CancelledError, and that only after the record is written and `run.finished` sent.
 """
@@ -44,6 +46,7 @@ EVENT_LIMITS = ("max_turns", "max_subcalls", "root_max_tokens", "output_max_char
 # A cell that waits on an rlm() child waits for a whole run, so agent_api raises the worker's wall cap from 30 minutes
 # (manager.Worker's default) to three hours (D-160).
 AGENT_WALL_CAP_S = 3 * 3600.0
+SCRIPTS_DIR = "scripts"  # the run's copy of the profile's scripts/, in its scratch folder (D-233)
 RMTREE_TRIES = 5
 RMTREE_WAIT_S = 0.2
 
@@ -144,6 +147,8 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
                 if spec.profile.compaction else None)
         shell = workspace.find_shell()
         scratch.mkdir(parents=True, exist_ok=True)
+        if spec.profile.agent_api and spec.profile.scripts:  # a copy, so a run never changes the profile (D-233)
+            _copy_scripts(spec.profile, scratch / SCRIPTS_DIR)
         if repo_mode:
             base_tree = await _workspace_call(workspace.snapshot, spec.repo_path, scratch)
 
@@ -209,6 +214,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
             question = (follow[-1], text) if prompt else None
             edited = False  # a repo run has changed a file in its workspace during this prompt (pace_nudge)
             held: tuple | None = None  # (answer, answer_valid) of a submit() the check held in this prompt (D-251)
+            fired: set[int] = set()  # the nudge rules that have added their hint in this prompt (D-234)
             compacting = plan is not None  # off for the rest of the prompt after a compaction that barely helped
             for index in range(limits.max_turns):
                 turn = index + 1
@@ -283,6 +289,8 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
                     entry["observation"] = contract.observation(result.stdout, result.stdout_chars, result.error,
                                                                 turns_left, bridge.subcalls_left(),
                                                                 max_chars=limits.output_max_chars, pace=pace)
+                    for hint in nudge_hints(spec.profile.nudges, fired, turn, result):
+                        entry["observation"] += "\n" + hint
                     messages.append(callformat.observation_message(assistant, entry["observation"]))
                     chars_since += len(entry["observation"])
                 emit("run.cell", _cell_event(turn, code, result, entry["observation"]))
@@ -420,6 +428,34 @@ async def _compact(spec: RunSpec, app: AppPort, messages: list[dict], plan: comp
             "after_tokens": compaction.estimate(messages, None, 0), "dropped_messages": result.dropped,
             "kept_messages": result.kept, "summary_chars": len(result.summary),
             "seconds": round(time.monotonic() - started, 3)}
+
+
+def nudge_hints(rules: tuple, fired: set[int], turn: int, result: CellResult) -> list[str]:
+    """The hints of the nudge rules (D-234, gated) that match this cell and have not fired in this prompt, in the
+    rules' order; each is marked fired. `error`: the pattern, a plain substring, is in the cell's output or error;
+    `no_submit`: the prompt is at its `turns`-th turn or later without a submit; `long_output`: the cell printed more
+    than `chars` characters."""
+    hints = []
+    for index, rule in enumerate(rules):
+        if index in fired:
+            continue
+        if rule.when == "error":
+            hit = rule.pattern in (result.stdout or "") or rule.pattern in (result.error or "")
+        elif rule.when == "no_submit":
+            hit = turn >= rule.turns
+        else:
+            hit = result.stdout_chars > rule.chars
+        if hit:
+            fired.add(index)
+            hints.append(rule.hint)
+    return hints
+
+
+def _copy_scripts(profile: Profile, folder: Path) -> None:
+    """The profile's scripts as loaded (the bytes its hash covers), into the run's own folder."""
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, data in profile.script_files().items():
+        (folder / name).write_bytes(data)
 
 
 def _cap_output(result: CellResult, max_chars: int) -> None:

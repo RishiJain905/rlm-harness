@@ -8,7 +8,8 @@ It enforces the sub-call budget and the prompt-size rule, sends each sub-call to
 reports `run.subcall` and `run.budget` (§5.3), makes `fetch` GET requests for the worker (D-16), and hands `approve`
 requests to `Permissions`. Nothing the worker sends can set `infra_error`: only a failure on this side does. Under
 agent_api, `rlm` requests go to `children` (child.py, D-160), whose child runs use this bridge's budget: each child is
-one sub-call, and its own sub-calls come through `_llm` with `child` set.
+one sub-call, and its own sub-calls come through `_llm` with `child` set. Behind the gate (D-234), an `llm` request's
+`agent` sends that agent's text as the sub-call's system message, the same bytes on every call.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ OPS = ("llm", "llm_batch", "fetch", "approve", "rlm")
 THINKING = ("off", "minimal", "low", "medium", "high", "xhigh", "max")  # a request's own thinking level for its sub-calls (D-164, D-250)
 INFRA_REPLY = "sub-call failed for an infrastructure reason; this episode will be discarded"
 PREFIX_SEPARATOR = "\n\n"  # cacheapi.SEPARATOR: between a sub-call's stable prefix and its prompt (D-119)
+AGENT_SEPARATOR = "\n\n"  # between an agent's text and an rlm() child's task (D-234)
 
 # fetch (D-16). Module-level, so tests can patch them.
 FETCH_TIMEOUT_S = 30
@@ -131,6 +133,10 @@ class Bridge:
             return {"error": "prompts must be a list of strings"}
         if op == "llm" and len(prompts) != 1:
             return {"error": "llm takes exactly one prompt"}
+        agent = request.get("agent")  # agentapi's agent= (D-234, gated); training's requests have none
+        if agent is not None and agent not in self.profile.agents:
+            return {"error": unknown_agent(agent, self.profile)}
+        system = self.profile.agents[agent].text if agent is not None else None
         thinking = request.get("thinking")  # agentapi's thinking= (D-164); training's requests have none
         if thinking is not None and thinking not in THINKING:
             return {"error": f"thinking must be one of {', '.join(THINKING)}"}
@@ -162,7 +168,8 @@ class Bridge:
 
         tasks = [
             asyncio.ensure_future(
-                self._one(first_id + i, prompt, origin, {"id": batch_id, "index": i, "size": n}, prefixes[i], thinking))
+                self._one(first_id + i, prompt, origin, {"id": batch_id, "index": i, "size": n}, prefixes[i], thinking,
+                          system))
             for i, prompt in enumerate(prompts)
         ]
         results = await self._settle(tasks)
@@ -243,7 +250,7 @@ class Bridge:
                                       "subcalls_left": self.subcalls_left()})
 
     async def _one(self, subcall_id: int, prompt: str, origin: dict, batch: dict, prefix: str | None = None,
-                   thinking: str | None = None) -> str:
+                   thinking: str | None = None, system: str | None = None) -> str:
         if prefix is not None:
             prefix = contract.clean_text(prefix)
         prompt = contract.truncate_prompt(_joined(prefix, contract.clean_text(prompt)), self.limits.subcall_max_chars)
@@ -251,7 +258,8 @@ class Bridge:
             "run_id": self.run_id,
             "role": "sub",
             "model": dict(self.sub_ref),
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": ([{"role": "system", "content": system}] if system is not None else [])
+            + [{"role": "user", "content": prompt}],
             "tools": [],
             "max_tokens": self.limits.subcall_max_tokens,
             "temperature": self.profile.sub_temperature,
@@ -375,6 +383,11 @@ class Bridge:
 
 
 # ---------------------------------------------------------------------------------------------- errors
+
+
+def unknown_agent(agent: object, profile: Profile) -> str:
+    names = ", ".join(profile.agents) or "none"
+    return f"unknown agent {agent!r}; this profile's agents are: {names}"
 
 
 def _utf16_len(text: str) -> int:

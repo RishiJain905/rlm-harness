@@ -43,6 +43,8 @@ REQUIRED = [
     "run.say:error:RUN_BUSY",
     "run.close:request",
     "run.close:result",
+    "profile.check:request",
+    "profile.check:result",
     "debug.roundtrip:request",
     "debug.roundtrip:result",
     "run.start:request:read",
@@ -87,6 +89,7 @@ METHODS = {
     "run.vars": "app->engine",
     "run.say": "app->engine",
     "run.close": "app->engine",
+    "profile.check": "app->engine",
     "debug.roundtrip": "app->engine",
     "model.complete": "engine->app",
     "approval.request": "engine->app",
@@ -216,6 +219,7 @@ FIELDS = {
                         "profile_hash": STR,
                         "agent_api": BOOL,
                         "limits": obj({"read": PROFILE_LIMITS, "repo": PROFILE_LIMITS}),
+                        "path": STR,  # the profile's absolute folder (v1 step 6, D-208)
                     }
                 )
             ),
@@ -255,6 +259,10 @@ FIELDS = {
     "run.say:result": obj({"prompt_index": INT}),
     "run.close:request": obj({"run_id": STR}),
     "run.close:result": obj({}),
+    # v1 step 6: a candidate folder against a base profile (v1 architecture §3.1)
+    "profile.check:request": obj({"path": STR, "base": nullable(STR)}, {"gated": BOOL}),
+    "profile.check:result": obj({"ok": BOOL, "errors": list_of(STR), "prompt_hash": nullable(STR),
+                                 "profile_hash": nullable(STR), "changed": list_of(STR)}),
     "run.vars:result": obj({"vars": list_of(obj({"name": STR, "type": STR, "len": nullable(INT), "chars": INT}))}),
     "debug.roundtrip:request": obj({"count": INT}),
     "debug.roundtrip:result": obj({"texts": list_of(STR)}),

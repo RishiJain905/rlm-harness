@@ -129,6 +129,24 @@ export interface ProfileInfo {
   /** v1 step 2 (D-198): an added field, so the protocol number stays. */
   agent_api: boolean;
   limits: { read: ProfileLimits; repo: ProfileLimits };
+  /** v1 step 6 (D-208): the folder the engine loaded the profile from, absolute. */
+  path: string;
+}
+
+/** v1 step 6: `profile.check` (architecture §3.1). `gated` is D-234's. */
+export interface ProfileCheckParams {
+  path: string;
+  base: string | null;
+  gated?: boolean;
+}
+
+export interface ProfileCheckResult {
+  ok: boolean;
+  errors: string[];
+  prompt_hash: string | null;
+  profile_hash: string | null;
+  /** The dotted keys that differ from `base`, then "guidance", then the skill, script and gated file paths. */
+  changed: string[];
 }
 
 /** `contract*` and `profiles` are null and [] until step 3. */

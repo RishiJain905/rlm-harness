@@ -1,5 +1,6 @@
 """KV cache: a file's text is a sub-call's cached prefix, byte for byte the same each time it is asked about; a schema
-adds its instruction after the prompt, so the prefix stays the same.
+adds its instruction after the prompt, so the prefix stays the same. `skill()` only adds REPL output (nothing enters
+the system prompt), and an agent's text is sent by the engine as a sub-call's system message, the same bytes each call.
 
 Delegation helpers for the `default` profile (D-157 to D-160). The worker installs them only when its `init` sets
 `agent_api`, which `training-v4` never does, so the LoRA's REPL stays training's own.
@@ -14,6 +15,9 @@ Delegation helpers for the `default` profile (D-157 to D-160). The worker instal
   futures, so a cell can start work and keep going.
 - `rlm(task, ...)` (D-160): a child run with a REPL of its own, run by the engine; returns what the child submits.
   The engine enforces the profile's [rlm] limits (how many, how deep, how many at once).
+- `skill(name=None)` (v1 step 6, D-233), only when the profile has skills: prints one skill's text, or lists them.
+- `agent=` on `llm`, `llm_async`, `rlm` and `rlm_async` (D-234), only when the profile has agents, which needs the
+  engine's gate: the engine sends the agent's text as the sub-call's system message, or ahead of the child's task.
 
 Worker-side: imports only the standard library, never `rlm_engine`.
 """
@@ -290,11 +294,14 @@ def context_parts(context: str, names: list) -> dict[str, str]:
 
 
 def namespace(base: dict, *, request, limits: dict, async_line, repl_line, cell_id, repo: bool, tools,
-              input_files: list, sub_thinking) -> dict:
+              input_files: list, sub_thinking, skills: dict | None = None, agents: dict | None = None,
+              sub_agent=None) -> dict:
     """The cell globals agent_api adds or replaces. `base` holds the cell globals so far (cacheapi's llm and
     llm_batch, `context`); `request(op, **fields)` sends one request to the engine; `limits` is the worker's live
     sub-call limits; `async_line` is the thread-local the worker reads a request's cell line from; `tools` is the
-    tools module; `sub_thinking` is the thread-local the worker reads a request's own thinking level from (D-164)."""
+    tools module; `sub_thinking` is the thread-local the worker reads a request's own thinking level from (D-164).
+    `skills` ({name: {description, text}}, D-233) adds `skill`; `agents` ({name: description}, D-234) adds `agent=`,
+    and `sub_agent` is the thread-local the worker reads a sub-call's agent from."""
     toolkit = tools
     plain_llm, plain_batch = base["llm"], base["llm_batch"]
 
@@ -323,6 +330,23 @@ def namespace(base: dict, *, request, limits: dict, async_line, repl_line, cell_
         return _with(thinking, plain_batch, prompts, shared=shared, over=over)
     pool: list[concurrent.futures.ThreadPoolExecutor] = []
     pool_lock = threading.Lock()
+    agent_local = sub_agent if sub_agent is not None else threading.local()
+
+    def _agent(agent):
+        if agent is not None and (not agents or agent not in agents):
+            raise ValueError(f"unknown agent {agent!r}; the agents are: {', '.join(agents or {}) or 'none'}")
+        return agent
+
+    def ask(prompt, over=None, schema=None, thinking=None, agent=None):
+        agent = _agent(agent)
+        if agent is None:
+            return llm(prompt, over=over, schema=schema, thinking=thinking)
+        before = getattr(agent_local, "value", None)
+        agent_local.value = agent
+        try:
+            return llm(prompt, over=over, schema=schema, thinking=thinking)
+        finally:
+            agent_local.value = before
 
     def llm(prompt: str, over=None, schema=None, thinking=None):
         """Ask a language model one question. With over=segment, the segment's text is sent first, cached. With
@@ -507,11 +531,8 @@ def namespace(base: dict, *, request, limits: dict, async_line, repl_line, cell_
               + (f", {failed} failed" if failed else ""))
         return found
 
-    def rlm_call(task: str, context: str | None = None, tools: str = "read", max_turns: int | None = None):
-        """Start a child run on a task: it gets a REPL of its own, with `context` (and in a coding task the
-        repository), its own turns and sub-calls, and returns what it submit()s. tools="read" can read the repository
-        but not change it, "edit" can change it (coding tasks only), "none" has only `context`. max_turns may lower
-        the child's turn limit. Its sub-calls come out of this run's budget."""
+    def start_child(task, context=None, tools="read", max_turns=None, agent=None):
+        agent = _agent(agent)
         if tools not in RLM_TOOLS:
             raise ValueError(f"tools must be one of {', '.join(map(repr, RLM_TOOLS))}")
         if tools == "edit" and not repo:
@@ -519,8 +540,15 @@ def namespace(base: dict, *, request, limits: dict, async_line, repl_line, cell_
         if max_turns is not None and (isinstance(max_turns, bool) or not isinstance(max_turns, int) or max_turns < 1):
             raise ValueError("max_turns must be a whole number of at least 1")
         reply = request("rlm", task=str(task), context=None if context is None else str(context), tools=tools,
-                        max_turns=max_turns)
+                        max_turns=max_turns, **({"agent": agent} if agent is not None else {}))
         return reply.get("answer")
+
+    def rlm_call(task: str, context: str | None = None, tools: str = "read", max_turns: int | None = None):
+        """Start a child run on a task: it gets a REPL of its own, with `context` (and in a coding task the
+        repository), its own turns and sub-calls, and returns what it submit()s. tools="read" can read the repository
+        but not change it, "edit" can change it (coding tasks only), "none" has only `context`. max_turns may lower
+        the child's turn limit. Its sub-calls come out of this run's budget."""
+        return start_child(task, context=context, tools=tools, max_turns=max_turns)
 
     def _submit(fn, *args, **kwargs) -> concurrent.futures.Future:
         line, cell = repl_line(), cell_id()
@@ -558,5 +586,44 @@ def namespace(base: dict, *, request, limits: dict, async_line, repl_line, cell_
 
     rlm_call.__name__ = rlm_call.__qualname__ = "rlm"
     # rlm is there at every depth; the engine refuses a child's own rlm() past the profile's max_depth, saying why
-    return {"llm": llm, "llm_batch": llm_batch, "ask_files": ask_files, "scan": scan, "llm_async": llm_async,
-            "llm_batch_async": llm_batch_async, "gather": gather, "rlm": rlm_call, "rlm_async": rlm_async}
+    out = {"llm": llm, "llm_batch": llm_batch, "ask_files": ask_files, "scan": scan, "llm_async": llm_async,
+           "llm_batch_async": llm_batch_async, "gather": gather, "rlm": rlm_call, "rlm_async": rlm_async}
+    if skills:
+        def skill(name: str | None = None) -> None:
+            """Print one of this task's skills: written instructions for a kind of work, read when the work needs
+            them. skill() (or an unknown name) lists each skill's name and description."""
+            if name is not None and name in skills:
+                print(skills[name].get("text", ""))
+                return None
+            if name is not None:
+                print(f"no skill named {name!r}; the skills are:")
+            for key, value in skills.items():
+                print(f"{key}: {value.get('description', '')}")
+            return None
+
+        out["skill"] = skill
+    if agents:  # D-234, gated: agent= names one of the profile's agents
+        def llm_agent(prompt: str, over=None, schema=None, thinking=None, agent=None):
+            return ask(prompt, over=over, schema=schema, thinking=thinking, agent=agent)
+
+        def llm_async_agent(prompt: str, over=None, schema=None, thinking=None, agent=None):
+            return _submit(ask, prompt, over=over, schema=schema, thinking=thinking, agent=agent)
+
+        def rlm_agent(task: str, context: str | None = None, tools: str = "read", max_turns: int | None = None,
+                      agent=None):
+            return start_child(task, context=context, tools=tools, max_turns=max_turns, agent=agent)
+
+        def rlm_async_agent(task: str, context: str | None = None, tools: str = "read",
+                            max_turns: int | None = None, agent=None):
+            return _submit(start_child, task, context=context, tools=tools, max_turns=max_turns, agent=agent)
+
+        names = ", ".join(agents)
+        for fn, plain, name, what in ((llm_agent, llm, "llm", "the sub-call's instructions"),
+                                      (llm_async_agent, llm_async, "llm_async", "the sub-call's instructions"),
+                                      (rlm_agent, rlm_call, "rlm", "the start of the child's task"),
+                                      (rlm_async_agent, rlm_async, "rlm_async", "the start of the child's task")):
+            fn.__name__ = fn.__qualname__ = name
+            fn.__doc__ = (plain.__doc__ or "") + f" agent= names one of this task's agents ({names}): its text is " \
+                f"{what}."
+            out[name] = fn
+    return out

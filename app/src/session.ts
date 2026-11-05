@@ -21,6 +21,7 @@ import {
   type ModelRef,
   type ModelWindow,
   type PermissionMode,
+  type ProfileCheckResult,
   type RunSayResult,
   type RunStartParams,
   type RunStartResult,
@@ -271,6 +272,11 @@ export class Session {
     } catch (err) {
       if (!(err instanceof RpcError && err.code === ErrorCode.UNKNOWN_RUN)) throw err;
     }
+  }
+
+  /** v1 step 6: checks a candidate profile folder against `base` (`profile.check`); profile content never throws. */
+  checkProfile(path: string, base: string | null, gated = false): Promise<ProfileCheckResult> {
+    return this.engine.link.request<ProfileCheckResult>("profile.check", { path: resolve(path), base, gated });
   }
 
   async vars(runId: string): Promise<VarInfo[]> {

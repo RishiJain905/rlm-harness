@@ -1,8 +1,8 @@
 """KV cache: none
 
 The engine's methods on the link: `engine.info` (with the contract and profiles since step 3),
-`run.start`, `run.cancel` and `run.vars` (step 6), `run.say` and `run.close` (v1 step 4), and `debug.roundtrip` for
-the link tests when `RLMH_DEBUG=1`.
+`run.start`, `run.cancel` and `run.vars` (step 6), `run.say` and `run.close` (v1 step 4), `profile.check` (v1 step 6:
+a candidate folder against a base, for the tuner), and `debug.roundtrip` for the link tests when `RLMH_DEBUG=1`.
 
 The engine keeps nothing between runs (D-35): `_runs` holds only the runs still going, and an open conversation is a
 run still going until it closes.
@@ -109,12 +109,25 @@ class Engine:
         link.method("run.vars", self._run_vars)
         link.method("run.say", self._run_say)
         link.method("run.close", self._run_close)
+        link.method("profile.check", self._profile_check)
         link.on_close(self._cancel_all)
         if self.debug:
             link.method("debug.roundtrip", self._debug_roundtrip)
 
     async def _engine_info(self, params: dict) -> dict:
         return self.info()
+
+    async def _profile_check(self, params: dict) -> dict:
+        """v1 architecture §3.1: `{path, base, gated}` -> `{ok, errors, prompt_hash, profile_hash, changed}`. Only a
+        malformed param is an RPC error; whatever the folder holds is an answer."""
+        path, base, gated = params.get("path"), params.get("base"), params.get("gated", False)
+        if not isinstance(path, str) or not Path(path).is_absolute():
+            raise RpcError(INVALID_PARAMS, "path must be an absolute folder path")
+        if base is not None and not isinstance(base, str):
+            raise RpcError(INVALID_PARAMS, "base must be a profile name or null")
+        if gated is not None and not isinstance(gated, bool):
+            raise RpcError(INVALID_PARAMS, "gated must be true or false")
+        return await asyncio.to_thread(profile_check, Path(path), base, bool(gated), self.home)
 
     # -- runs --
 
@@ -238,10 +251,39 @@ def contract_info(home: Path) -> dict:
                 "profile_hash": p.profile_hash(),
                 "agent_api": p.agent_api,
                 "limits": {"read": p.read.limits.as_dict(), "repo": p.repo.limits.as_dict()},
+                "path": os.path.abspath(p.path),  # the folder it loaded from (v1 step 6, D-208)
             }
             for p in profiles.list_profiles(home)
         ],
     }
+
+
+def profile_check(folder: Path, base: str | None, gated: bool, home: Path) -> dict:
+    """`profile.check`'s result (v1 step 6). The folder loads as a user profile named after it, so the name rule
+    applies. A ProfileError (or an unknown `base`) gives `ok: false` with that one error, null hashes and no `changed`.
+    `errors` is `check_tunable` against `base`, or, with `base` null, `check_files` alone with `changed: []`."""
+
+    def failed(message: str) -> dict:
+        return {"ok": False, "errors": [message], "prompt_hash": None, "profile_hash": None, "changed": []}
+
+    try:
+        profiles._check_name(folder.name)
+        candidate = profiles._load(folder.name, folder, "user")
+        reference = profiles.load_profile(base, home) if base is not None else None
+    except profiles.ProfileError as exc:
+        return failed(str(exc))
+    except Exception as exc:  # an unreadable folder: still an answer, never an RPC error
+        return failed(f"cannot load the profile in {folder}: {exc!r}")
+    try:
+        if reference is None:
+            errors, changed = profiles.check_files(candidate, gated=gated), []
+        else:
+            errors = profiles.check_tunable(reference, candidate, gated=gated)
+            changed = profiles.changed(reference, candidate)
+    except Exception as exc:  # a bug in a check: reported, never raised
+        errors, changed = [f"host error: could not check the profile: {exc!r}"], []
+    return {"ok": not errors, "errors": errors, "prompt_hash": candidate.prompt_hash(),
+            "profile_hash": candidate.profile_hash(), "changed": changed}
 
 
 def _run_spec(params: dict, home: Path) -> loop.RunSpec:

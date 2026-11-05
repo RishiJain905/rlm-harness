@@ -82,7 +82,7 @@ rlm-harness/
     paths.ts                         +2 +6 +9   evalDir, tuneDir, libraryDir (§9)
     main.ts                          +2 +6      eval, tune
     cli/eval.ts                      2          rlmh eval, eval report, eval compare, eval ledger
-    cli/tune.ts                      6          rlmh tune, with --gated
+    cli/tune.ts                      6          rlmh tune, with --gated and --gpu (D-254)
     cli/config.ts                    +9         refuses `config set tune.enabled true` (§7.6)
     eval/runner.ts                   2 +6 +9    runEval(): the one entry point for rlmh eval, rlmh tune and /tune; logDir (2), ledger: false (6), /tune's options (9)
     eval/set.ts                      2          read and check a set folder (§6)
@@ -99,7 +99,8 @@ rlm-harness/
     tune/sessions.ts                 6          editor, composer and reflector sessions as rlmh runs (§7.4)
     tune/prompts/*.md                6          stage prompts adapted from google-research/harness2 (Apache-2.0 notice kept); surface-gated.md only with --gated
     tune/candidate.ts                6          write a candidate profile folder (skills, scripts and the gated files too), diff it, check it with profile.check
-    tune/offline.ts                  6          the set-based driver behind rlmh tune (§7.5)
+    tune/offline.ts                  6          the set-based driver behind rlmh tune (§7.5), accept() and the estimate
+    tune/prompts.ts, tune/text.d.ts  6          stagePrompt(stage, round, {gated, layout}); the .md files are imported as text
     tune/online.ts                   9          the background driver behind /tune: queue, cap, delivery (§7.6)
     tune/worktree.ts                 9          snapshots of the user's folder, and throwaway worktrees (or copies) from them
     tune/library.ts                  6 +9       the experience library (§7.7); step 9 adds user domains
@@ -148,7 +149,7 @@ Step 3 bumps `PROTOCOL_VERSION` to 2 in `app/src/version.ts` and `engine/rlm_eng
 | `run.say` | `{run_id, text}` | `{prompt_index: int}`, returned before the prompt's first root call | -32010 no such open conversation; -32013 a prompt is still running | 4 |
 | `run.close` | `{run_id}` | `{}`, after `run.closed` was sent | -32010 no such open conversation; -32013 a prompt is still running (use `run.cancel`) | 4 |
 | `engine.info` | v0's params | each `profiles` entry gains `path`, `agent_api` and `limits: {read, repo}` (only added fields, so the protocol number doesn't change for it) | as v0 | 2, 6 |
-| `profile.check` | `{path: str (absolute folder), base: str \| null (a profile name), gated: bool (default false)}`; `gated` is D-234's | `{ok: bool, errors: [str], prompt_hash, profile_hash, changed: [str]}`; `changed` lists the dotted keys that differ from `base`, plus `"guidance"` when its text differs, plus each skill, script, agent or `nudges.toml` file added, removed or changed, by its path in the folder (`skills/<name>/SKILL.md`, `scripts/<name>.py`) | -32602 for a relative path | 6 |
+| `profile.check` | `{path: str (absolute folder), base: str \| null (a profile name; null checks the file rules only, with `changed: []`, D-255), gated: bool (default false)}`; `gated` is D-234's | `{ok: bool, errors: [str], prompt_hash, profile_hash, changed: [str]}`; `changed` lists the dotted keys that differ from `base`, plus `"guidance"` when its text differs, plus each skill, script, agent or `nudges.toml` file added, removed or changed, by its path in the folder (`skills/<name>/SKILL.md`, `scripts/<name>.py`) | -32602 for a relative path | 6 |
 
 New error code: **-32013 `RUN_BUSY`**, in `link.py` (beside -32010 to -32012) and `protocol.ts`.
 
@@ -425,6 +426,7 @@ Read the paper and the code before building either step:
 | `guidance.md` | at most 12,000 characters, UTF-8, LF line ends; `{shell}` stays the only placeholder |
 | `read.max_turns`, `repo.max_turns` | 10 to 200 |
 | `read.max_subcalls`, `repo.max_subcalls` | 10 to 200 |
+| `read.submit_check` | 0.0 to 1.0 (D-251's check, `[read]` only; D-252) |
 | `repo.subcall_thinking` | `off`, `low`, `medium`, `high` |
 | `repo.pace_nudge` | bool |
 | `root.temperature`, `sub.temperature` | 0.0 to 1.0 |
@@ -481,7 +483,7 @@ evidence/
   library/INDEX.md, library/entries/...        the experience library for this domain (§7.7)
 ```
 
-**Grader-leak guard.** `writeEvidence` refuses, and throws, if anything it is about to write comes from `grades.jsonl`, `grade-logs/`, a hidden tar or a `gold` field. It also refuses if a file contains a hidden test file's name. Its test plants each of those and expects the refusal. This follows `harness2/core/context.py`.
+**Grader-leak guard.** `writeEvidence` refuses, and throws, if anything it is about to write comes from `grades.jsonl`, `grade-logs/`, a hidden tar or a `gold` field, or if a written file holds a grade marker. A run whose own text names the set folder, a hidden tar's member or an f2p id is withheld instead (D-205; not the p2p ids or `files`, which name tests the repository already has, D-253). `harness/system_prompt.md` is the first reference record's system message (D-255). Its test plants each of those and expects the refusal. This follows `harness2/core/context.py`.
 
 ### 7.4 Sessions
 
@@ -501,7 +503,7 @@ Every session is an rlmh read run through `Session`. The question is a stage pro
 
 ```
 rlmh tune SET --root M [--sub M] --base PROFILE --name NAME (--from EVAL_OUT | --continue OUT) [--rounds 2]
-              [--probe 10 --seed S] [--jobs N] [--tokens-from RUNS.jsonl]... [--out DIR] [--go] [--max-usd X] [--gated]
+              [--probe 10 --seed S] [--jobs N] [--tokens-from RUNS.jsonl]... [--out DIR] [--gpu cuda|hip|none] [--go] [--max-usd X] [--gated]
 ```
 
 `--gated` turns on D-234's gate for this tune: its engine starts with `RLMH_TUNE_GATED=1`, the editors' prompts gain `surface-gated.md`, and `profile.check` gets `gated: true`. Step 7 runs round 1 with and without it, and C5 and C8 stay in the tunable surface only if a candidate using them is adopted and the gated round passes more tune tasks at no more mean cost per task than the round without it (D-234). When they stay, step 7 moves `TUNABLE_GATED`'s rows into `TUNABLE` and turns the gate on by default (`profiles.GATED = True`). Otherwise they stay out of `TUNABLE` and their code stays off. Either way the result is logged as a D-number.

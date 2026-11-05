@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from . import callformat, compaction, contract, inputs
-from .bridge import Bridge, SubcallRecord
+from .bridge import AGENT_SEPARATOR, Bridge, SubcallRecord, unknown_agent
 from .errors import InfraError, ModelError
 from .permissions import RENAME_SEP, Permissions
 from .profiles import Profile
@@ -160,6 +160,8 @@ class Children:
         self.prompt_base = 0  # `started` when this prompt began: max_runs counts from here (v1 step 4)
         self.prompt_index = 0  # for the run.compacted bodies of this prompt's children
         self.runs: list[ChildRun] = []
+        # the run's copy of the profile's scripts/ (loop.SCRIPTS_DIR, D-233), on every worker's sys.path
+        self.scripts_dir = scratch / "scripts" if profile.scripts else None
         self._slots = asyncio.Semaphore(self.settings.max_parallel)
 
     def start_prompt(self, prompt_index: int = 0) -> None:
@@ -175,6 +177,12 @@ class Children:
         """The reply fields for an `rlm` request: `{"answer": ..., "turns": n}` or `{"error": ...}`."""
         task, context, tools, max_turns = (request.get("task"), request.get("context"), request.get("tools"),
                                            request.get("max_turns"))
+        agent = request.get("agent")  # rlm(..., agent=name), gated (D-234): its text goes ahead of the task
+        if agent is not None:
+            if agent not in self.profile.agents:
+                return {"error": unknown_agent(agent, self.profile)}
+            if isinstance(task, str) and task.strip():
+                task = self.profile.agents[agent].text + AGENT_SEPARATOR + task
         if not isinstance(task, str) or not task.strip() or tools not in ("read", "edit", "none") or not (
                 context is None or isinstance(context, str)) or not (
                 max_turns is None or (isinstance(max_turns, int) and not isinstance(max_turns, bool) and max_turns > 0)):
@@ -264,9 +272,20 @@ class Children:
     def init_extra(self, *, mode: str, task: str | None, tool_names: list[str] | None,
                    input_files: list[str] | None = None) -> dict:
         """The worker init fields agent_api adds (D-157), for the run's own worker and each child's."""
-        return {"agent_api": True, "task": task if mode == "repo" else None,
-                "test_hint": self.test_hint if mode == "repo" else None, "input_files": input_files or [],
-                "tool_names": tool_names}
+        # since v1 step 6 also `skills` ({name: {description, text}}) and `scripts_dir` (the run's copy of scripts/)
+        # when the profile has them (D-233), and, behind the gate, `agents` ({name: description}, D-234); a profile
+        # with none of them gets the same init as before
+        extra = {"agent_api": True, "task": task if mode == "repo" else None,
+                 "test_hint": self.test_hint if mode == "repo" else None, "input_files": input_files or [],
+                 "tool_names": tool_names}
+        if self.profile.skills:
+            extra["skills"] = {name: {"description": s.description, "text": s.text}
+                               for name, s in self.profile.skills.items()}
+        if self.scripts_dir is not None:
+            extra["scripts_dir"] = str(self.scripts_dir)
+        if self.profile.agents:
+            extra["agents"] = {name: a.description for name, a in self.profile.agents.items()}
+        return extra
 
     def _request(self, child: ChildRun, turn: int, messages: list[dict]) -> dict:
         """A child's `model.complete` params: role "sub" with its sub-call id, origin, batch and `child`."""

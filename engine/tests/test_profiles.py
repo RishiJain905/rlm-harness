@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 from pathlib import Path
 
@@ -261,9 +262,10 @@ def test_contract_info(tmp_path: Path) -> None:
         ("default", "builtin"), ("training-v4", "builtin"), ("mine", "user"),
     ]
     for entry in info["profiles"]:
-        assert list(entry) == ["name", "source", "prompt_hash", "profile_hash", "agent_api", "limits"]
+        assert list(entry) == ["name", "source", "prompt_hash", "profile_hash", "agent_api", "limits", "path"]
         assert HEX64.fullmatch(entry["prompt_hash"]) and HEX64.fullmatch(entry["profile_hash"])
         profile = p.load_profile(entry["name"], tmp_path)
+        assert Path(entry["path"]).is_absolute() and Path(entry["path"]) == Path(os.path.abspath(profile.path))  # D-208
         assert entry["agent_api"] is profile.agent_api
         # v1 step 2 (D-198): each mode's limits, as the run would get them
         assert entry["limits"] == {"read": profile.read.limits.as_dict(), "repo": profile.repo.limits.as_dict()}
