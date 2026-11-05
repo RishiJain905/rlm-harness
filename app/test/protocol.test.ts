@@ -158,7 +158,7 @@ const USAGE = obj({
   cost_usd: "num",
 });
 const MODEL_ERROR_DATA = obj({
-  kind: oneOf("auth", "no_key", "bad_request", "rate_limit", "server", "timeout", "network", "context_window", "unknown_model", "cancelled", "other"),
+  kind: oneOf("auth", "no_key", "bad_request", "rate_limit", "no_credit", "server", "timeout", "network", "context_window", "unknown_model", "cancelled", "other"),
   provider: "str",
   model: "str",
   status: nullable("int"),

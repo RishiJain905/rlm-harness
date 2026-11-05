@@ -2,7 +2,7 @@
 // `rlmh tune` (v1 architecture §7.5, step 6): Harness²'s rounds over an eval set's tune split. Without --go it
 // prints every stage's price and spends nothing; with --go it runs runTune on one Session. --gated turns on
 // D-234's gate for this tune's engine. Exit 0 (every round ran, or the budget ended them), 1 (stopped by the
-// cap or an error), 2 (usage), 130 (Ctrl-C).
+// cap, an error, or the provider account: no credit or a bad key, D-257), 2 (usage), 130 (Ctrl-C).
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -327,8 +327,10 @@ export async function tuneCommand(argv: string[], io: CliIO, deps: TuneCommandDe
       detach();
     }
     const j = result.tuneJson;
-    if (p.values.json) io.stdout.write(jsonLine("tune.finished", { stopped: result.stopped, budget_stop: result.budget_stop, accepted_rounds: result.accepted_rounds, final: j.final, cost_usd: result.cost_usd, out: p.out }));
+    if (p.values.json) io.stdout.write(jsonLine("tune.finished", { stopped: result.stopped, budget_stop: result.budget_stop, account_stop: result.account_stop, accepted_rounds: result.accepted_rounds, final: j.final, cost_usd: result.cost_usd, out: p.out }));
     else io.stdout.write(`tune ${result.stopped === null ? "finished" : `stopped (${result.stopped})`}  accepted rounds: ${result.accepted_rounds.join(", ") || "none"}  $${result.cost_usd.toFixed(4)}\nout: ${p.out}\n`);
+    if (result.stop_reason !== null) io.stderr.write(`rlmh tune: ${result.stop_reason}
+`); // D-257: e.g. add credit
     if (result.stopped === "interrupted") return 130;
     return result.stopped === null ? 0 : 1;
   } finally {

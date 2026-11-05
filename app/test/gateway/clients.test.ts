@@ -336,8 +336,8 @@ describe("retries", () => {
     expect((await caught(r.gateway.complete(params(ref("openai", "gpt-4.1"))))).data.kind).toBe("bad_request");
     server.script(() => httpError(429, { error: { message: "You exceeded your current quota.", type: "insufficient_quota", code: "insufficient_quota" } }));
     const err = await caught(r.gateway.complete(params(ref("openai", "gpt-4.1"))));
-    expect(err.data.kind).toBe("rate_limit");
-    expect(err.message).toBe("OpenAI says the account is out of quota or credit (HTTP 429): You exceeded your current quota.");
+    expect(err.data.kind).toBe("no_credit");
+    expect(err.message).toBe("OpenAI says the account is out of credit (HTTP 429): You exceeded your current quota. Add credit, then run again.");
     expect(server.requests.length).toBe(2);
     expect(sleeps.delays).toEqual([]);
   });

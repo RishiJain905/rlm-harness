@@ -2,7 +2,7 @@
 // `rlmh eval` (v1 architecture §6.5, D-192, D-193, D-197): an eval set run through rlmh and graded.
 // Without --go it prints a priced estimate and spends nothing; with --go it runs runEval and writes the
 // output folder. `report`, `compare` and `ledger` read output folders and start no engine.
-// Exit 0 (no infra error, cap not hit), 1 (otherwise), 2 (usage), 130 (Ctrl-C).
+// Exit 0 (no infra error, cap not hit), 1 (otherwise, and an account stop: no credit or a bad key, D-257), 2 (usage), 130 (Ctrl-C).
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -12,7 +12,7 @@ import { Catalog } from "../gateway/catalog.ts";
 import { LEDGER_CAP_USD, readLedger } from "../eval/ledger.ts";
 import { compare, readOutput, renderCompare, type GradeLine } from "../eval/report.ts";
 import { defaultOut, estimate, referenceFrom, renderEstimate, type Estimate } from "../eval/estimate.ts";
-import { evalId, GpuMissing, runEval, writeReports, type EvalDeps, type EvalSession } from "../eval/runner.ts";
+import { accountStopMessage, evalId, GpuMissing, runEval, writeReports, type EvalDeps, type EvalSession } from "../eval/runner.ts";
 import { loadSet, needsGpu, SetError, selectTasks, type EvalSet, type EvalTask } from "../eval/set.ts";
 import { findNodeTools, nodeToolsProblem, ProbeError, type Backend } from "../eval/work.ts";
 import type { EngineInfo, ModelRef, ProfileInfo } from "../protocol.ts";
@@ -54,6 +54,9 @@ export const EVAL_USAGE = `Usage: rlmh eval SET [--split tune|heldout|all] [--on
 
 /** D-197: the infra kinds a rerun retries; every other kind is a setup error or the run's own limit. */
 export const TRANSIENT = ["rate_limit", "server", "timeout", "network", "worker", "runlog", "other"];
+
+/** D-257: the account kinds (no_credit, auth, no_key) that stop an eval or a tune at once; never transient. */
+export { ACCOUNT } from "../eval/runner.ts";
 
 function usage(io: CliIO, text: string): number {
   io.stderr.write(`rlmh eval: ${text}\n${EVAL_USAGE}`);
@@ -385,13 +388,18 @@ export async function evalCommand(argv: string[], io: CliIO, deps: EvalCommandDe
     io.stderr.write(`rlmh: the engine exited (exit code ${result.engineExit.code})\n${result.engineExit.stderr.map((l) => `${l}\n`).join("")}`);
   }
   if (p.values.json) {
-    io.stdout.write(jsonLine("eval.finished", { runs: result.lines.length, passed, infra, cost_usd: result.cost_usd, capped: result.capped, out: result.out }));
+    io.stdout.write(jsonLine("eval.finished", { runs: result.lines.length, passed, infra, cost_usd: result.cost_usd, capped: result.capped, account_stop: result.account_stop, out: result.out }));
   } else {
     const seconds = result.lines.reduce((a, l) => a + l.wall_s, 0);
     io.stdout.write(
       `total  ${result.lines.length} tasks  ${passed} passed  ${infra} infra  $${result.cost_usd.toFixed(4)}  ${seconds.toFixed(1)}${result.capped ? "  capped" : ""}\n` +
         `out: ${result.out}\n`,
     );
+  }
+  if (result.account_stop !== null) {
+    io.stderr.write(`rlmh eval: ${accountStopMessage(result.account_stop, `the eval stopped, and the tasks it did not start are marked ${result.account_stop}`, true)}
+`);
+    return 1;
   }
   if (result.interrupted) return 130;
   return infra > 0 || result.capped ? 1 : 0;

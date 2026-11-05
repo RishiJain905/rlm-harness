@@ -255,7 +255,7 @@ describe("errors[]", () => {
   });
 
   test("every kind comes through unchanged, raised at once with no retries", async () => {
-    const kinds: ModelErrorKind[] = ["auth", "no_key", "bad_request", "rate_limit", "server", "timeout", "network", "context_window", "unknown_model", "cancelled", "other"];
+    const kinds: ModelErrorKind[] = ["auth", "no_key", "bad_request", "rate_limit", "no_credit", "server", "timeout", "network", "context_window", "unknown_model", "cancelled", "other"];
     const sleeps = recordSleeps();
     try {
       for (const kind of kinds) {

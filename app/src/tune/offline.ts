@@ -12,7 +12,7 @@ import { TRANSIENT } from "../cli/eval.ts";
 import type { Catalog } from "../gateway/catalog.ts";
 import { appendLedger } from "../eval/ledger.ts";
 import { readGrades, type GradeLine } from "../eval/report.ts";
-import { CostCap, runEval, type EvalDeps, type EvalResult, type EvalSession } from "../eval/runner.ts";
+import { accountStopMessage, CostCap, runEval, type EvalDeps, type EvalResult, type EvalSession } from "../eval/runner.ts";
 import { estimate, referenceFrom } from "../eval/estimate.ts";
 import { selectTasks, type EvalSet, type EvalTask } from "../eval/set.ts";
 import { readTar } from "../eval/tar.ts";
@@ -239,6 +239,10 @@ export interface TuneDeps {
 export interface TuneResult {
   stopped: null | "max_usd" | "interrupted" | "error";
   budget_stop: number | null;
+  /** D-257: the account kind (ACCOUNT) an eval or a session ended with, which stopped the tune ("error"). */
+  account_stop: string | null;
+  /** Why the tune stopped with "error": an account stop's message, or what threw. */
+  stop_reason: string | null;
   accepted_rounds: number[];
   final: string;
   cost_usd: number;
@@ -303,6 +307,8 @@ export async function runTune(o: TuneOptions, deps: TuneDeps): Promise<TuneResul
   let sessionUsd = 0;
   let stopped: TuneResult["stopped"] = null;
   let budgetStop: number | null = null;
+  let accountStop: string | null = null;
+  let stopReason: string | null = null;
   let history = (resume?.history as string | undefined) ?? "";
   const accepted: number[] = ((resume?.accepted_rounds as number[] | undefined) ?? []).slice();
 
@@ -329,8 +335,17 @@ export async function runTune(o: TuneOptions, deps: TuneDeps): Promise<TuneResul
     cap.track(runId);
     return () => cap.untrack(runId);
   };
+  /** D-257: an account kind ends the tune at once: no later stage, no rerun, no verdict and no library entry. */
+  const stopForAccount = (kind: string) => {
+    if (accountStop !== null) return;
+    accountStop = kind;
+    stopped = "error";
+    stopReason = accountStopMessage(kind, "the tune stopped", true);
+    say(accountStopMessage(kind, "stopping the tune; this round gets no verdict"));
+  };
   const shouldStop = (): boolean => {
-    if (interrupted) stopped = "interrupted";
+    if (accountStop !== null) stopped = "error";
+    else if (interrupted) stopped = "interrupted";
     else if (cap.capped) stopped = "max_usd";
     return stopped !== null;
   };
@@ -341,11 +356,13 @@ export async function runTune(o: TuneOptions, deps: TuneDeps): Promise<TuneResul
     rollouts += r.lines.filter((l) => l.run_id !== null).length;
     if (r.capped) stopped = "max_usd";
     if (r.interrupted) stopped = "interrupted";
+    if (r.account_stop) stopForAccount(r.account_stop);
   };
   const sessionSpend = (s: StageResult) => {
     spent += s.cost_usd;
     sessionUsd += s.cost_usd;
     sessions += s.run_ids.length;
+    if (s.account_stop) stopForAccount(s.account_stop);
   };
   const evalOpts = (tasks: EvalTask[], profile: string, out: string, hash: string | null = null) => ({
     home: o.home,
@@ -478,6 +495,7 @@ export async function runTune(o: TuneOptions, deps: TuneDeps): Promise<TuneResul
         say(`round ${r}: probing ${label} on ${probe.length} task(s)`);
         evalSpend(await doEval(evalOpts(probe, name, out, s.candidate!.check.profile_hash), { ...deps.evalDeps, session }));
         evals[label] = out;
+        if (shouldStop()) break;
         probeRecords.set(label, readRecords(out, new Set(probe.map((t) => t.id))));
         candidates.push({ label, diff: await diffProfiles(incumbent.dir, s.candidate!.dir), notes: (s.value as EditorSubmission).notes });
         if (shouldStop()) break;
@@ -544,6 +562,7 @@ export async function runTune(o: TuneOptions, deps: TuneDeps): Promise<TuneResul
       const refl = await stage("reflect", reflectRuns, { candidates, composedDiff: await diffProfiles(before.dir, composedDir), candidateName: `${o.name}-r${r}-reflect` });
       incumbent = saved;
       stageRecord("reflect", refl);
+      if (refl.account_stop) break; // D-257: no library entry from a round the account stopped
       const record = refl.value as ReflectorSubmission | null;
       writeJson(join(roundDir, "reflect.json"), record ?? { entry: "NO_ENTRY", edits: [], fell_back: true });
       if (record) {
@@ -555,6 +574,7 @@ export async function runTune(o: TuneOptions, deps: TuneDeps): Promise<TuneResul
     }
   } catch (err) {
     stopped = "error";
+    stopReason ??= `the tune failed: ${(err as Error).message}`;
     say(`the tune failed: ${(err as Error).message}`);
     rounds.push({ error: (err as Error).message });
   } finally {
@@ -593,6 +613,8 @@ export async function runTune(o: TuneOptions, deps: TuneDeps): Promise<TuneResul
       finished: now().toISOString(),
       stopped,
       budget_stop: budgetStop,
+      account_stop: accountStop,
+      stop_reason: stopReason,
       rounds,
       accepted_rounds: accepted,
       incumbent,
@@ -618,7 +640,7 @@ export async function runTune(o: TuneOptions, deps: TuneDeps): Promise<TuneResul
       cost_usd: Math.round((spent - startSpent) * 1e6) / 1e6,
       out: o.out,
     });
-    result = { stopped, budget_stop: budgetStop, accepted_rounds: accepted, final: finalDir, cost_usd: Math.round(spent * 1e6) / 1e6, tuneJson };
+    result = { stopped, budget_stop: budgetStop, account_stop: accountStop, stop_reason: stopReason, accepted_rounds: accepted, final: finalDir, cost_usd: Math.round(spent * 1e6) / 1e6, tuneJson };
   }
   return result;
 }

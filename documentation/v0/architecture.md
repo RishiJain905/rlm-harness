@@ -164,7 +164,7 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 | **ToolCall** | `{id: string, name: string, arguments: object}`. For the `python` tool, `arguments` is `{code: string}` |
 | **ToolDef** | `{name, description, parameters}`, where `parameters` is a JSON Schema. v0 has exactly one: `PYTHON_TOOL` (§6.2) |
 | **Usage** | `{input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost_usd}`. `input_tokens` counts all prompt tokens, cached ones included; cache reads and writes are subsets of it (D-22) |
-| **ModelErrorData** | `{kind, provider, model, status: int\|null, message}`, where `kind` is one of `auth`, `no_key`, `bad_request`, `rate_limit`, `server`, `timeout`, `network`, `context_window`, `unknown_model`, `cancelled`, `other` |
+| **ModelErrorData** | `{kind, provider, model, status: int\|null, message}`, where `kind` is one of `auth`, `no_key`, `bad_request`, `rate_limit`, `no_credit` (HTTP 402, or a quota 429; D-257), `server`, `timeout`, `network`, `context_window`, `unknown_model`, `cancelled`, `other` |
 | **Origin** | `{turn: int, line: int\|null}`: the root turn and the line in that turn's cell |
 | **Batch** | `{id: string, index: int, size: int}`. A single `llm()` call is a batch of one (D-24) |
 

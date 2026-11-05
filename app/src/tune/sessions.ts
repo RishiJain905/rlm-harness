@@ -11,6 +11,7 @@ import { message, RunWatcher } from "../cli/run.ts";
 import type { AppEvents } from "../gateway/gateway.ts";
 import type { ModelRef, ProfileCheckResult, RunFinishedParams, RunStartResult } from "../protocol.ts";
 import type { StartRun } from "../session.ts";
+import { ACCOUNT } from "../eval/runner.ts";
 import { CandidateError, filePathProblem, writeCandidate, type ProfileEdit } from "./candidate.ts";
 import { GRADE_MARKERS, type EvidenceResult, type Stage } from "./evidence.ts";
 import { stagePrompt } from "./prompts.ts";
@@ -169,6 +170,8 @@ export interface StageResult {
   cost_usd: number;
   /** An editor's or composer's checked candidate folder (EDIT, MERGE, REVISE), and its check. */
   candidate?: { dir: string; check: ProfileCheckResult };
+  /** D-257: the session ended with an account kind (ACCOUNT): no second attempt, and the tune stops. */
+  account_stop?: string;
 }
 
 export interface SessionOpts {
@@ -237,6 +240,10 @@ export async function runSession(o: SessionOpts): Promise<StageResult> {
       rejected = [`the session ended with an infra error (${f.infra_kind ?? "other"}): ${f.infra_error.split("\n")[0]}`];
       r.errors.push(...rejected);
       if (f.infra_kind === "cancelled" || f.infra_kind === "capped") break;
+      if (f.infra_kind !== null && ACCOUNT.includes(f.infra_kind)) {
+        r.account_stop = f.infra_kind;
+        break;
+      }
       continue;
     }
     if (!f.submitted) {

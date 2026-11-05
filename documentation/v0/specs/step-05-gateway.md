@@ -82,13 +82,14 @@ Other rules. `cancelRun` and the request `signal` abort queued, waiting, sleepin
 | `auth` | HTTP 401 or 403 | `{P} rejected the key "{L}" (ends in {E}). Re-enter or delete it in /providers.` From an environment variable, `{L}` is `$ANTHROPIC_API_KEY` and so on, and the tail is `Fix that variable, or save a key in /providers.` With no key at all: `{P} rejected the request (HTTP {status}) and no key is saved. Add one in /providers.` |
 | `bad_request` | 400, 413, 422 after parameter fallback | `{P} refused the request (HTTP {status}): {detail}` |
 | `unknown_model` | 404 | `{P} has no model "{M}" (HTTP 404). Pick another in /model, or use Refresh models in /providers.` |
-| `rate_limit` | 429 after 7 tries; or a quota 429 (`insufficient_quota`, no retries) | `{P} is rate limiting requests (HTTP 429) after 7 tries: {detail}`; quota: `{P} says the account is out of quota or credit (HTTP 429): {detail}` |
+| `rate_limit` | 429 after 7 tries | `{P} is rate limiting requests (HTTP 429) after 7 tries: {detail}` |
+| `no_credit` (D-257) | 402, or a quota 429 (`insufficient_quota`); no retries | `{P} says the account is out of credit (HTTP {status}): {detail}. Add credit, then run again.` |
 | `server` | 5xx after 7 tries | `{P} failed with HTTP {status} after 7 tries: {detail}` |
 | `timeout` | idle timeout or 408 after 7 tries | `{P} did not answer in time after 7 tries.` |
 | `network` | refused, DNS, reset after 7 tries | `Could not reach {P} at {host} after 7 tries: {cause}` For `local` add ` Is the server running? If it is, try http://127.0.0.1:<port>/v1 in /settings.` |
 | `context_window` | window check | `This request would not fit in {M}'s context window: about {est} tokens (prompt about {p} plus up to {max_tokens} for the reply) against {window}. Choose a model with a larger window in /model, or lower the limits in the profile.` |
 | `cancelled` | abort | `The call was cancelled.` |
-| `other` | 402, other 4xx, bad stream, key read failure, `custom` with no base URL | `{P} returned HTTP {status}: {detail}`; key read failure: `Could not read the key for {P} from the OS key store ({cause}). Re-enter it in /providers.`; no URL: `No base URL for the custom provider. Set providers.custom.base_url in /settings.` |
+| `other` | other 4xx, bad stream, key read failure, `custom` with no base URL | `{P} returned HTTP {status}: {detail}`; key read failure: `Could not read the key for {P} from the OS key store ({cause}). Re-enter it in /providers.`; no URL: `No base URL for the custom provider. Set providers.custom.base_url in /settings.` |
 
 **Request mapping, OpenAI-compatible (`openai.ts`).** Body key order is fixed: `model, messages, tools, <max tokens>, temperature, <thinking fields>, <cache field>, stream, stream_options`. `tools` is left out when empty, `stream_options` is `{include_usage: true}`, and `tool_choice` is never sent. Messages: `system` and `user` as is; an assistant message is `{role, content, tool_calls: [{id, type: "function", function: {name, arguments: JSON.stringify(arguments)}}]}` with `content: ""` when empty; a tool message is `{role: "tool", tool_call_id, content}`. A provider reply with no tool-call id gets `call_<run_id>_<turn>` (D-39).
 

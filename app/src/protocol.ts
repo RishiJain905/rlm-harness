@@ -66,6 +66,7 @@ export type ModelErrorKind =
   | "no_key"
   | "bad_request"
   | "rate_limit"
+  | "no_credit"
   | "server"
   | "timeout"
   | "network"

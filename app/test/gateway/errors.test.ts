@@ -181,13 +181,27 @@ describe("errors table", () => {
     expect(sleeps.delays).toEqual([2000, 4000, 8000, 16000, 32000, 60000]);
   });
 
-  test("rate_limit: quota, with no retries", async () => {
+  test("no_credit: a quota 429, with no retries", async () => {
     const r = await make({ keys: ["openai"] });
     server.script(() => httpError(429, { error: { message: "You exceeded your current quota.", type: "insufficient_quota", code: "insufficient_quota" } }));
     const err = await fails(r, params(OPENAI));
-    expect(err.message).toBe("OpenAI says the account is out of quota or credit (HTTP 429): You exceeded your current quota.");
-    expect(err.data).toMatchObject({ kind: "rate_limit", status: 429 });
+    expect(err.message).toBe("OpenAI says the account is out of credit (HTTP 429): You exceeded your current quota. Add credit, then run again.");
+    expect(err.data).toMatchObject({ kind: "no_credit", status: 429 });
     expect(server.requests).toHaveLength(1);
+    expect(sleeps.delays).toEqual([]);
+  });
+
+  test("no_credit: HTTP 402 from any provider, with no retries (D-257)", async () => {
+    const message = "This request would exceed your available credits given your current in-flight requests. Retry after in-flight requests settle, or add credits.";
+    for (const [providerId, model, name] of [["openrouter", "anthropic/claude-sonnet-4.5", "OpenRouter"], ["anthropic", "claude-haiku-4-5", "Anthropic"]] as const) {
+      server.requests.length = 0;
+      const r = await make({ keys: [providerId] });
+      server.script(() => httpError(402, { error: { message, code: 402 } }));
+      const err = await fails(r, params(ref(providerId, model)));
+      expect(err.message).toBe(`${name} says the account is out of credit (HTTP 402): ${message.replace(/\.$/, "")}. Add credit, then run again.`);
+      expect(err.data).toMatchObject({ kind: "no_credit", status: 402, provider: providerId });
+      expect(server.requests).toHaveLength(1);
+    }
     expect(sleeps.delays).toEqual([]);
   });
 
@@ -244,15 +258,13 @@ describe("errors table", () => {
     expect(lerr.message.endsWith(" Is the server running? If it is, try http://127.0.0.1:8000/v1 in /settings.")).toBe(true);
   });
 
-  test("other: 402 and another 4xx, not retried", async () => {
+  test("other: another 4xx, not retried", async () => {
     const r = await make({ keys: ["openai"] });
-    server.script(() => httpError(402, { error: { message: "Payment required" } }));
-    const err = await fails(r, params(OPENAI));
-    expect(err.message).toBe("OpenAI returned HTTP 402: Payment required");
-    expect(err.data).toMatchObject({ kind: "other", status: 402 });
     server.script(() => httpError(418, { error: { message: "I'm a teapot" } }));
-    expect((await fails(r, params(OPENAI))).message).toBe("OpenAI returned HTTP 418: I'm a teapot");
-    expect(server.requests).toHaveLength(2);
+    const err = await fails(r, params(OPENAI));
+    expect(err.message).toBe("OpenAI returned HTTP 418: I'm a teapot");
+    expect(err.data).toMatchObject({ kind: "other", status: 418 });
+    expect(server.requests).toHaveLength(1);
     expect(sleeps.delays).toEqual([]);
   });
 

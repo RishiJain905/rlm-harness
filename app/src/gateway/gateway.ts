@@ -718,7 +718,7 @@ export class Gateway {
     }
     if (s === 400 || s === 413 || s === 422) return this.error("bad_request", p, s, `${P} refused the request (HTTP ${s}): ${detail}`);
     if (s === 404) return this.error("unknown_model", p, s, `${P} has no model "${p.model.model}" (HTTP 404). Pick another in /model, or use Refresh models in /providers.`);
-    if (s === 429 && isQuota(f)) return this.error("rate_limit", p, s, `${P} says the account is out of quota or credit (HTTP 429): ${detail}`);
+    if (s === 402 || (s === 429 && isQuota(f))) return this.error("no_credit", p, s, `${P} says the account is out of credit (HTTP ${s}): ${detail.replace(/\.$/, "")}. Add credit, then run again.`);
     if (s === 429) return this.error("rate_limit", p, s, `${P} is rate limiting requests (HTTP 429)${after}: ${detail}`);
     if (s === 408) return this.error("timeout", p, s, `${P} did not answer in time${after}.`);
     if (s !== null && s >= 500) return this.error("server", p, s, `${P} failed with HTTP ${s}${after}: ${detail}`);
@@ -787,7 +787,7 @@ class Slots {
 function retryable(f: Failure): boolean {
   if (f.kind === "stream" || f.kind === "network" || f.kind === "timeout") return true;
   if (f.kind !== "http" || f.status === null) return false;
-  if (f.status === 429) return !isQuota(f);
+  if (f.status === 429) return !isQuota(f); // 402 is not in RETRY_STATUSES: no credit is never retried (D-257)
   return RETRY_STATUSES.has(f.status) || f.status >= 500;
 }
 

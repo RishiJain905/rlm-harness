@@ -190,7 +190,31 @@ export interface EvalResult {
   cost_usd: number;
   gpu_backend: Backend | null;
   engineExit: AppEvents["engine.exit"] | undefined;
+  /** D-257: the account kind (ACCOUNT) a graded run ended with, which stopped the eval; null when none did. */
+  account_stop: string | null;
 }
+
+/**
+ * D-257: infra kinds that say the provider account can't go on (out of credit, a rejected key, no key): every later
+ * call would fail the same way, so the eval stops at the first, as the cost cap does. None of them is transient.
+ */
+export const ACCOUNT = ["no_credit", "auth", "no_key"];
+
+const ACCOUNT_WHY: Record<string, string> = {
+  no_credit: "the account is out of credit",
+  auth: "the key was rejected",
+  no_key: "no key is saved",
+};
+
+const ACCOUNT_FIX: Record<string, string> = {
+  no_credit: "Add credit, then run again.",
+  auth: "Fix the key in /providers, then run again.",
+  no_key: "Add a key in /providers, then run again.",
+};
+
+/** What an account kind stopped (D-257): `the provider says <why> (<kind>): <what>`, and with `fix` what to do. */
+export const accountStopMessage = (kind: string, what: string, fix = false): string =>
+  `the provider says ${ACCOUNT_WHY[kind] ?? kind} (${kind}): ${what}${fix ? `. ${ACCOUNT_FIX[kind] ?? "Fix the account, then run again."}` : ""}`;
 
 const DENY = async () => ({ allow: false, remember_for_run: false });
 
@@ -309,6 +333,7 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
     harness_version: APP_VERSION,
     cap: o.maxUsd,
     capped: false,
+    account_stop: null,
     rerun_of: null,
     gpu_backend: backend,
     started: started.toISOString(),
@@ -322,6 +347,7 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
   const running = new Set<string>();
   let stopping = false;
   let interrupts = 0;
+  let accountStop: string | null = null;
   let abort!: () => void;
   const aborted = new Promise<"abort">((r) => (abort = () => r("abort")));
   const cancel = (runId: string) => void session.cancel(runId).catch(() => {});
@@ -329,6 +355,13 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
     stopping = true;
     say(`the cost passed --max-usd ($${o.maxUsd}): no new task starts, and the running ones are cancelled`);
   });
+  const stopForAccount = (kind: string) => {
+    if (accountStop !== null) return;
+    accountStop = kind;
+    stopping = true;
+    say(accountStopMessage(kind, "no new task starts, and the running ones are cancelled"));
+    for (const r of running) cancel(r);
+  };
   const offInterrupt = (deps.onInterrupt ?? defaultOnInterrupt)(() => {
     interrupts += 1;
     stopping = true;
@@ -449,13 +482,15 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
       if (line === "abort") return;
       // a first Ctrl-C reaches the test runner too (Windows shares the console), so a failure then is no verdict
       write(interrupts > 0 && line.infra_kind === null && !line.pass ? { ...line, infra_kind: "cancelled" } : line);
+      if (line.infra_kind !== null && ACCOUNT.includes(line.infra_kind)) stopForAccount(line.infra_kind);
     } finally {
       if (srcVenv) removeSrcPth(venv!);
       if (t.kind === "repo" && !o.keep) removeQuietly(dir);
     }
   };
-  /** The kind of a task that never started: the engine died (transient, D-197), the cap tripped, or Ctrl-C. */
-  const notStarted = () => (watcher.exit ? "other" : cap.capped ? "capped" : "cancelled");
+  /** The kind of a task that never started: the engine died (transient, D-197), the cap tripped, the account stopped
+   *  the eval (its kind, D-257), or Ctrl-C. */
+  const notStarted = () => (watcher.exit ? "other" : cap.capped ? "capped" : (accountStop ?? "cancelled"));
 
   const gradeOne = async (t: EvalTask, grade: AnswerGrade | TestsGrade, f: RunFinishedParams, w: { dir: string; base: string; venv: Venv | undefined; cappedNow: boolean }): Promise<GradeLine> => {
     const record = readRecord(logDir, f.run_id);
@@ -463,6 +498,7 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
     const reads = f.usage.root.cache_read_tokens + f.usage.sub.cache_read_tokens;
     let infra = f.infra_error === null ? null : (f.infra_kind ?? "other");
     if (infra === "cancelled" && w.cappedNow) infra = "capped";
+    else if (infra === "cancelled" && accountStop !== null && interrupts === 0) infra = accountStop; // cancelled by the stop
     const line = blank(t, infra, {
       run_id: f.run_id,
       submitted: f.submitted,
@@ -577,11 +613,11 @@ export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<Eval
         out,
       });
     }
-    writeJson(join(out, "eval.json"), { ...evalJson, capped: cap.capped, cost_usd: Math.round(cap.total * 1e6) / 1e6, finished: now().toISOString() });
+    writeJson(join(out, "eval.json"), { ...evalJson, capped: cap.capped, account_stop: accountStop, cost_usd: Math.round(cap.total * 1e6) / 1e6, finished: now().toISOString() });
     writeReports(out);
   }
   const cost = Math.round(cap.total * 1e6) / 1e6;
-  return { id, out, lines, capped: cap.capped, interrupted: interrupts > 0, aborted: wasAborted, cost_usd: cost, gpu_backend: backend, engineExit: watcher.exit };
+  return { id, out, lines, capped: cap.capped, interrupted: interrupts > 0, aborted: wasAborted, cost_usd: cost, gpu_backend: backend, engineExit: watcher.exit, account_stop: accountStop };
 }
 
 /** report.json and report.md from readGrades(out). */

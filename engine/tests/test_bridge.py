@@ -374,7 +374,7 @@ def test_bad_request_reaches_the_cell_and_the_run_goes_on(tmp_path: Path) -> Non
     assert handle(bridge, batch_request(["fine"], op="llm")) == {"outputs": ["ok"]}  # the run goes on
 
 
-@pytest.mark.parametrize("kind", ["auth", "no_key", "rate_limit", "server", "timeout", "network", "context_window",
+@pytest.mark.parametrize("kind", ["auth", "no_key", "rate_limit", "no_credit", "server", "timeout", "network", "context_window",
                                   "unknown_model", "other"])
 def test_other_model_errors_are_infra(tmp_path: Path, kind: str) -> None:
     err = ModelError(f"the {kind} message", kind=kind)

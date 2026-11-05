@@ -161,7 +161,7 @@ USAGE = obj(
 MODEL_ERROR_DATA = obj(
     {
         "kind": enum(
-            "auth", "no_key", "bad_request", "rate_limit", "server", "timeout",
+            "auth", "no_key", "bad_request", "rate_limit", "no_credit", "server", "timeout",
             "network", "context_window", "unknown_model", "cancelled", "other",
         ),
         "provider": STR,

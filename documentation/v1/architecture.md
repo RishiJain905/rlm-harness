@@ -350,14 +350,15 @@ rlmh eval ledger
 
 - **Without `--go`** it is an estimate and spends $0. It prints the planned runs, the price per run by size from the catalog and reference tokens, the total, and the cap.
 - **`--go`** spends. `--max-usd` is a hard stop, defaulting to 2× the estimate: once the gateway's billed cost passes it, no new run starts and the running ones are cancelled.
+- **Account stops (D-257).** A graded run that ends with an account kind (`ACCOUNT`: `no_credit`, `auth`, `no_key`) stops the eval the same way: no new run starts, the running ones are cancelled, every task not graded gets that kind, `eval.json`'s `account_stop` names it, and `rlmh eval --go` exits 1 and says what to fix. The account kinds are never transient.
 - **`--out`** defaults to `<home>/eval/out/<eval id>/`, with eval id `<set>-<split>-<YYYYMMDD-HHMMSS>`. Spend steps pass `--out` into the RLM repo's `results/harness-eval/`.
-- **`--rerun OUT`** reruns only the tasks in `OUT` that ended with a transient infra error, into `OUT/rerun/`. `report` and `compare` prefer the rerun lines.
+- **`--rerun OUT`** reruns only the tasks in `OUT` that ended with a transient infra error (`TRANSIENT`, never an account kind), into `OUT/rerun/`. `report` and `compare` prefer the rerun lines.
 - **`--sample K --seed S`** picks K tasks, stratified by track and size, the same K for the same seed. It is the probe subset of §7.5.
 
 ```
 <out>/
   eval.json        id, set name and folder, manifest hashes, split, task ids, models, profile, profile_hash, prompt_hash, call_format,
-                   jobs, harness version and commit, estimate, cap, capped, cost_usd, rerun_of, gpu_backend, started, finished
+                   jobs, harness version and commit, estimate, cap, capped, account_stop (D-257), cost_usd, rerun_of, gpu_backend, started, finished
   runs.jsonl       the engine's run log (logDir = <out>)
   grades.jsonl     one line per task: id, track, kind, size, split, run_id, submitted, infra_kind, pass, score, f2p_share,
                    test_tamper, leak_suspect, turns, subcalls, compactions, cost_usd, cache_hit, input_tokens, cache_read_tokens,
@@ -525,8 +526,10 @@ Per round *r* (incumbent = `--base` at round 1):
    - and its mean cost is at most 1.5× the incumbent's (D-173).
 6. **Reflect.** The reflector session writes at most one lesson to `<out>/library/`.
 
+An account kind (D-257: `no_credit`, `auth` or `no_key`) from any eval of the round (probe, composed or rerun) or any session ends the tune at once with `stopped: "error"`: no later stage, no rerun, no verdict and no library entry for that round. `tune.json` records `account_stop` (the kind) and `stop_reason`, and `rlmh tune` exits 1 and says what to fix.
+
 The output folder `<out>/` holds:
-- `tune.json`, with every stage's profile hash, decision, pass counts and cost;
+- `tune.json`, with every stage's profile hash, decision, pass counts and cost, and `stopped`, `budget_stop`, `account_stop` and `stop_reason`;
 - `rounds/<r>/{evidence-*/, sessions/, evals/}`;
 - `library/`;
 - `final/`, a copy of the last incumbent's folder.

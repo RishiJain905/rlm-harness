@@ -108,7 +108,7 @@ describe("rlmh eval --go", () => {
       expect(tasks["fx-python-S-02"]).toMatchObject({ pass: false, f2p_share: 0 });
       expect(tasks["fx-search-R-01"]).toMatchObject({ pass: true, score: 1 });
       expect(tasks["fx-research-R-01"]).toMatchObject({ pass: false });
-      expect(lines[lines.length - 1]).toEqual({ type: "eval.finished", runs: 4, passed: 2, infra: 0, cost_usd: 0, capped: false, out });
+      expect(lines[lines.length - 1]).toEqual({ type: "eval.finished", runs: 4, passed: 2, infra: 0, cost_usd: 0, capped: false, account_stop: null, out });
       expect(lines.some((l) => l.type === "run.started")).toBe(true);
       for (const f of ["grades.jsonl", "report.json", "report.md", "eval.json", "runs.jsonl"]) expect(existsSync(join(out, f))).toBe(true);
       expect(records(join(out, "grades.jsonl")).every((l) => typeof l.track === "string")).toBe(true);
@@ -150,6 +150,30 @@ describe("rlmh eval --go", () => {
       expect(rep.stdout).toContain("## By track");
     },
     LONG,
+  );
+
+  test(
+    "out of credit (HTTP 402 → no_credit): no new task starts, eval.json says why, exit 1 (D-257)",
+    async () => {
+      const home = join(t.dir, "home-credit");
+      const out = join(t.dir, "out-credit");
+      const noCredit = t.script({ ...SCRIPT, errors: [{ role: "root", at: 1, kind: "no_credit", status: 402 }] });
+      const r = await rlmh(["eval", set, "--go", "--json", "--jobs", "1", "--only", "fx-search-R-01,fx-research-R-01", "--out", out, ...FAKE], { home, script: noCredit });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("the provider says the account is out of credit (no_credit)");
+      expect(r.stderr).toContain("Add credit, then run again.");
+      const lines = jsonLines(r.stdout);
+      const tasks = lines.filter((l) => l.type === "eval.task");
+      expect(tasks.map((l) => l.infra_kind)).toEqual(["no_credit", "no_credit"]);
+      expect(tasks.filter((l) => l.run_id !== null)).toHaveLength(1); // the second never started
+      expect(lines[lines.length - 1]).toMatchObject({ type: "eval.finished", infra: 2, account_stop: "no_credit" });
+      expect(JSON.parse(readFileSync(join(out, "eval.json"), "utf8"))).toMatchObject({ account_stop: "no_credit" });
+      // an account kind is not transient: --rerun finds nothing to rerun
+      const again = await rlmh(["eval", set, "--rerun", out, "--go"], { home, script });
+      expect(again.code).toBe(2);
+      expect(again.stderr).toContain("no task in");
+    },
+    REAL,
   );
 
   test(
@@ -411,6 +435,45 @@ describe("the pool's stops (stub session)", () => {
     expect(r.lines.map((l) => [l.id, l.infra_kind])).toEqual([["fx-search-R-01", null], ["fx-research-R-01", "capped"]]);
     expect(JSON.parse(readFileSync(join(t.dir, "out-cap", "eval.json"), "utf8"))).toMatchObject({ capped: true, cost_usd: 1 });
     expect(records(join(home, "eval", "ledger.jsonl"))[0]).toMatchObject({ runs: 1, cost_usd: 1 });
+  });
+
+  test("an account kind (D-257) stops the pool: the running run is cancelled, the rest get its kind", async () => {
+    const home = join(t.dir, "home-account");
+    const out = join(t.dir, "out-account");
+    const bus = new Bus<AppEvents>();
+    const started: string[] = [];
+    const cancelled: string[] = [];
+    const finish = (id: string, tag: string | null, kind: string | null) =>
+      bus.emit("engine.event", {
+        method: "run.finished",
+        params: {
+          run_id: id, tag, answer: kind === null ? 5 : null, submitted: kind === null, answer_valid: kind === null, turns: 1, subcalls: 0,
+          usage: { root: zero(), sub: zero() }, cost_usd: 0, infra_error: kind === null ? null : `${kind}: boom`, infra_kind: kind, wall_s: 0.01, log_path: "",
+          prompt_index: 0, open: false,
+        },
+      });
+    let n = 0;
+    const session: EvalSession = {
+      bus,
+      start: async (r) => {
+        const id = `r_${n++}`;
+        started.push(r.tag!);
+        if (id === "r_0") setTimeout(() => finish(id, r.tag ?? null, "no_credit"), 10); // the second waits to be cancelled
+        return { run_id: id, log_path: "" };
+      },
+      cancel: async (id) => {
+        cancelled.push(id);
+        finish(id, null, "cancelled");
+      },
+      close: async () => {},
+    };
+    const ids = ["fx-search-R-01", "fx-research-R-01"];
+    const r = await runEval({ ...base(out, home, ids, null), jobs: 2 }, { session, onInterrupt: () => () => {} });
+    expect(r.account_stop).toBe("no_credit");
+    expect(cancelled).toEqual(["r_1"]);
+    expect(started).toHaveLength(2);
+    expect(r.lines.map((l) => l.infra_kind)).toEqual(ids.map(() => "no_credit"));
+    expect(JSON.parse(readFileSync(join(out, "eval.json"), "utf8"))).toMatchObject({ account_stop: "no_credit", finished: expect.any(String) });
   });
 
   test("a grader that throws stops that task only; the ledger, eval.json and the reports are still written", async () => {

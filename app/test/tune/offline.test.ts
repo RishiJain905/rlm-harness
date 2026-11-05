@@ -1,7 +1,8 @@
 // KV cache: none
 // offline.ts: accept() on a table (D-173, D-209); with stub sessions and a stub runEval, a capped eval stops
 // the tune (tune.json and one ledger line written, nothing left installed), a composed-side server error is
-// rerun once and an auth one is not, and a round 2 whose estimate exceeds what is left doesn't start.
+// rerun once and an auth one is not, an account kind (no_credit, D-257) from an eval or a session ends the tune
+// with "error", and a round 2 whose estimate exceeds what is left doesn't start.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -73,8 +74,9 @@ interface Stub {
   started: StartRun[];
 }
 
-/** Sessions that read their stage.md and submit the scripted answer; each costs `usd`. */
-function stubSession(answers: Record<string, unknown>, usd = 0): Stub {
+/** Sessions that read their stage.md and submit the scripted answer; each costs `usd`. A stage in `infra` ends
+ *  with that infra kind instead. */
+function stubSession(answers: Record<string, unknown>, usd = 0, infra: Record<string, string> = {}): Stub {
   const bus = new Bus<AppEvents>();
   const started: StartRun[] = [];
   let n = 0;
@@ -93,6 +95,7 @@ function stubSession(answers: Record<string, unknown>, usd = 0): Stub {
             run_id: id, tag: r.tag ?? null, answer: JSON.stringify(answers[stage]), submitted: true, answer_valid: true, turns: 1, subcalls: 0,
             usage: { root: zero(), sub: zero() }, cost_usd: usd, infra_error: null, infra_kind: null, wall_s: 0, log_path: "", prompt_index: 0, open: false,
           };
+          if (infra[stage] !== undefined) Object.assign(f, { answer: null, submitted: false, answer_valid: false, infra_kind: infra[stage], infra_error: `${infra[stage]}: out of credit` });
           bus.emit("engine.event", { method: "run.finished", params: f });
         }, 5);
         return { run_id: id, log_path: "" };
@@ -121,15 +124,15 @@ function writeRef(dir: string, tasks: EvalTask[], o: Partial<GradeLine> = {}): s
 }
 
 /** A runEval stub: writes the output folder with the lines `make` gives. */
-function stubEval(make: (tasks: EvalTask[], profile: string, out: string) => { lines: GradeLine[]; capped?: boolean }, calls: string[] = []) {
+function stubEval(make: (tasks: EvalTask[], profile: string, out: string) => { lines: GradeLine[]; capped?: boolean; account_stop?: string }, calls: string[] = []) {
   return async (o: { tasks: EvalTask[]; profile: string; out: string }): Promise<EvalResult> => {
     calls.push(`${o.profile} ${o.out.replace(/\\/g, "/").split("/").slice(-2).join("/")}`);
-    const { lines, capped } = make(o.tasks, o.profile, o.out);
+    const { lines, capped, account_stop } = make(o.tasks, o.profile, o.out);
     mkdirSync(o.out, { recursive: true });
     writeFileSync(join(o.out, "grades.jsonl"), lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
     writeFileSync(join(o.out, "runs.jsonl"), lines.map((l) => `${JSON.stringify({ run_id: `r_${l.id}`, tag: l.id, mode: l.kind, submitted: true, answer: 1, turns: [], subcalls: [] })}\n`).join(""));
     writeFileSync(join(o.out, "eval.json"), "{}");
-    return { id: "e", out: o.out, lines, capped: capped ?? false, interrupted: false, aborted: false, cost_usd: lines.reduce((a, l) => a + l.cost_usd, 0), gpu_backend: null, engineExit: undefined };
+    return { id: "e", out: o.out, lines, capped: capped ?? false, interrupted: false, aborted: false, cost_usd: lines.reduce((a, l) => a + l.cost_usd, 0), gpu_backend: null, engineExit: undefined, account_stop: account_stop ?? null };
   };
 }
 
@@ -200,6 +203,67 @@ describe("runTune (stubs)", () => {
       onInterrupt: () => () => {},
     });
     expect(reruns).toEqual([[tasks[0]!.id]]);
+  });
+
+  test("a probe eval out of credit (D-257) stops the tune: stopped error, no composer, no verdict, nothing installed", async () => {
+    const home = join(t.dir, "home-credit");
+    const out = join(t.dir, "out-credit");
+    const from = writeRef(join(t.dir, "ref-credit"), tuneTasks());
+    const calls: string[] = [];
+    const s = stubSession(ANSWERS);
+    const r = await runTune(options(home, out, from, { rounds: 2 }), {
+      session: s.session,
+      runEval: stubEval((tasks) => ({ lines: tasks.map((x) => line(x.id, { infra_kind: "no_credit" })), account_stop: "no_credit" }), calls) as never,
+      onInterrupt: () => () => {},
+    });
+    expect(r).toMatchObject({ stopped: "error", account_stop: "no_credit", accepted_rounds: [] });
+    expect(r.stop_reason).toContain("out of credit");
+    expect(r.stop_reason).toContain("Add credit, then run again.");
+    expect(calls).toEqual(["tuned-r1-inv evals/inv"]);
+    expect(s.started.map((x) => x.tag!.split("-").pop()).sort()).toEqual(["dom", "inv"]);
+    const j = JSON.parse(readFileSync(join(out, "tune.json"), "utf8"));
+    expect(j).toMatchObject({ stopped: "error", account_stop: "no_credit", stop_reason: r.stop_reason });
+    expect(j.rounds).toHaveLength(1);
+    expect(j.rounds[0].accept).toBeUndefined();
+    expect(j.rounds[0].result).toBeUndefined();
+    expect(existsSync(join(out, "library"))).toBe(false);
+    expect(existsSync(join(home, "profiles")) ? readdirSync(join(home, "profiles")) : []).toEqual([]);
+  });
+
+  test("an editor session out of credit stops the tune before any probe, with one attempt only", async () => {
+    const home = join(t.dir, "home-credit-s");
+    const out = join(t.dir, "out-credit-s");
+    const from = writeRef(join(t.dir, "ref-credit-s"), tuneTasks());
+    const calls: string[] = [];
+    const s = stubSession(ANSWERS, 0, { inv: "no_credit" });
+    const r = await runTune(options(home, out, from), { session: s.session, runEval: stubEval((ts) => ({ lines: ts.map((x) => line(x.id)) }), calls) as never, onInterrupt: () => () => {} });
+    expect(r).toMatchObject({ stopped: "error", account_stop: "no_credit" });
+    expect(calls).toEqual([]);
+    expect(s.started.filter((x) => x.tag!.endsWith("inv"))).toHaveLength(1);
+    expect(s.started.some((x) => x.tag!.endsWith("compose"))).toBe(false);
+  });
+
+  test("a composed eval out of credit is not rerun and gets no verdict", async () => {
+    const home = join(t.dir, "home-credit-c");
+    const out = join(t.dir, "out-credit-c");
+    const from = writeRef(join(t.dir, "ref-credit-c"), tuneTasks());
+    const calls: string[] = [];
+    const s = stubSession(ANSWERS);
+    const r = await runTune(options(home, out, from), {
+      session: s.session,
+      runEval: stubEval(
+        (ts, _p, o) =>
+          o.replace(/\\/g, "/").endsWith("evals/composed") ? { lines: ts.map((x) => line(x.id, { infra_kind: "no_credit" })), account_stop: "no_credit" } : { lines: ts.map((x) => line(x.id)) },
+        calls,
+      ) as never,
+      onInterrupt: () => () => {},
+    });
+    expect(r.stopped).toBe("error");
+    expect(calls).toEqual(["tuned-r1-inv evals/inv", "tuned-r1 evals/composed"]);
+    expect(s.started.some((x) => x.tag!.endsWith("reflect"))).toBe(false);
+    const j = JSON.parse(readFileSync(join(out, "tune.json"), "utf8"));
+    expect(j.rounds[0].accept).toBeUndefined();
+    expect(j.rounds[0].library_entry).toBeUndefined();
   });
 
   test("round 2 whose estimate exceeds what is left doesn't start: budget_stop 2, exit-worthy null stop", async () => {
