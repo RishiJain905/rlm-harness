@@ -75,6 +75,7 @@ export function addEntry(root: string, domain: string, id: string, entry: Librar
     ["EXPERIENCE.md", text],
     ["harness/profile.toml", readFileSync(join(harness, "profile.toml"), "utf8")],
     ["harness/guidance.md", readFileSync(join(harness, "guidance.md"), "utf8")],
+    ...(existsSync(join(harness, "system.md")) ? ([["harness/system.md", readFileSync(join(harness, "system.md"), "utf8")]] as [string, string][]) : []),
   ];
   for (const [name, body] of files) {
     const m = GRADE_MARKERS.find((x) => body.includes(x) || name.includes(x));

@@ -215,6 +215,7 @@ FIELDS = {
                     {
                         "name": STR,
                         "source": enum("builtin", "user"),
+                        "contract": enum("v4", "rlmh-1"),  # the profile's own contract (D-256)
                         "prompt_hash": STR,
                         "profile_hash": STR,
                         "agent_api": BOOL,

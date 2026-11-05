@@ -1,7 +1,9 @@
 """KV cache: builds the system prompt and limits from files; a profile is read once per run and its text is fixed from then on. Skills, scripts and agents never enter the system prompt: `skill()` prints a skill into the REPL output, scripts are imported in the REPL, and an agent's text is a sub-call's own system message, the same bytes on every call (v1 step 6).
 
 A profile is a folder holding `profile.toml` and an optional guidance file appended to the system prompt
-(v0-design § Profiles). Built-ins live next to this file; user profiles in `<home>/profiles/<name>`, and a
+(v0-design § Profiles). Its `contract` picks the texts (D-256): "v4" is training's prompt v4, byte for byte, for
+`training-v4` and copies of the old default; "rlmh-1" is rlmh's own (rlmhcontract.py), whose system prompt is the
+profile's own `system` file, then the guidance. Built-ins live next to this file; user profiles in `<home>/profiles/<name>`, and a
 built-in wins over a user profile of the same name (D-34). Each mode table starts from training's v4 limits and
 replaces only the keys it lists (D-09), so `training-v4` hashes to `contract.TRAINING_HASH`. Files are read as
 bytes with CRLF turned into LF before decoding, so a Windows checkout gives the same prompts and hashes (D-43).
@@ -26,13 +28,13 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from . import contract
+from . import contract, rlmhcontract
 from .worker import agentapi, codeapi, tools
 
 BUILTIN_DIR = Path(__file__).resolve().parent / "profiles"
 
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-_TOP_KEYS = ("contract", "guidance", "cache_api", "agent_api", "rlm", "compaction", "root", "sub", "read", "repo")
+_TOP_KEYS = ("contract", "system", "guidance", "cache_api", "agent_api", "rlm", "compaction", "root", "sub", "read", "repo")
 _LIMIT_FIELDS = tuple(f.name for f in dataclasses.fields(contract.Limits))
 _THINKING = {"off": None, **{t: t for t in ("minimal", "low", "medium", "high", "xhigh", "max")}}  # TOML has no null: off means none
 _OVERSIZE = ("truncate", "error")
@@ -74,6 +76,10 @@ FROZEN: tuple[str, ...] = (
     "rlm.max_depth", "compaction.reserve", "compaction.summary_max_tokens",
 )
 GUIDANCE_MAX_CHARS = 12_000
+SYSTEM_MAX_CHARS = 16_000  # a rlmh-1 profile's system.md (D-256)
+SYSTEM_FILE = "system.md"  # the system file a candidate may hold, as guidance.md is its guidance file
+SYSTEM_PLACEHOLDERS = ("shell",)  # the only {name} a system file may hold; system_prompt() fills it
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 # Skills and scripts (D-233, §7.2's starting figures)
 MAX_SKILLS = 16
 SKILL_MAX_CHARS = 8_000  # a whole SKILL.md, front matter included
@@ -203,27 +209,43 @@ class Profile:
     # every skill, script, agent and nudges.toml file, by its path in the folder with "/", LF-normalised: the bytes
     # the hash covers and a run copies (scripts)
     files: dict[str, bytes] = field(default_factory=dict)
+    contract: str = contract.CONTRACT_VERSION  # "v4" or "rlmh-1" (D-256)
+    system: str | None = None  # a rlmh-1 profile's system file, stripped, `{shell}` unfilled; None under v4
+
+    @property
+    def texts(self) -> rlmhcontract.Texts:
+        """The run's model-facing texts: prompt v4's or rlmh-1's (D-256)."""
+        return rlmhcontract.TEXTS[self.contract]
 
     def system_prompt(self, shell_name: str = "sh") -> str:
-        """Prompt v4, then the guidance block (if any) with every `{shell}` filled in."""
-        if not self.guidance:
-            return contract.SYSTEM_PROMPT_V4
-        return contract.SYSTEM_PROMPT_V4 + "\n\n" + self.guidance.replace("{shell}", shell_name)
+        """v4: prompt v4, then the guidance block (if any) with every `{shell}` filled in. rlmh-1: the system file, then
+        the guidance block (if any), `{shell}` filled in both."""
+        if self.contract == contract.CONTRACT_VERSION:
+            if not self.guidance:
+                return contract.SYSTEM_PROMPT_V4
+            return contract.SYSTEM_PROMPT_V4 + "\n\n" + self.guidance.replace("{shell}", shell_name)
+        parts = [self.system or ""] + ([self.guidance] if self.guidance else [])
+        return "\n\n".join(parts).replace("{shell}", shell_name)
 
     def prompt_hash(self) -> str:
-        """Training's hash over this profile's texts and limits. `{shell}` stays unfilled, so the hash is the same
-        on every machine; the run log's messages hold the filled text."""
-        texts = dict(contract.PROMPTS_V4)
+        """Training's hash method over this profile's texts and limits: prompt v4's texts under v4, rlmh-1's
+        (rlmhcontract.PROMPTS) under rlmh-1, with the system text and limits filled in. `{shell}` stays unfilled, so
+        the hash is the same on every machine; the run log's messages hold the filled text."""
+        if self.contract == contract.CONTRACT_VERSION:
+            texts = dict(contract.PROMPTS_V4)
+            texts["limits"] = json.dumps({"read": self.read.limits.as_dict(), "edit": self.repo.limits.as_dict()},
+                                         sort_keys=True)
+        else:
+            texts = dict(rlmhcontract.PROMPTS)
+            texts["limits"] = rlmhcontract.limits_text(self.read.limits, self.repo.limits)
         texts["system"] = self.system_prompt("{shell}")
-        texts["limits"] = json.dumps({"read": self.read.limits.as_dict(), "edit": self.repo.limits.as_dict()},
-                                     sort_keys=True)
         return contract.prompt_hash(texts)
 
     def profile_hash(self) -> str:
-        """sha256 of the LF-normalised profile.toml, a NUL byte, and the guidance file, then, for each skill, script,
-        agent or nudges.toml file in sorted path order, a NUL, its path with "/", a NUL and its bytes (v1 §7.2): the
-        bytes this profile was loaded from, so a file edited or deleted during a run doesn't change the hash its
-        record shows. A profile with none of those files hashes as before step 6."""
+        """sha256 of the LF-normalised profile.toml, a NUL byte, and the guidance file, then, for each system file
+        (rlmh-1, D-256), skill, script, agent or nudges.toml file in sorted path order, a NUL, its path with "/", a NUL
+        and its bytes (v1 §7.2): the bytes this profile was loaded from, so a file edited or deleted during a run
+        doesn't change the hash its record shows. A profile with none of those files hashes as before step 6."""
         return self.file_hash
 
     def script_files(self) -> dict[str, bytes]:
@@ -299,11 +321,14 @@ def _load(name: str, folder: Path, source: str) -> Profile:
             raise ProfileError(f"profile {name!r}: unknown key {key!r}")
     if "contract" not in data:
         raise ProfileError(f"profile {name!r}: missing key 'contract'")
-    if data["contract"] != contract.CONTRACT_VERSION:
-        raise ProfileError(f"profile {name!r}: contract must be {contract.CONTRACT_VERSION!r}, not {data['contract']!r}")
+    version = data["contract"]
+    if not isinstance(version, str) or version not in rlmhcontract.TEXTS:
+        allowed = " or ".join(repr(v) for v in rlmhcontract.TEXTS)
+        raise ProfileError(f"profile {name!r}: contract must be {allowed}, not {version!r}")
+    system, system_files = _system(name, folder, data, version)
     if data.get("agent_api") is True and data.get("cache_api") is not True:
         raise ProfileError(f"profile {name!r}: agent_api needs cache_api = true")  # it builds on cacheapi's llm (D-157)
-    guidance_path = _guidance_path(name, folder, data.get("guidance", ""))
+    guidance_path = _file_path(name, folder, "guidance", data.get("guidance", ""))
     guidance, guidance_bytes = "", b""
     if guidance_path:
         guidance_bytes = _read(name, guidance_path)
@@ -330,9 +355,33 @@ def _load(name: str, folder: Path, source: str) -> Profile:
         agent_api=agent_api,
         rlm=_rlm(name, data),
         compaction=compaction,
-        file_hash=_file_hash(toml_bytes, guidance_bytes, extras["files"]),
+        file_hash=_file_hash(toml_bytes, guidance_bytes, {**extras["files"], **system_files}),
+        contract=version,
+        system=system,
         **extras,
     )
+
+
+def _system(name: str, folder: Path, data: dict, version: str) -> tuple[str | None, dict[str, bytes]]:
+    """A rlmh-1 profile's system text (stripped) and {its path with "/": its bytes} for the hash; (None, {}) under v4,
+    which may not name one: prompt v4's system prompt is training's (D-256)."""
+    if version == contract.CONTRACT_VERSION:
+        if "system" in data:
+            raise ProfileError(f"profile {name!r}: system needs contract = \"{rlmhcontract.CONTRACT_VERSION}\"; "
+                               "prompt v4's system prompt is training's")
+        return None, {}
+    if "system" not in data:
+        raise ProfileError(f"profile {name!r}: contract {version!r} needs system = \"{SYSTEM_FILE}\", the file that "
+                           "holds its system prompt")
+    value = data["system"]
+    path = _file_path(name, folder, "system", value)
+    if path is None:
+        raise ProfileError(f"profile {name!r}: system must name the profile's system file, not \"\"")
+    raw = _read(name, path)
+    text = _decode(name, f"system file {value!r}", raw).strip()
+    if not text:
+        raise ProfileError(f"profile {name!r}: system file {value!r} is empty")
+    return text, {PureWindowsPath(value).as_posix(): raw}
 
 
 def _file_hash(toml_bytes: bytes, guidance_bytes: bytes, files: dict[str, bytes]) -> str:
@@ -484,18 +533,18 @@ def _parse(name: str, raw: bytes) -> dict:
         raise ProfileError(f"profile {name!r}: profile.toml is not valid TOML: {err}") from None
 
 
-def _guidance_path(name: str, folder: Path, value: object) -> Path | None:
-    """The guidance file inside the profile folder, or None for `""`."""
+def _file_path(name: str, folder: Path, key: str, value: object) -> Path | None:
+    """The guidance (or system) file inside the profile folder, or None for `""`."""
     if not isinstance(value, str):
-        raise ProfileError(f"profile {name!r}: guidance must be a file name or \"\"")
+        raise ProfileError(f"profile {name!r}: {key} must be a file name or \"\"")
     if not value:
         return None
     posix, windows = PurePosixPath(value), PureWindowsPath(value)
     if posix.is_absolute() or windows.is_absolute() or windows.drive or ".." in windows.parts:
-        raise ProfileError(f"profile {name!r}: guidance {value!r} must be a file inside the profile folder")
+        raise ProfileError(f"profile {name!r}: {key} {value!r} must be a file inside the profile folder")
     path = folder / value
     if not path.is_file():
-        raise ProfileError(f"profile {name!r}: guidance file {value!r} not found")
+        raise ProfileError(f"profile {name!r}: {key} file {value!r} not found")
     return path
 
 
@@ -608,9 +657,9 @@ def _limit(where: str, field: str, value: object) -> object:
 
 def effective(profile: Profile) -> dict[str, object]:
     """Every dotted key a profile.toml can set, with the value this profile runs with (defaults filled). A level
-    of `off` reads "off", and a profile without [compaction] has None for its four keys. `guidance` (the file name)
-    is left out: the text is compared on its own."""
-    out: dict[str, object] = {"contract": contract.CONTRACT_VERSION, "cache_api": profile.cache_api,
+    of `off` reads "off", and a profile without [compaction] has None for its four keys. `guidance` and `system` (the
+    file names) are left out: the texts are compared on their own."""
+    out: dict[str, object] = {"contract": profile.contract, "cache_api": profile.cache_api,
                               "agent_api": profile.agent_api, "root.temperature": profile.root_temperature,
                               "sub.temperature": profile.sub_temperature}
     for mode in ("read", "repo"):
@@ -629,12 +678,14 @@ def effective(profile: Profile) -> dict[str, object]:
 
 
 def changed(base: Profile, candidate: Profile) -> list[str]:
-    """profile.check's `changed`: the sorted dotted keys whose effective values differ, then "guidance" when the
-    text differs, then the sorted paths of skill, script, agent and nudges.toml files added, removed or changed."""
+    """profile.check's `changed`: the sorted dotted keys whose effective values differ, then "guidance" and "system"
+    (D-256) when that text differs, then the sorted paths of skill, script, agent and nudges.toml files added, removed or changed."""
     a, b = effective(base), effective(candidate)
     keys = sorted(k for k in set(a) | set(b) if _differs(a.get(k), b.get(k)))
     if base.guidance != candidate.guidance:
         keys.append("guidance")
+    if base.system != candidate.system:
+        keys.append("system")
     keys += sorted(p for p in set(base.files) | set(candidate.files) if base.files.get(p) != candidate.files.get(p))
     return keys
 
@@ -660,16 +711,25 @@ def check_tunable(base: Profile, candidate: Profile, gated: bool = False) -> lis
 
 
 def check_files(profile: Profile, gated: bool = False) -> list[str]:
-    """§7.2's rules for a candidate folder on its own: the guidance's size; every file UTF-8 with LF ends and no NUL,
-    and none but profile.toml, guidance.md, skills/<name>/SKILL.md, scripts/<name>.py and, with the gate,
-    agents/<name>/AGENT.md and nudges.toml; the skill, script, agent and nudge names, counts and sizes; every skill
-    (and agent) named in guidance.md; every scripts/<name>.py that guidance.md or a skill names present; every script
-    compiling and importing only the standard library. Never raises for anything in the folder."""
+    """§7.2's rules for a candidate folder on its own: the guidance's size and, under rlmh-1 (D-256), system.md's size
+    and placeholders; every file UTF-8 with LF ends and no NUL, and none but profile.toml, guidance.md, (rlmh-1)
+    system.md, skills/<name>/SKILL.md, scripts/<name>.py and, with the gate, agents/<name>/AGENT.md and nudges.toml;
+    the skill, script, agent and nudge names, counts and sizes; every skill named in guidance.md or system.md, and
+    every agent in guidance.md; every scripts/<name>.py that guidance.md, system.md or a skill names present; every
+    script compiling and importing only the standard library. Never raises for anything in the folder."""
     problems: list[str] = []
     gated = gated or GATED
     folder = profile.path
+    system = profile.system or ""
+    allowed = ("profile.toml", "guidance.md", SYSTEM_FILE) if profile.system is not None else ("profile.toml",
+                                                                                             "guidance.md")
     if len(profile.guidance) > GUIDANCE_MAX_CHARS:
         problems.append(f"guidance.md is {len(profile.guidance):,} characters: must be at most {GUIDANCE_MAX_CHARS:,}")
+    if len(system) > SYSTEM_MAX_CHARS:
+        problems.append(f"{SYSTEM_FILE} is {len(system):,} characters: must be at most {SYSTEM_MAX_CHARS:,}")
+    for placeholder in dict.fromkeys(_PLACEHOLDER_RE.findall(system)):
+        if placeholder not in SYSTEM_PLACEHOLDERS:
+            problems.append(f"{SYSTEM_FILE} holds {{{placeholder}}}: {{shell}} is the only placeholder")
     found: dict[str, dict[str, str]] = {"skill": {}, "script": {}, "agent": {}}  # name -> decoded text
     nudges_file = False
     for path in sorted((p for p in folder.rglob("*") if p.is_file()), key=lambda p: p.relative_to(folder).as_posix()):
@@ -685,7 +745,7 @@ def check_files(profile: Profile, gated: bool = False) -> list[str]:
                 problems.append(f"{rel}: agents/ and nudges.toml are behind the gate (D-234); only rlmh tune --gated "
                                 "may change them")
                 continue
-        elif kind is None and rel not in ("profile.toml", "guidance.md"):
+        elif kind is None and rel not in allowed:
             problems.append(f"{rel} is not a file a profile may hold")
             continue
         if b"\r" in raw:
@@ -702,8 +762,8 @@ def check_files(profile: Profile, gated: bool = False) -> list[str]:
         elif kind is not None:
             found[kind][_FILE_RES[kind].fullmatch(rel).group(1)] = text
     guidance = profile.guidance
-    problems += _skill_problems(found["skill"], profile, guidance)
-    problems += _script_problems(found["script"], found["skill"], guidance)
+    problems += _skill_problems(found["skill"], profile, guidance, profile.system)
+    problems += _script_problems(found["script"], found["skill"], guidance, profile.system)
     if gated:
         problems += _agent_problems(found["agent"], profile, guidance)
         if nudges_file:
@@ -711,7 +771,7 @@ def check_files(profile: Profile, gated: bool = False) -> list[str]:
     return problems
 
 
-def _skill_problems(skills: dict[str, str], profile: Profile, guidance: str) -> list[str]:
+def _skill_problems(skills: dict[str, str], profile: Profile, guidance: str, system: str | None = None) -> list[str]:
     problems = []
     if len(skills) > MAX_SKILLS:
         problems.append(f"{len(skills)} skills: at most {MAX_SKILLS}")
@@ -724,16 +784,21 @@ def _skill_problems(skills: dict[str, str], profile: Profile, guidance: str) -> 
         skill = profile.skills.get(name)
         if skill is not None and (not skill.description.strip() or "\n" in skill.description):
             problems.append(f"{rel} needs a one-line description in its front matter")
-        if name not in guidance:
+        if system is None and name not in guidance:
             problems.append(f"skill {name!r} is not named in guidance.md (its trigger line)")
+        elif system is not None and name not in guidance and name not in system:  # either file holds its trigger line
+            problems.append(f"skill {name!r} is not named in guidance.md or {SYSTEM_FILE} (its trigger line)")
     return problems
 
 
-def _script_problems(scripts: dict[str, str], skills: dict[str, str], guidance: str) -> list[str]:
+def _script_problems(scripts: dict[str, str], skills: dict[str, str], guidance: str,
+                     system: str | None = None) -> list[str]:
     problems = []
     if len(scripts) > MAX_SCRIPTS:
         problems.append(f"{len(scripts)} scripts: at most {MAX_SCRIPTS}")
-    for where, text in (("guidance.md", guidance), *((f"skills/{n}/SKILL.md", t) for n, t in skills.items())):
+    named = [("guidance.md", guidance), *([(SYSTEM_FILE, system)] if system is not None else []),
+             *((f"skills/{n}/SKILL.md", t) for n, t in skills.items())]
+    for where, text in named:
         for name in dict.fromkeys(_NAMED_SCRIPT_RE.findall(text)):
             if name not in scripts:
                 problems.append(f"{where} names scripts/{name}.py, which the profile does not hold")

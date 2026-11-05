@@ -18,6 +18,8 @@ describe("parseSubmission", () => {
     expect(parseSubmission("inv", JSON.stringify(editor))).toMatchObject({ ok: true, value: { decision: "EDIT", files: {} } });
     expect(parseSubmission("inv", JSON.stringify({ ...editor, files: { "skills/a/SKILL.md": "x", "scripts/b.py": null } })).ok).toBe(true);
     expect(parseSubmission("dom", JSON.stringify({ ...editor, toml: {} })).ok).toBe(true);
+    expect(parseSubmission("inv", JSON.stringify({ ...editor, system: "You are a model.\n" }))).toMatchObject({ ok: true, value: { system: "You are a model.\n" } });
+    expect(parseSubmission("inv", JSON.stringify(editor))).toMatchObject({ ok: true, value: { system: null } });
     expect(parseSubmission("compose", JSON.stringify({ decision: "ADOPT", adopt: "inv", notes: [], guidance: null, toml: {}, files: {} }))).toMatchObject({ ok: true, value: { adopt: "inv" } });
     expect(parseSubmission("compose", JSON.stringify({ decision: "MERGE", adopt: null, notes: ["kept -> x -> y"], guidance: "g\n", toml: {} })).ok).toBe(true);
     expect(parseSubmission("reflect", JSON.stringify({ domain: "read", entry: "NO_ENTRY", edits: [] })).ok).toBe(true);
@@ -39,6 +41,7 @@ describe("parseSubmission", () => {
     bad("inv", JSON.stringify({ ...editor, notes: ["the f2p_share went up"] }), "f2p_share");
     bad("inv", JSON.stringify({ ...editor, files: { "skills/a/SKILL.md": 3 } }), "the file's text or null");
     bad("inv", JSON.stringify({ ...editor, files: { "../x": "y" } }), "..");
+    bad("inv", JSON.stringify({ ...editor, system: 3 }), "system must be");
   });
 });
 
@@ -66,7 +69,7 @@ beforeAll(async () => {
   const info = await probe.info();
   await probe.close();
   const def = info.profiles.find((p) => p.name === "default")!;
-  for (const f of ["profile.toml", "guidance.md"]) writeFileSync(join(harness, f), readFileSync(join(def.path, f)));
+  for (const f of ["profile.toml", "guidance.md", "system.md"]) writeFileSync(join(harness, f), readFileSync(join(def.path, f)));
 }, REAL);
 
 async function stage(scriptPath: string, label: string) {

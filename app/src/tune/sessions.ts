@@ -76,6 +76,7 @@ function markerIn(value: unknown): string | null {
 
 function editFields(o: Record<string, unknown>, errors: string[], gated: boolean): ProfileEdit {
   if (!(o.guidance === null || typeof o.guidance === "string")) errors.push("guidance must be the whole new text or null");
+  if (!(o.system === undefined || o.system === null || typeof o.system === "string")) errors.push("system must be the whole new system.md or null");
   if (!isObj(o.toml)) errors.push('toml must be an object of "<table>.<key>": value');
   else {
     for (const [k, v] of Object.entries(o.toml)) {
@@ -95,7 +96,7 @@ function editFields(o: Record<string, unknown>, errors: string[], gated: boolean
       files = o.files as Record<string, string | null>;
     }
   }
-  return { guidance: (o.guidance ?? null) as string | null, toml: (isObj(o.toml) ? o.toml : {}) as Record<string, unknown>, files };
+  return { guidance: (o.guidance ?? null) as string | null, system: (o.system ?? null) as string | null, toml: (isObj(o.toml) ? o.toml : {}) as Record<string, unknown>, files };
 }
 
 /** Parses a session's `answer` (a JSON string) into its stage's shape, or lists what is wrong. */

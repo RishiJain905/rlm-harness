@@ -150,6 +150,7 @@ test(
     mkdirSync(folder, { recursive: true });
     writeFileSync(join(folder, "profile.toml"), toml);
     copyFileSync(join(builtin, "guidance.md"), join(folder, "guidance.md"));
+    copyFileSync(join(builtin, "system.md"), join(folder, "system.md")); // D-256: default's contract is rlmh-1
     const cells = Array.from({ length: 10 }, (_, i) => ({ text: "", tool_call: { code: `print('${String.fromCharCode(97 + i)}' * 3000)` } }));
     const script = t.script({ root: [...cells, { text: "", tool_call: { code: "submit('42')" } }], compact: [{ text: "SUMMARY of the work so far." }] });
     const r = await rlmh(read("--profile", "compact-test"), { home, script });

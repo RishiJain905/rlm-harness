@@ -206,6 +206,7 @@ const FIELDS: Record<string, Spec> = {
       obj({
         name: "str",
         source: oneOf("builtin", "user"),
+        contract: oneOf("v4", "rlmh-1"),
         prompt_hash: "str",
         profile_hash: "str",
         agent_api: "bool",

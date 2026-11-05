@@ -1,8 +1,9 @@
 """KV cache: none
 
-profiles.py and the two built-ins: `training-v4` hashes to training's value, `default` is that plus its guidance
-block and nothing else, and user profiles are validated, normalised and never shadow a built-in. Every test uses
-`tmp_path` as the home.
+profiles.py and the two built-ins: `training-v4` hashes to training's value, `default` is rlmh-1 (D-256): its own
+system.md, then its guidance block, over training's base limits with D-152's changes, and user profiles are
+validated, normalised and never shadow a built-in. Every test uses `tmp_path` as the home. test_rlmhcontract.py has
+the contract rules themselves.
 """
 
 from __future__ import annotations
@@ -57,17 +58,21 @@ def test_training_v4_is_training(tmp_path: Path) -> None:
     assert training.system_prompt("PowerShell") == contract.SYSTEM_PROMPT_V4
 
 
-def test_default_differs_by_guidance_and_limits(tmp_path: Path) -> None:
+def test_default_differs_by_contract_and_limits(tmp_path: Path) -> None:
     training = builtin("training-v4", tmp_path)
     default = builtin("default", tmp_path)
+    assert (training.contract, default.contract) == ("v4", "rlmh-1")  # D-256
     # D-152: more turns and output tokens; every other limit, and the pacing line, are training's
     more = {"root_max_tokens": 16384, "subcall_max_tokens": 16384}
     assert default.read.limits == dataclasses.replace(training.read.limits, max_turns=50, **more)
     assert default.repo.limits == dataclasses.replace(training.repo.limits, max_turns=150, **more)
     assert (default.read.pace_nudge, default.repo.pace_nudge) == (training.read.pace_nudge, training.repo.pace_nudge)
     assert (default.root_temperature, default.sub_temperature) == (training.root_temperature, training.sub_temperature)
-    assert default.guidance
-    assert default.system_prompt("sh") == training.system_prompt("sh") + "\n\n" + default.guidance.replace("{shell}", "sh")
+    assert default.guidance and default.system
+    system = (p.BUILTIN_DIR / "default" / "system.md").read_text(encoding="utf-8").strip()
+    assert default.system == system
+    assert default.system_prompt("sh") == (system + "\n\n" + default.guidance).replace("{shell}", "sh")
+    assert contract.SYSTEM_PROMPT_V4 not in default.system_prompt("sh")  # rlmh-1 shares no text with prompt v4
     assert default.prompt_hash() != training.prompt_hash()
     limits = json.dumps({"read": training.read.limits.as_dict(), "edit": training.repo.limits.as_dict()}, sort_keys=True)
     assert contract.prompt_hash(dict(contract.PROMPTS_V4, limits=limits)) == contract.TRAINING_HASH
@@ -79,13 +84,18 @@ def test_default_differs_by_guidance_and_limits(tmp_path: Path) -> None:
 
 def test_default_guidance_text() -> None:
     raw = (p.BUILTIN_DIR / "default" / "guidance.md").read_bytes()
-    assert b"\r\n" not in raw and not raw.startswith(b"\xef\xbb\xbf") and raw.endswith(b"\n")
-    text = raw.decode("utf-8")
+    system_raw = (p.BUILTIN_DIR / "default" / "system.md").read_bytes()
+    for data in (raw, system_raw):
+        assert b"\r\n" not in data and not data.startswith(b"\xef\xbb\xbf") and data.endswith(b"\n")
+    text, system = raw.decode("utf-8"), system_raw.decode("utf-8")
     assert len(text.splitlines()) <= 30  # D-162: the delegation notes doubled it; D-251 put the reading recipe first
     assert text.startswith("Reading tasks") and "scan(" in text  # D-251
-    assert "fetch(url) -> str" in text and "200,000" in text and "{shell}" in text
-    for name in ("ask_files(", "schema=", "llm_async", "gather(", "rlm(", "outline(", "check(", "review("):
-        assert name in text, name
+    # D-256: the REPL reference moved into system.md, and prompt v4's workarounds left the guidance
+    assert "fetch(url) -> str" in system and "200,000" in system and "{shell}" in system
+    assert "There is no network" not in text + system and "/work/repo" not in text + system
+    for name in ("ask_files(", "schema=", "llm_async", "gather(", "rlm(", "outline(", "check(", "review(", "scan(",
+                 "segments(", "submit("):
+        assert name in system, name
 
 
 def test_profile_hash(tmp_path: Path) -> None:
@@ -93,8 +103,9 @@ def test_profile_hash(tmp_path: Path) -> None:
     assert default.profile_hash() == default.profile_hash()
     src = p.BUILTIN_DIR / "default"
     toml, guidance = (src / "profile.toml").read_bytes(), (src / "guidance.md").read_bytes()
+    system = (src / "system.md").read_bytes()
 
-    copy = user_profile(tmp_path, "copy", toml, {"guidance.md": guidance})
+    copy = user_profile(tmp_path, "copy", toml, {"guidance.md": guidance, "system.md": system})
     mine = p.load_profile("copy", tmp_path)
     assert mine.profile_hash() == default.profile_hash()  # names and folders are not hashed, only bytes
     # A loaded profile keeps the hash of the bytes it was loaded from: an edit or a deletion during a run doesn't
@@ -103,14 +114,19 @@ def test_profile_hash(tmp_path: Path) -> None:
     assert mine.profile_hash() == default.profile_hash()
     assert p.load_profile("copy", tmp_path).profile_hash() != default.profile_hash()
     (copy / "guidance.md").write_bytes(guidance)
+    (copy / "system.md").write_bytes(system + b"x")
+    assert p.load_profile("copy", tmp_path).profile_hash() != default.profile_hash()
+    (copy / "system.md").write_bytes(system)
     assert b"max_turns = 50" in toml
     (copy / "profile.toml").write_bytes(toml.replace(b"max_turns = 50", b"max_turns = 51"))
     assert p.load_profile("copy", tmp_path).profile_hash() != default.profile_hash()
     (copy / "profile.toml").unlink()
     (copy / "guidance.md").unlink()
+    (copy / "system.md").unlink()
     assert mine.profile_hash() == default.profile_hash()
 
-    user_profile(tmp_path, "crlf", toml.replace(b"\n", b"\r\n"), {"guidance.md": guidance.replace(b"\n", b"\r\n")})
+    user_profile(tmp_path, "crlf", toml.replace(b"\n", b"\r\n"), {"guidance.md": guidance.replace(b"\n", b"\r\n"),
+                                                                   "system.md": system.replace(b"\n", b"\r\n")})
     windows = p.load_profile("crlf", tmp_path)
     assert windows.profile_hash() == default.profile_hash()
     assert windows.system_prompt("sh") == default.system_prompt("sh")
@@ -262,26 +278,31 @@ def test_contract_info(tmp_path: Path) -> None:
         ("default", "builtin"), ("training-v4", "builtin"), ("mine", "user"),
     ]
     for entry in info["profiles"]:
-        assert list(entry) == ["name", "source", "prompt_hash", "profile_hash", "agent_api", "limits", "path"]
+        assert list(entry) == ["name", "source", "contract", "prompt_hash", "profile_hash", "agent_api", "limits",
+                               "path"]
         assert HEX64.fullmatch(entry["prompt_hash"]) and HEX64.fullmatch(entry["profile_hash"])
         profile = p.load_profile(entry["name"], tmp_path)
         assert Path(entry["path"]).is_absolute() and Path(entry["path"]) == Path(os.path.abspath(profile.path))  # D-208
         assert entry["agent_api"] is profile.agent_api
+        assert entry["contract"] == profile.contract  # D-256
         # v1 step 2 (D-198): each mode's limits, as the run would get them
         assert entry["limits"] == {"read": profile.read.limits.as_dict(), "repo": profile.repo.limits.as_dict()}
     training = next(x for x in info["profiles"] if x["name"] == "training-v4")
     assert training["prompt_hash"] == info["training_hash"]
-    assert training["agent_api"] is False
+    assert training["agent_api"] is False and training["contract"] == "v4"
     assert training["limits"]["repo"]["max_turns"] == 30 and training["limits"]["repo"]["root_max_tokens"] == 4096
     default = next(x for x in info["profiles"] if x["name"] == "default")
     assert default["agent_api"] is True and default["limits"]["repo"]["max_turns"] == 150
+    assert default["contract"] == "rlmh-1"
+    assert next(x for x in info["profiles"] if x["name"] == "mine")["contract"] == "v4"
     json.dumps(info)  # it goes on the wire as it is
 
 
 # ---------------------------------------------------------------------------------------------- [compaction] (v1 step 3)
 
 COMPACTION = "[compaction]\nwindow = 262144\nkeep_ratio = 0.16\nreserve = 65536\nsummary_max_tokens = 8192\n"
-DEFAULT_PROMPT_HASH = "0345b73d048cf7d4c841c3be40d5285af90ed8a9073f2f0fc67684cdb8520091"  # D-251's guidance (v0.2.0's was b01b49ac…)
+# rlmh-1 with its system.md (D-256); D-251's v4 default was 0345b73d…, v0.2.0's b01b49ac…
+DEFAULT_PROMPT_HASH = "7037edaed42b880017eb658018849546540a4a8406036e68e7633cdb779a3632"
 TRAINING_PROFILE_HASH = "b5ffa4b69d4c260b53e740a24919f37c7c9254032b6e9e90edb016da1ad8fa59"
 
 

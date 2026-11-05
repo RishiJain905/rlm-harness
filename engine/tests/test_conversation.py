@@ -56,6 +56,7 @@ def convo_profile(home: Path, name: str = PROFILE, **read: object) -> str:
     folder.mkdir(parents=True)
     (folder / "profile.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
     shutil.copyfile(BUILTIN_DIR / "default" / "guidance.md", folder / "guidance.md")
+    shutil.copyfile(BUILTIN_DIR / "default" / "system.md", folder / "system.md")  # rlmh-1 (D-256)
     return name
 
 
@@ -237,9 +238,9 @@ def test_budgets_start_over(home: Path) -> None:
     assert [f["subcalls"] for f in app.sent("run.finished")] == [3, 5]
     assert max(c["subcall_id"] for c in r0["subcalls"] + r1["subcalls"]) == 8  # the run's total
     obs = [r["messages"][-1]["content"] for r in roots(app)]
-    assert obs[1].endswith("(5 turns left, 2 sub-calls left)")
+    assert obs[1].endswith("[5 turns and 2 sub-calls left]")  # rlmh-1's counters (D-256)
     assert obs[2].endswith(follow("five more", subcalls_left=5))
-    assert obs[3].endswith("(5 turns left, 0 sub-calls left)")
+    assert obs[3].endswith("[5 turns and 0 sub-calls left]")
     assert {e["subcalls_left"] for e in app.sent("run.budget")} >= {2, 0}
 
 

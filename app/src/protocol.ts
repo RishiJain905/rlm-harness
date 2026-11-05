@@ -131,6 +131,8 @@ export interface ProfileInfo {
   limits: { read: ProfileLimits; repo: ProfileLimits };
   /** v1 step 6 (D-208): the folder the engine loaded the profile from, absolute. */
   path: string;
+  /** D-256: the profile's contract, "v4" (training's prompt, frozen) or "rlmh-1" (rlmh's own, with system.md). */
+  contract: string;
 }
 
 /** v1 step 6: `profile.check` (architecture §3.1). `gated` is D-234's. */

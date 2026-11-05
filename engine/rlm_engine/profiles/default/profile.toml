@@ -1,4 +1,5 @@
-contract = "v4"
+contract = "rlmh-1"           # rlmh's own texts (rlmhcontract.py); prompt v4 stays training-v4's (D-256)
+system = "system.md"          # the system prompt; guidance.md follows it
 guidance = "guidance.md"
 cache_api = true              # cache-shaped sub-calls: segments(), llm(..., over=), llm_batch(..., shared=, over=) (D-119)
 agent_api = true              # ask_files, schema=, llm_async, rlm, review, check, outline (D-157 to D-162)
@@ -20,7 +21,7 @@ keep_ratio = 0.16         # DeepSeek Harness: keep the newest 16% of (W' - out) 
 reserve = 65536           # DeepSeek Harness's margin
 summary_max_tokens = 8192
 
-[read]                        # contract.READ_LIMITS_V4 with more turns and output tokens (D-152)
+[read]                        # the base read limits (prompt v4's READ_LIMITS_V4, D-256) with more turns and output tokens (D-152)
 max_turns = 50
 max_subcalls = 80
 root_max_tokens = 16384
@@ -31,7 +32,7 @@ subcall_max_tokens = 16384
 subcall_oversize = "error"
 submit_check = 0.5            # hold a first submit() resting on under half of `context`, once (D-251)
 
-[repo]                        # contract.EDIT_LIMITS_V4 with more turns and output tokens (D-152)
+[repo]                        # the base repo limits (prompt v4's EDIT_LIMITS_V4, D-256) with more turns and output tokens (D-152)
 max_turns = 150
 max_subcalls = 80
 root_max_tokens = 16384

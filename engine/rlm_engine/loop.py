@@ -36,6 +36,7 @@ from .child import Children
 from .errors import InfraError, ModelError
 from .permissions import Permissions
 from .profiles import Profile
+from .rlmhcontract import Texts
 from .runlog import FORMAT_VERSION, RunLog
 from .worker.manager import CellResult, Worker, segment_chars
 
@@ -153,11 +154,12 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
             base_tree = await _workspace_call(workspace.snapshot, spec.repo_path, scratch)
 
         system = spec.profile.system_prompt(shell.name)
+        texts = spec.profile.texts  # prompt v4's or rlmh-1's (D-256)
         if repo_mode:
-            first = contract.edit_first_message(spec.task, language=spec.language, n_files=spec.n_files,
+            first = texts.edit_first_message(spec.task, language=spec.language, n_files=spec.n_files,
                                                 test_hint=spec.test_hint, limits=limits)
         else:
-            first = contract.first_user_message(spec.question, spec.context, limits)
+            first = texts.first_user_message(spec.question, spec.context, limits)
         messages = [{"role": "system", "content": system}, {"role": "user", "content": first}]
 
         perms = Permissions(run_id=spec.run_id, mode=spec.permission_mode, workspace=workspace_path, scratch=scratch,
@@ -174,7 +176,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
             init_extra = children.init_extra(mode=spec.mode, task=spec.task, tool_names=None,
                                              input_files=spec.input_spans or [Path(p).as_posix() for p in spec.inputs])
         worker = worker_factory(mode=spec.mode, context=spec.context, workspace=workspace_path, scratch=scratch,
-                                limits=limits, messages=contract.cell_messages(limits, edit=repo_mode),
+                                limits=limits, messages=texts.cell_messages(limits, repo_mode),
                                 on_request=bridge.handle, shell=shell, base_tree=base_tree,
                                 cache_api=spec.profile.cache_api,
                                 **({"init_extra": init_extra, "wall_cap_s": AGENT_WALL_CAP_S} if init_extra else {}))
@@ -182,7 +184,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
         emit("run.started", {
             "tag": spec.tag, "mode": spec.mode, "profile": spec.profile.name,
             "prompt_hash": spec.profile.prompt_hash(), "profile_hash": spec.profile.profile_hash(),
-            "contract_hash": contract.prompt_hash(contract.PROMPTS_V4), "call_format": spec.call_format,
+            "contract_hash": texts.contract_hash, "call_format": spec.call_format,
             "root": spec.root, "sub": spec.sub, "permission_mode": spec.permission_mode,
             "workspace": str(workspace_path), "input": _input_info(spec),
             "limits": {key: getattr(limits, key) for key in EVENT_LIMITS}, "log_path": str(spec.log_path),
@@ -257,7 +259,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
                 }
                 turns.append(entry)
 
-                result = CellResult("", 0, contract.no_code_error()) if code is None else await worker.run_cell(code)
+                result = CellResult("", 0, texts.no_code_error()) if code is None else await worker.run_cell(code)
                 _cap_output(result, limits.output_max_chars)
                 edited = edited or bool(result.repo_changed)
                 seen += len(result.stdout or "") + len(result.error or "")
@@ -268,7 +270,7 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
 
                 if bridge.infra_error:
                     infra_kind, infra_error = _infra(bridge.infra_kind or "other", bridge.infra_error)
-                    emit("run.cell", _cell_event(turn, code, result, None))
+                    emit("run.cell", _cell_event(turn, code, result, None, texts))
                     break
                 turns_left = limits.max_turns - index - 1
                 hold = None
@@ -281,19 +283,19 @@ async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker,
                         held, hold = (result.answer, result.answer_valid), submitcheck.note(**sizes)
                 if result.submitted and hold is None:
                     submitted, answer, answer_valid = True, result.answer, result.answer_valid
-                    emit("run.cell", _cell_event(turn, code, result, None))
+                    emit("run.cell", _cell_event(turn, code, result, None, texts))
                     break
                 if turns_left:
-                    pace = (contract.pace_message(turns_left, limits.max_turns, edited)
+                    pace = (texts.pace_message(turns_left, limits.max_turns, edited)
                             if repo_mode and mode_settings.pace_nudge else hold)
-                    entry["observation"] = contract.observation(result.stdout, result.stdout_chars, result.error,
+                    entry["observation"] = texts.observation(result.stdout, result.stdout_chars, result.error,
                                                                 turns_left, bridge.subcalls_left(),
                                                                 max_chars=limits.output_max_chars, pace=pace)
                     for hint in nudge_hints(spec.profile.nudges, fired, turn, result):
                         entry["observation"] += "\n" + hint
                     messages.append(callformat.observation_message(assistant, entry["observation"]))
                     chars_since += len(entry["observation"])
-                emit("run.cell", _cell_event(turn, code, result, entry["observation"]))
+                emit("run.cell", _cell_event(turn, code, result, entry["observation"], texts))
                 emit("run.budget", {"turns_left": turns_left, "subcalls_left": bridge.subcalls_left()})
 
             if held is not None and not submitted and infra_error is None:
@@ -466,15 +468,16 @@ def _cap_output(result: CellResult, max_chars: int) -> None:
         result.error = result.error[:2 * max_chars]  # the sandbox's own error cut, at this episode's cap
 
 
-def _shown(result: CellResult) -> str:
-    """`run.cell.output`: stdout as the model sees it, with the truncation note when the cell printed more."""
+def _shown(result: CellResult, texts: Texts) -> str:
+    """`run.cell.output`: stdout as the model sees it, with the contract's truncation note when the cell printed
+    more."""
     if result.stdout_chars > len(result.stdout):
-        return result.stdout + contract.OBS_TRUNCATED.format(n=result.stdout_chars - len(result.stdout))
+        return result.stdout + texts.truncated(result.stdout_chars - len(result.stdout))
     return result.stdout
 
 
-def _cell_event(turn: int, code: str | None, result: CellResult, observation: str | None) -> dict:
-    return {"turn": turn, "code": code, "output": _shown(result), "error": result.error, "observation": observation,
+def _cell_event(turn: int, code: str | None, result: CellResult, observation: str | None, texts: Texts) -> dict:
+    return {"turn": turn, "code": code, "output": _shown(result, texts), "error": result.error, "observation": observation,
             "seconds": round(result.compute_s, 3), "restarted": result.restarted, "crash": result.crash,
             "repo_changed": result.repo_changed}
 
@@ -556,8 +559,8 @@ def _record(spec: RunSpec, *, started_at: float, wall_s: float, limits: contract
         "batch": spec.batch,
         "harness_version": __version__,
         "protocol": PROTOCOL_VERSION,
-        "contract": contract.CONTRACT_VERSION,
-        "contract_hash": contract.prompt_hash(contract.PROMPTS_V4),
+        "contract": spec.profile.texts.version,
+        "contract_hash": spec.profile.texts.contract_hash,
         "prompt_hash": spec.profile.prompt_hash(),
         "profile": spec.profile.name,
         "profile_hash": spec.profile.profile_hash(),

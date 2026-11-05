@@ -26,7 +26,7 @@ beforeAll(() => {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "profile.toml"), "[read]\nmax_turns = 50\n");
   writeFileSync(join(dir, "guidance.md"), "Be careful.\n");
-  base = { name: "mine", source: "user", prompt_hash: "p".repeat(64), profile_hash: "h".repeat(64), agent_api: true, limits: limits(), path: dir };
+  base = { name: "mine", source: "user", prompt_hash: "p".repeat(64), profile_hash: "h".repeat(64), agent_api: true, limits: limits(), path: dir, contract: "rlmh-1" };
 });
 afterAll(() => t.cleanup());
 

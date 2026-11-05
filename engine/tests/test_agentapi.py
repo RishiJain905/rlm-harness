@@ -307,6 +307,7 @@ def deep_profile(home: Path, **rlm: int):
     folder = home / "profiles" / name
     folder.mkdir(parents=True)
     (folder / "profile.toml").write_text(text, encoding="utf-8")
+    (folder / "system.md").write_bytes((BUILTIN_DIR / "default" / "system.md").read_bytes())  # rlmh-1 (D-256)
     return load_profile(name, home)
 
 

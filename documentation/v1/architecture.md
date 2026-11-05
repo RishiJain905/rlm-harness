@@ -54,6 +54,7 @@ rlm-harness/
   engine/rlm_engine/
     __init__.py                      +3 +10     PROTOCOL_VERSION 2 (step 3); __version__ "1.0.0" (step 10)
     compaction.py                    3          trigger, compact(), the two pinned texts (§4)
+    rlmhcontract.py                  D-256      rlmh-1's first messages, observations and cell notes (`Texts`, `V4`, `RLMH1`)
     loop.py                          +3 +4 +6   calls compaction before each root call; conversations (§5); nudges.toml rules (gated, §7.2)
     child.py                         +3 +6      calls compaction before each child turn; skills, scripts and agents in each child's worker init
     bridge.py                        +6         llm(…, agent=) and rlm(…, agent=) look up agents/<name>/AGENT.md (gated, §7.2)
@@ -65,6 +66,7 @@ rlm-harness/
     worker/worker.py                 +6         under agent_api, the run's copy of the profile's scripts/ goes on sys.path
     worker/agentapi.py               +6         skill(name); agent= on llm and rlm (gated)
     profiles/default/profile.toml    +3 +8      [compaction] (step 3); the tuned values (step 8)
+    profiles/default/system.md       D-256 +8   rlmh-1's system prompt, tunable; the tuned text (step 8)
     profiles/default/guidance.md     +8         the tuned text (step 8)
     profiles/default/skills/         8          the tuned skills, if step 7's final/ has any (step 8)
     profiles/default/scripts/        8          the tuned scripts, likewise; agents/ and nudges.toml too if step 7 kept them (D-234)
@@ -406,7 +408,7 @@ Read the paper and the code before building either step:
 
 | Harness² | v1 |
 |---|---|
-| The model is frozen and the harness evolves | Prompt v4, the call format and the one `python` tool are frozen (levers 1 and 2, S-14, S-09). `guidance.md`, the tunable TOML keys, skills and scripts evolve (levers 3 and 4, §7.2) |
+| The model is frozen and the harness evolves | The call format and the one `python` tool are frozen (S-09), and so is prompt v4 for `training-v4` (S-14). Since D-256 `default`'s system prompt is its own `system.md`, which evolves with `guidance.md`, the tunable TOML keys, skills and scripts (levers 3 and 4, §7.2) |
 | 8 harness components (C1–C8) | C1 to C4 are covered by `guidance.md`. Skills (C6) and scripts (C7) are tunable: `skills/<name>/SKILL.md`, printed by the REPL helper `skill(name)`, and `scripts/<name>.py`, imported in the REPL (D-233). Named subagents (C5) and declarative nudges (C8) are built behind a gate, off by default, and stay only if step 7 shows a tunable gain (D-234). Code plugins are out: tuned code in the engine's tool loop would run outside the worker's audit hooks |
 | Two scoped editors: INV ("how the agent works") and DOM ("what a practitioner knows") | The same two editors with the same scopes. INV may also change TOML limits; DOM changes text only |
 | Probe each candidate once | Probe each candidate on a fixed probe subset of the tune split (offline), or once on the task (online) |
@@ -423,6 +425,7 @@ Read the paper and the code before building either step:
 
 | Key | Bounds |
 |---|---|
+| `system.md` (rlmh-1 profiles, D-256) | at most 16,000 characters, UTF-8, LF line ends; `{shell}` the only placeholder; a v4 profile never has one |
 | `guidance.md` | at most 12,000 characters, UTF-8, LF line ends; `{shell}` stays the only placeholder |
 | `read.max_turns`, `repo.max_turns` | 10 to 200 |
 | `read.max_subcalls`, `repo.max_subcalls` | 10 to 200 |

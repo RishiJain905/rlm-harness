@@ -2,7 +2,7 @@
 Copyright 2026 Google LLC. Licensed under the Apache License, Version 2.0; see LICENSE-harness2 in this folder.
 Source: google-research/harness2, harness2/core/prompts.py L95-L177 (_SURFACE_OPENCODE's "# WHAT YOU CAN CHANGE"),
 commit 6868817518876de8fd170c6a8354daca273b6191.
-Changed by rlm-harness: rlm-harness's own surface, replacing _SURFACE_OPENCODE: the components are rlmh's
+Changed by rlm-harness: (D-256) system.md is a tunable file of rlmh-1 harnesses. Also: rlm-harness's own surface, replacing _SURFACE_OPENCODE: the components are rlmh's
 (guidance.md, profile.toml's tunable keys, skills/ and scripts/; v1 architecture §7.2, D-233), the tables are
 `profiles.TUNABLE`, `FROZEN` and the skill and script bounds (a test keeps them equal), subagents and plugins are
 left out (subagents are surface-gated.md's, plugins don't exist here), and the Jinja rule is dropped. harness2's
@@ -14,7 +14,8 @@ The harness is a folder of components. Each has a different runtime cost and a d
 
 | path | what it is | when it is in context |
 |---|---|---|
-| `guidance.md` | procedure, rules and durable facts, appended to the frozen system prompt | ALWAYS ON -- every token is in every turn, competing with the agent's own output budget |
+| `system.md` | the system prompt: role, the turn protocol, what the REPL holds, the standing rules | ALWAYS ON -- every token is in every turn, competing with the agent's own output budget |
+| `guidance.md` | working practice and durable facts, appended to the system prompt | ALWAYS ON -- same cost |
 | `profile.toml` | the run's limits | never in context: it shapes the run |
 | `skills/<name>/SKILL.md` | a reusable workflow | loaded ON DEMAND, only when the agent calls `skill("<name>")` in the REPL |
 | `scripts/<name>.py` | a deterministic helper, standard library only | imported ON DEMAND in the REPL with `import <name>` |
@@ -74,6 +75,7 @@ Frozen: `contract`, `cache_api`, `agent_api`, every `*_max_tokens`, `output_max_
 
 | file | bound |
 |---|---|
+| `system.md` | at most 16000 characters |
 | `guidance.md` | at most 12000 characters |
 | skills | at most 16 |
 | each `SKILL.md` | at most 8000 characters |
@@ -81,22 +83,27 @@ Frozen: `contract`, `cache_api`, `agent_api`, every `*_max_tokens`, `output_max_
 | each script | at most 16000 characters |
 
 Every file is UTF-8 with LF line ends, and the folder holds nothing else. A skill name matches
-`[a-z0-9][a-z0-9-]{0,47}`. `{shell}` in `guidance.md` is replaced with the machine's shell; no
-other placeholder exists.
+`[a-z0-9][a-z0-9-]{0,47}`. `{shell}` in `system.md` and `guidance.md` is replaced with the
+machine's shell; no other placeholder exists. A harness without `system.md` runs prompt v4,
+training's frozen system prompt: it never gains one.
+
+`system.md` is the most expensive file here and the easiest to break: every run reads all of it,
+and it names the REPL's helpers. Change it only for a rule that genuinely applies to every task,
+or to correct what it says about the REPL; keep every helper name exactly as the REPL has it.
 
 THREE RULES THAT DISCARD THE WHOLE PROPOSAL. Validation runs before any rollout, and a harness
 that fails it is thrown away entire.
 
 1. EVERY SKILL NEEDS A TRIGGER LINE -- the most violated rule here by a wide margin. If you
-   create or keep `skills/<name>/SKILL.md`, its name must appear VERBATIM in `guidance.md`, in
-   the SAME edit:
+   create or keep `skills/<name>/SKILL.md`, its name must appear VERBATIM in `guidance.md` or
+   `system.md`, in the SAME edit:
 
        When <the situation this skill handles>, call skill("<name>").
 
    An unnamed skill is never opened anyway: the line is what makes it exist.
 
 2. EVERY SCRIPT YOU NAME MUST EXIST. A `scripts/<name>.py` named in a SKILL.md or in
-   `guidance.md` must ship in the same proposal, at `scripts/<name>.py`; scripts live in that
+   `guidance.md` or `system.md` must ship in the same proposal, at `scripts/<name>.py`; scripts live in that
    one folder, never inside a skill's.
 
 3. EVERY SCRIPT IMPORTS ONLY THE STANDARD LIBRARY AND COMPILES. A script that imports anything

@@ -14,6 +14,8 @@ import { profilesDir } from "../paths.ts";
 export interface ProfileEdit {
   /** null keeps the base's text. */
   guidance: string | null;
+  /** The whole new system.md, or null (or absent) to keep the base's; only a rlmh-1 profile has one (D-256). */
+  system?: string | null;
   /** Dotted `<table>.<key>` to value. */
   toml: Record<string, unknown>;
   /** A path in the folder to its new text, or null to remove it. */
@@ -36,7 +38,7 @@ export function filePathProblem(path: string, gated = false): string | null {
   if (path.includes("\\")) return `${path}: use / in paths, not \\`;
   if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) return `${path}: an absolute path`;
   if (path.split("/").some((p) => p === ".." || p === "." || p === "")) return `${path}: .., . and empty parts aren't allowed`;
-  if (path === "profile.toml" || path === "guidance.md") return `${path}: change it through ${path === "profile.toml" ? "toml" : "guidance"}, not files`;
+  if (path === "profile.toml" || path === "guidance.md" || path === "system.md") return `${path}: change it through ${path === "profile.toml" ? "toml" : path === "guidance.md" ? "guidance" : "system"}, not files`;
   if (SKILL_PATH.test(path) || SCRIPT_PATH.test(path)) return null;
   if (AGENT_PATH.test(path) || path === "nudges.toml") return gated ? null : `${path}: agents/ and nudges.toml need --gated (D-234)`;
   return `${path}: only skills/<name>/SKILL.md and scripts/<name>.py${gated ? ", agents/<name>/AGENT.md and nudges.toml" : ""} may change`;
@@ -160,6 +162,12 @@ export function writeCandidate(dir: string, baseDir: string, edit: ProfileEdit, 
   writeFileSync(join(dir, "profile.toml"), lf(editToml(toml, edit.toml)));
   const guidance = edit.guidance ?? readFileSync(join(baseDir, "guidance.md"), "utf8");
   writeFileSync(join(dir, "guidance.md"), lf(guidance));
+  const hasSystem = existsSync(join(baseDir, "system.md"));
+  if (typeof edit.system === "string" && !hasSystem) {
+    rmSync(dir, { recursive: true, force: true });
+    throw new CandidateError("system: this profile's contract is prompt v4, whose system prompt is training's and never changes; leave system null");
+  }
+  if (hasSystem) writeFileSync(join(dir, "system.md"), lf(edit.system ?? readFileSync(join(baseDir, "system.md"), "utf8")));
   for (const name of extras(gated)) {
     const from = join(baseDir, name);
     if (existsSync(from)) cpSync(from, join(dir, name), { recursive: true, filter: (src) => !src.includes("__pycache__") && !src.endsWith(".pyc") });

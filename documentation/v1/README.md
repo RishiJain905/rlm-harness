@@ -61,7 +61,7 @@ Steps 6, 7 and 9 follow the paper and Google's code as closely as our frozen con
 ## Repo rules
 
 - **This repo is public.** Never commit keys, transcripts, gold answers, task data, eval sets or run logs. Eval sets live in `RLM_DATA_DIR` (`D:\RLM-data\harness-eval\`), and eval and tune outputs in the RLM repo's git-ignored `results/harness-eval/`.
-- **Prompt v4 is frozen.** Never edit its text, and never let the tuner change it. `test_contract` pins its hash.
+- **Prompt v4 is frozen, for `training-v4`.** Never edit its text, and never let the tuner change it. `test_contract` pins its hash. Since D-256 `default` runs rlmh's own contract, `rlmh-1`, whose `system.md` the tuner may change.
 - **`training-v4` stays training's.** It gets no compaction, is never a tuning base, and parity must still pass after every step that touches the engine.
 - **Never make a call with a user's key that they didn't ask for.** Every test runs offline against fakes. `/tune` runs only after the user has seen its cost and said yes.
 - **Never commit or push without Rishi's say-so.** Each push, tag, release and workflow run is its own OK.

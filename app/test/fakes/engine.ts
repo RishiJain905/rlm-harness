@@ -248,8 +248,8 @@ const limitsOf = (turns: { read: number; repo: number }, tokens: number): Engine
   return { read: mode(turns.read, false), repo: mode(turns.repo, true) };
 };
 const PROFILES: EngineInfo["profiles"] = [
-  { name: "default", source: "builtin", prompt_hash: DEFAULT_PROMPT_HASH, profile_hash: sha("profile default"), agent_api: true, limits: limitsOf({ read: 50, repo: 150 }, 16384), path: "/fake/profiles/default" },
-  { name: "training-v4", source: "builtin", prompt_hash: CONTRACT_HASH, profile_hash: sha("profile training-v4"), agent_api: false, limits: limitsOf({ read: 20, repo: 30 }, 4096), path: "/fake/profiles/training-v4" },
+  { name: "default", source: "builtin", prompt_hash: DEFAULT_PROMPT_HASH, profile_hash: sha("profile default"), agent_api: true, limits: limitsOf({ read: 50, repo: 150 }, 16384), path: "/fake/profiles/default", contract: "rlmh-1" },
+  { name: "training-v4", source: "builtin", prompt_hash: CONTRACT_HASH, profile_hash: sha("profile training-v4"), agent_api: false, limits: limitsOf({ read: 20, repo: 30 }, 4096), path: "/fake/profiles/training-v4", contract: "v4" },
 ];
 
 /** The fixed run.vars answer while a run is active. */

@@ -281,6 +281,7 @@ export function writeEvidence(dir: string, spec: EvidenceSpec): EvidenceResult {
   write("stage.md", `stage: ${spec.stage}\nround: ${spec.round}\nattempt: ${spec.attempt}\n`);
   write("harness/profile.toml", readFileSync(join(spec.harnessDir, "profile.toml"), "utf8"));
   write("harness/guidance.md", readFileSync(join(spec.harnessDir, "guidance.md"), "utf8"));
+  if (existsSync(join(spec.harnessDir, "system.md"))) write("harness/system.md", readFileSync(join(spec.harnessDir, "system.md"), "utf8"));
   write("harness/system_prompt.md", spec.systemPrompt);
   for (const name of [...HARNESS_EXTRAS, ...(spec.gated ? GATED_EXTRAS : [])]) {
     const from = join(spec.harnessDir, name);

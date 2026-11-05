@@ -229,7 +229,8 @@ def _many(prefix: str, n: int) -> str:
 
 
 @pytest.mark.parametrize(("files", "add", "expected"), [
-    ({"skills/quiet/SKILL.md": skill_md("quiet")}, "", "skill 'quiet' is not named in guidance.md (its trigger line)"),
+    ({"skills/quiet/SKILL.md": skill_md("quiet")}, "",  # default is rlmh-1: system.md may hold the trigger too (D-256)
+     "skill 'quiet' is not named in guidance.md or system.md (its trigger line)"),
     ({}, "\nSee scripts/x.py.", "guidance.md names scripts/x.py, which the profile does not have"),
     ({"scripts/broken.py": "def f(:\n"}, "", "scripts/broken.py does not compile: "),
     ({"scripts/numeric.py": "import numpy\n"}, "", "scripts/numeric.py imports numpy, which is not in the standard library"),
@@ -383,6 +384,7 @@ def test_surface_tables_match_tunable() -> None:
         assert any(k == name or k.split(".")[-1] == name or (name == "*_max_tokens" and k.endswith("_max_tokens")) for k in p.FROZEN), name
     files = _rows(text, "file")
     assert files == {
+        "system.md": f"at most {p.SYSTEM_MAX_CHARS} characters",  # D-256
         "guidance.md": f"at most {p.GUIDANCE_MAX_CHARS} characters",
         "skills": f"at most {p.MAX_SKILLS}",
         "each `SKILL.md": f"at most {p.SKILL_MAX_CHARS} characters",

@@ -94,6 +94,24 @@ describe("writeCandidate", () => {
   });
 });
 
+describe("system.md (D-256)", () => {
+  test("a rlmh-1 base's system.md is copied, or replaced by edit.system; a v4 base refuses one", () => {
+    const base = baseProfile(join(t.dir, "base-sys"));
+    writeFileSync(join(base, "system.md"), "You are a model.\n");
+    const kept = join(t.dir, "sys-kept");
+    writeCandidate(kept, base, { guidance: null, system: null, toml: {} });
+    expect(readFileSync(join(kept, "system.md"), "utf8")).toBe("You are a model.\n");
+    const changed = join(t.dir, "sys-changed");
+    writeCandidate(changed, base, { guidance: null, system: "You are a careful model.\r\n", toml: {} });
+    expect(readFileSync(join(changed, "system.md"), "utf8")).toBe("You are a careful model.\n");
+    const v4 = baseProfile(join(t.dir, "base-v4"));
+    const refused = join(t.dir, "sys-refused");
+    expect(() => writeCandidate(refused, v4, { guidance: null, system: "x", toml: {} })).toThrow("prompt v4");
+    expect(existsSync(refused)).toBe(false);
+    expect(() => writeCandidate(join(t.dir, "sys-files"), base, { guidance: null, toml: {}, files: { "system.md": "x" } })).toThrow("through system");
+  });
+});
+
 describe("diffProfiles, install and uninstall", () => {
   test("the diff shows a change and a new skill; '' when equal", async () => {
     const base = baseProfile(join(t.dir, "base3"));

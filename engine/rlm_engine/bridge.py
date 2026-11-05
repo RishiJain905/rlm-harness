@@ -77,6 +77,7 @@ class Bridge:
         self.sub_ref = sub_ref
         self.permissions = permissions
         self.limits = profile.mode(mode).limits
+        self.texts = profile.texts  # the sub-call errors' words: prompt v4's or rlmh-1's (D-256)
         self.max_subcalls = self.limits.max_subcalls
         self.turn = 0  # set by the loop before each cell
         self.subcalls_used = 0  # ids count across a conversation's prompts, so each stays unique in the run (D-199)
@@ -149,11 +150,11 @@ class Bridge:
         if self.infra_error:
             return {"error": INFRA_REPLY}
         if self.prompt_used() + len(prompts) > self.max_subcalls:
-            return self._reject(prompts, request, contract.budget_exhausted_message(self.max_subcalls), child)
+            return self._reject(prompts, request, self.texts.budget_exhausted_message(self.max_subcalls), child)
         if self.limits.subcall_oversize == "error":
             longest = max((len(_joined(prefix, p)) for prefix, p in zip(prefixes, prompts)), default=0)
             if longest > self.limits.subcall_max_chars:
-                return self._reject(prompts, request, contract.oversize_message(longest, self.limits.subcall_max_chars),
+                return self._reject(prompts, request, self.texts.oversize_message(longest, self.limits.subcall_max_chars),
                                     child)
         if not prompts:
             return {"outputs": []}
@@ -232,7 +233,7 @@ class Bridge:
         if self.infra_error:
             return {"error": INFRA_REPLY}
         if self.prompt_used() + 1 > self.max_subcalls:
-            return self._reject([task], request, contract.budget_exhausted_message(self.max_subcalls), parent)
+            return self._reject([task], request, self.texts.budget_exhausted_message(self.max_subcalls), parent)
         self.subcalls_used += 1
         subcall_id = self.subcalls_used
         origin = self._origin(request, parent)

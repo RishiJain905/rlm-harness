@@ -293,4 +293,5 @@ def compact_profile(home: Path, name: str = "compact-test", *, window: int = 409
     folder.mkdir(parents=True)
     (folder / "profile.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
     shutil.copyfile(source / "guidance.md", folder / "guidance.md")
+    shutil.copyfile(source / "system.md", folder / "system.md")  # default's rlmh-1 system prompt (D-256)
     return folder

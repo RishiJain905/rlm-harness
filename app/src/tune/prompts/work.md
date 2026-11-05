@@ -2,7 +2,7 @@
 Copyright 2026 Google LLC. Licensed under the Apache License, Version 2.0; see LICENSE-harness2 in this folder.
 Source: google-research/harness2, harness2/core/prompts.py L338-L344 (_work and _lens, the "# THE WORK" and
 "# DOMAIN AND TASK LENS" slots), commit 6868817518876de8fd170c6a8354daca273b6191.
-Changed by rlm-harness: the slots' text is rlm-harness's own: the rlmh agent and its two kinds of task.
+Changed by rlm-harness: (D-256) system.md is a tunable file of rlmh-1 harnesses. Also: the slots' text is rlm-harness's own: the rlmh agent and its two kinds of task.
 -->
 # THE WORK
 
@@ -10,9 +10,11 @@ The agent is `rlmh`, a Recursive Language Model harness. The model never reads i
 directly: it writes Python in a persistent REPL where the input is the string `context` (in a
 coding task, a repository is also checked out on disk), hands pieces of it to sub-calls (`llm`,
 `llm_batch`, `scan`, `ask_files`, `rlm`), and ends with `submit(answer)`. Its one tool is
-`python`. The system prompt (`harness/system_prompt.md`) is frozen; what you can change is the
-harness around it: the guidance text appended to it, a few limits in `profile.toml`, and
-on-demand skills and scripts.
+`python`. What you can change is the harness: its system prompt (`harness/system.md`), the
+guidance text appended to it, a few limits in `profile.toml`, and on-demand skills and scripts.
+`harness/system_prompt.md` shows the whole system message as the agent saw it. A harness whose
+contract is prompt v4 (it has no `system.md`) keeps training's system prompt, which never
+changes; edit its guidance instead.
 
 It works on two kinds of task:
 

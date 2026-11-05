@@ -55,6 +55,7 @@ def default_with(home: Path, name: str, **read: object) -> str:
     assert not read, read
     (folder / "profile.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (folder / "guidance.md").write_bytes((BUILTIN_DIR / "default" / "guidance.md").read_bytes())
+    (folder / "system.md").write_bytes((BUILTIN_DIR / "default" / "system.md").read_bytes())  # rlmh-1 (D-256)
     return name
 
 

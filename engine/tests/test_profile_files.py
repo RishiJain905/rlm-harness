@@ -25,9 +25,11 @@ from tuneprofiles import SCRIPT, SCRIPT_SOURCE, SKILL, TRIGGER, make_profile, sk
 REF = {"provider": "fake", "model": "scripted", "thinking": None}
 TIMEOUT = 120
 
-# The built-ins' hashes before step 6 (computed from this checkout before any step 6 change): they must not move.
-DEFAULT_PROFILE_HASH = "46df1b528715b6eaadd7938995c0cb744b11cb2ba593224886c94116790e1425"
-DEFAULT_PROMPT_HASH = "0345b73d048cf7d4c841c3be40d5285af90ed8a9073f2f0fc67684cdb8520091"
+# The built-ins' hashes. training-v4's are those from before step 6 (computed from this checkout before any step 6
+# change) and must never move. default's moved once, when it took rlmh's own contract, rlmh-1, and its system.md
+# (D-256); before that they were 46df1b52… (profile) and 0345b73d… (prompt), which a v4 copy of the old default keeps.
+DEFAULT_PROFILE_HASH = "fcfb93777a14b4d5131e53763fbe1fdd7bcdf7f1fce97f0234931969633b443c"
+DEFAULT_PROMPT_HASH = "7037edaed42b880017eb658018849546540a4a8406036e68e7633cdb779a3632"
 TRAINING_PROFILE_HASH = "b5ffa4b69d4c260b53e740a24919f37c7c9254032b6e9e90edb016da1ad8fa59"
 TRAINING_PROMPT_HASH = "a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6"
 
@@ -74,7 +76,8 @@ def test_skill_and_script_load(home: Path) -> None:
     blob = ((folder / "profile.toml").read_bytes() + b"\x00" + (folder / "guidance.md").read_bytes()
             + b"\x00" + f"scripts/{SCRIPT}.py".encode() + b"\x00" + SCRIPT_SOURCE.encode()
             + b"\x00" + f"skills/{SKILL}/SKILL.md".encode() + b"\x00"
-            + (folder / "skills" / SKILL / "SKILL.md").read_bytes())
+            + (folder / "skills" / SKILL / "SKILL.md").read_bytes()
+            + b"\x00" + b"system.md" + b"\x00" + (folder / "system.md").read_bytes())  # rlmh-1's system file (D-256)
     assert mine.profile_hash() == hashlib.sha256(blob).hexdigest()
 
     before = mine.profile_hash()

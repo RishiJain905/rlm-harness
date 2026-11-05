@@ -238,26 +238,27 @@ class Children:
         limits = dataclasses.replace(self.profile.mode(mode).limits, max_turns=child.max_turns)
         scratch = self.scratch / f"rlm-{child.child_id}"  # inside the run's, so the run's permissions allow it
         scratch.mkdir(parents=True, exist_ok=True)
+        texts = self.profile.texts  # prompt v4's or rlmh-1's (D-256)
         if repo:
             files = await asyncio.to_thread(inputs.repo_files, self.repo_path)
             value = context if context is not None else inputs.repo_context(child.task, files)
             if child.tools == "edit":
-                first = contract.edit_first_message(child.task, language=self.language or inputs.detect_language(files),
+                first = texts.edit_first_message(child.task, language=self.language or inputs.detect_language(files),
                                                     n_files=len(files), test_hint=self.test_hint or inputs.NO_TEST_COMMAND,
                                                     limits=limits)
                 if context is not None:
                     first += EDIT_CONTEXT_NOTE.format(n=len(context))
             else:
-                first = contract.first_user_message(child.task, value, limits) + READ_ONLY_NOTE
+                first = texts.first_user_message(child.task, value, limits) + READ_ONLY_NOTE
         else:
             value = context or ""
-            first = contract.first_user_message(child.task, value, limits) + CONTEXT_NOTE.format(n=len(value))
+            first = texts.first_user_message(child.task, value, limits) + CONTEXT_NOTE.format(n=len(value))
         permissions = self.permissions if child.tools == "edit" else ReadOnly(self.permissions, scratch)
         messages = [{"role": "system", "content": self.profile.system_prompt(self.shell.name)},
                     {"role": "user", "content": first}]
         worker = self.worker_factory(
             mode=mode, context=value, workspace=self.repo_path if repo else scratch, scratch=scratch, limits=limits,
-            messages=contract.cell_messages(limits, edit=repo), on_request=_ChildBridge(self, child, permissions).handle,
+            messages=texts.cell_messages(limits, repo), on_request=_ChildBridge(self, child, permissions).handle,
             shell=self.shell, base_tree=self.base_tree if repo else None, cache_api=self.profile.cache_api,
             init_extra={**self.init_extra(mode=mode, task=child.task,
                                           tool_names=READ_TOOLS if child.tools == "read" else None),
@@ -300,6 +301,7 @@ class Children:
         last_usage: dict | None = None  # as loop.run keeps them (v1 step 3)
         chars_since = 0
         compacting = plan is not None
+        texts = self.profile.texts
         for index in range(child.max_turns):
             turn = index + 1
             worker.turn = child.turn = turn
@@ -335,7 +337,7 @@ class Children:
                      "code": code, "stdout": None, "stdout_chars": None, "error": None, "observation": None,
                      "root_s": round(time.monotonic() - asked, 3)}
             child.turns.append(entry)
-            result = CellResult("", 0, contract.no_code_error()) if code is None else await worker.run_cell(code)
+            result = CellResult("", 0, texts.no_code_error()) if code is None else await worker.run_cell(code)
             result.stdout = result.stdout[:limits.output_max_chars]
             if result.error is not None:
                 result.error = result.error[:2 * limits.output_max_chars]
@@ -348,7 +350,7 @@ class Children:
                 return
             turns_left = child.max_turns - turn
             if turns_left:
-                entry["observation"] = contract.observation(result.stdout, result.stdout_chars, result.error, turns_left,
+                entry["observation"] = texts.observation(result.stdout, result.stdout_chars, result.error, turns_left,
                                                             self.bridge.subcalls_left(),
                                                             max_chars=limits.output_max_chars)
                 messages.append(callformat.observation_message(assistant, entry["observation"]))

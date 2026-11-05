@@ -9,9 +9,11 @@ The agent is \`rlmh\`, a Recursive Language Model harness. The model never reads
 directly: it writes Python in a persistent REPL where the input is the string \`context\` (in a
 coding task, a repository is also checked out on disk), hands pieces of it to sub-calls (\`llm\`,
 \`llm_batch\`, \`scan\`, \`ask_files\`, \`rlm\`), and ends with \`submit(answer)\`. Its one tool is
-\`python\`. The system prompt (\`harness/system_prompt.md\`) is frozen; what you can change is the
-harness around it: the guidance text appended to it, a few limits in \`profile.toml\`, and
-on-demand skills and scripts.
+\`python\`. What you can change is the harness: its system prompt (\`harness/system.md\`), the
+guidance text appended to it, a few limits in \`profile.toml\`, and on-demand skills and scripts.
+\`harness/system_prompt.md\` shows the whole system message as the agent saw it. A harness whose
+contract is prompt v4 (it has no \`system.md\`) keeps training's system prompt, which never
+changes; edit its guidance instead.
 
 It works on two kinds of task:
 
@@ -126,7 +128,8 @@ The harness is a folder of components. Each has a different runtime cost and a d
 
 | path | what it is | when it is in context |
 |---|---|---|
-| \`guidance.md\` | procedure, rules and durable facts, appended to the frozen system prompt | ALWAYS ON -- every token is in every turn, competing with the agent's own output budget |
+| \`system.md\` | the system prompt: role, the turn protocol, what the REPL holds, the standing rules | ALWAYS ON -- every token is in every turn, competing with the agent's own output budget |
+| \`guidance.md\` | working practice and durable facts, appended to the system prompt | ALWAYS ON -- same cost |
 | \`profile.toml\` | the run's limits | never in context: it shapes the run |
 | \`skills/<name>/SKILL.md\` | a reusable workflow | loaded ON DEMAND, only when the agent calls \`skill("<name>")\` in the REPL |
 | \`scripts/<name>.py\` | a deterministic helper, standard library only | imported ON DEMAND in the REPL with \`import <name>\` |
@@ -186,6 +189,7 @@ Frozen: \`contract\`, \`cache_api\`, \`agent_api\`, every \`*_max_tokens\`, \`ou
 
 | file | bound |
 |---|---|
+| \`system.md\` | at most 16000 characters |
 | \`guidance.md\` | at most 12000 characters |
 | skills | at most 16 |
 | each \`SKILL.md\` | at most 8000 characters |
@@ -193,22 +197,27 @@ Frozen: \`contract\`, \`cache_api\`, \`agent_api\`, every \`*_max_tokens\`, \`ou
 | each script | at most 16000 characters |
 
 Every file is UTF-8 with LF line ends, and the folder holds nothing else. A skill name matches
-\`[a-z0-9][a-z0-9-]{0,47}\`. \`{shell}\` in \`guidance.md\` is replaced with the machine's shell; no
-other placeholder exists.
+\`[a-z0-9][a-z0-9-]{0,47}\`. \`{shell}\` in \`system.md\` and \`guidance.md\` is replaced with the
+machine's shell; no other placeholder exists. A harness without \`system.md\` runs prompt v4,
+training's frozen system prompt: it never gains one.
+
+\`system.md\` is the most expensive file here and the easiest to break: every run reads all of it,
+and it names the REPL's helpers. Change it only for a rule that genuinely applies to every task,
+or to correct what it says about the REPL; keep every helper name exactly as the REPL has it.
 
 THREE RULES THAT DISCARD THE WHOLE PROPOSAL. Validation runs before any rollout, and a harness
 that fails it is thrown away entire.
 
 1. EVERY SKILL NEEDS A TRIGGER LINE -- the most violated rule here by a wide margin. If you
-   create or keep \`skills/<name>/SKILL.md\`, its name must appear VERBATIM in \`guidance.md\`, in
-   the SAME edit:
+   create or keep \`skills/<name>/SKILL.md\`, its name must appear VERBATIM in \`guidance.md\` or
+   \`system.md\`, in the SAME edit:
 
        When <the situation this skill handles>, call skill("<name>").
 
    An unnamed skill is never opened anyway: the line is what makes it exist.
 
 2. EVERY SCRIPT YOU NAME MUST EXIST. A \`scripts/<name>.py\` named in a SKILL.md or in
-   \`guidance.md\` must ship in the same proposal, at \`scripts/<name>.py\`; scripts live in that
+   \`guidance.md\` or \`system.md\` must ship in the same proposal, at \`scripts/<name>.py\`; scripts live in that
    one folder, never inside a skill's.
 
 3. EVERY SCRIPT IMPORTS ONLY THE STANDARD LIBRARY AND COMPILES. A script that imports anything
@@ -230,17 +239,19 @@ as a string, with \`submit(json.dumps({...}))\` -- submit() refuses a dict:
     {"decision": "EDIT" or "KEEP_BASE",
      "notes": ["<one line per change: what you changed, and the trajectory moment behind it>"],
      "guidance": "<the whole new guidance.md>" or null,
+     "system": "<the whole new system.md>" or null,
      "toml": {"<table>.<key>": <value>},
      "files": {"<path>": "<the whole new file>" or null}}
 
-- \`guidance\` is null to keep the current text; otherwise it is the WHOLE new text, not a diff.
+- \`guidance\` and \`system\` are null to keep the current text; otherwise each is the WHOLE new
+  text, not a diff. A harness without \`system.md\` (prompt v4) takes only null for \`system\`.
 - \`toml\` holds only the keys you change, from the tunable table above.
 - \`files\` holds only the skills and scripts you add or change (their whole text) or remove (null),
   by path: \`skills/<name>/SKILL.md\` or \`scripts/<name>.py\`. Files you leave out are
   inherited unchanged. Never resend a file to keep it the same: submit() refuses an answer over
   100,000 bytes.
 - If the evidence does not argue for any change, submit \`{"decision": "KEEP_BASE", "notes":
-  ["<why>"], "guidance": null, "toml": {}, "files": {}}\`. That is a real answer, not a failure.
+  ["<why>"], "guidance": null, "system": null, "toml": {}, "files": {}}\`. That is a real answer, not a failure.
 - Before you submit, read back what you built: the guidance names every skill, every script you
   name ships, and every value is inside its bounds. An edit that breaks a rule is rejected.
 
@@ -280,9 +291,11 @@ The agent is \`rlmh\`, a Recursive Language Model harness. The model never reads
 directly: it writes Python in a persistent REPL where the input is the string \`context\` (in a
 coding task, a repository is also checked out on disk), hands pieces of it to sub-calls (\`llm\`,
 \`llm_batch\`, \`scan\`, \`ask_files\`, \`rlm\`), and ends with \`submit(answer)\`. Its one tool is
-\`python\`. The system prompt (\`harness/system_prompt.md\`) is frozen; what you can change is the
-harness around it: the guidance text appended to it, a few limits in \`profile.toml\`, and
-on-demand skills and scripts.
+\`python\`. What you can change is the harness: its system prompt (\`harness/system.md\`), the
+guidance text appended to it, a few limits in \`profile.toml\`, and on-demand skills and scripts.
+\`harness/system_prompt.md\` shows the whole system message as the agent saw it. A harness whose
+contract is prompt v4 (it has no \`system.md\`) keeps training's system prompt, which never
+changes; edit its guidance instead.
 
 It works on two kinds of task:
 
@@ -403,7 +416,8 @@ The harness is a folder of components. Each has a different runtime cost and a d
 
 | path | what it is | when it is in context |
 |---|---|---|
-| \`guidance.md\` | procedure, rules and durable facts, appended to the frozen system prompt | ALWAYS ON -- every token is in every turn, competing with the agent's own output budget |
+| \`system.md\` | the system prompt: role, the turn protocol, what the REPL holds, the standing rules | ALWAYS ON -- every token is in every turn, competing with the agent's own output budget |
+| \`guidance.md\` | working practice and durable facts, appended to the system prompt | ALWAYS ON -- same cost |
 | \`profile.toml\` | the run's limits | never in context: it shapes the run |
 | \`skills/<name>/SKILL.md\` | a reusable workflow | loaded ON DEMAND, only when the agent calls \`skill("<name>")\` in the REPL |
 | \`scripts/<name>.py\` | a deterministic helper, standard library only | imported ON DEMAND in the REPL with \`import <name>\` |
@@ -463,6 +477,7 @@ Frozen: \`contract\`, \`cache_api\`, \`agent_api\`, every \`*_max_tokens\`, \`ou
 
 | file | bound |
 |---|---|
+| \`system.md\` | at most 16000 characters |
 | \`guidance.md\` | at most 12000 characters |
 | skills | at most 16 |
 | each \`SKILL.md\` | at most 8000 characters |
@@ -470,22 +485,27 @@ Frozen: \`contract\`, \`cache_api\`, \`agent_api\`, every \`*_max_tokens\`, \`ou
 | each script | at most 16000 characters |
 
 Every file is UTF-8 with LF line ends, and the folder holds nothing else. A skill name matches
-\`[a-z0-9][a-z0-9-]{0,47}\`. \`{shell}\` in \`guidance.md\` is replaced with the machine's shell; no
-other placeholder exists.
+\`[a-z0-9][a-z0-9-]{0,47}\`. \`{shell}\` in \`system.md\` and \`guidance.md\` is replaced with the
+machine's shell; no other placeholder exists. A harness without \`system.md\` runs prompt v4,
+training's frozen system prompt: it never gains one.
+
+\`system.md\` is the most expensive file here and the easiest to break: every run reads all of it,
+and it names the REPL's helpers. Change it only for a rule that genuinely applies to every task,
+or to correct what it says about the REPL; keep every helper name exactly as the REPL has it.
 
 THREE RULES THAT DISCARD THE WHOLE PROPOSAL. Validation runs before any rollout, and a harness
 that fails it is thrown away entire.
 
 1. EVERY SKILL NEEDS A TRIGGER LINE -- the most violated rule here by a wide margin. If you
-   create or keep \`skills/<name>/SKILL.md\`, its name must appear VERBATIM in \`guidance.md\`, in
-   the SAME edit:
+   create or keep \`skills/<name>/SKILL.md\`, its name must appear VERBATIM in \`guidance.md\` or
+   \`system.md\`, in the SAME edit:
 
        When <the situation this skill handles>, call skill("<name>").
 
    An unnamed skill is never opened anyway: the line is what makes it exist.
 
 2. EVERY SCRIPT YOU NAME MUST EXIST. A \`scripts/<name>.py\` named in a SKILL.md or in
-   \`guidance.md\` must ship in the same proposal, at \`scripts/<name>.py\`; scripts live in that
+   \`guidance.md\` or \`system.md\` must ship in the same proposal, at \`scripts/<name>.py\`; scripts live in that
    one folder, never inside a skill's.
 
 3. EVERY SCRIPT IMPORTS ONLY THE STANDARD LIBRARY AND COMPILES. A script that imports anything
@@ -507,17 +527,19 @@ as a string, with \`submit(json.dumps({...}))\` -- submit() refuses a dict:
     {"decision": "EDIT" or "KEEP_BASE",
      "notes": ["<one line per change: what you changed, and the trajectory moment behind it>"],
      "guidance": "<the whole new guidance.md>" or null,
+     "system": "<the whole new system.md>" or null,
      "toml": {"<table>.<key>": <value>},
      "files": {"<path>": "<the whole new file>" or null}}
 
-- \`guidance\` is null to keep the current text; otherwise it is the WHOLE new text, not a diff.
+- \`guidance\` and \`system\` are null to keep the current text; otherwise each is the WHOLE new
+  text, not a diff. A harness without \`system.md\` (prompt v4) takes only null for \`system\`.
 - \`toml\` holds only the keys you change, from the tunable table above -- as the DOM candidate, leave it empty: \`{}\`.
 - \`files\` holds only the skills and scripts you add or change (their whole text) or remove (null),
   by path: \`skills/<name>/SKILL.md\` or \`scripts/<name>.py\`. Files you leave out are
   inherited unchanged. Never resend a file to keep it the same: submit() refuses an answer over
   100,000 bytes.
 - If the evidence does not argue for any change, submit \`{"decision": "KEEP_BASE", "notes":
-  ["<why>"], "guidance": null, "toml": {}, "files": {}}\`. That is a real answer, not a failure.
+  ["<why>"], "guidance": null, "system": null, "toml": {}, "files": {}}\`. That is a real answer, not a failure.
 - Before you submit, read back what you built: the guidance names every skill, every script you
   name ships, and every value is inside its bounds. An edit that breaks a rule is rejected.
 
@@ -560,9 +582,11 @@ The agent is \`rlmh\`, a Recursive Language Model harness. The model never reads
 directly: it writes Python in a persistent REPL where the input is the string \`context\` (in a
 coding task, a repository is also checked out on disk), hands pieces of it to sub-calls (\`llm\`,
 \`llm_batch\`, \`scan\`, \`ask_files\`, \`rlm\`), and ends with \`submit(answer)\`. Its one tool is
-\`python\`. The system prompt (\`harness/system_prompt.md\`) is frozen; what you can change is the
-harness around it: the guidance text appended to it, a few limits in \`profile.toml\`, and
-on-demand skills and scripts.
+\`python\`. What you can change is the harness: its system prompt (\`harness/system.md\`), the
+guidance text appended to it, a few limits in \`profile.toml\`, and on-demand skills and scripts.
+\`harness/system_prompt.md\` shows the whole system message as the agent saw it. A harness whose
+contract is prompt v4 (it has no \`system.md\`) keeps training's system prompt, which never
+changes; edit its guidance instead.
 
 It works on two kinds of task:
 
@@ -646,7 +670,8 @@ The harness is a folder of components. Each has a different runtime cost and a d
 
 | path | what it is | when it is in context |
 |---|---|---|
-| \`guidance.md\` | procedure, rules and durable facts, appended to the frozen system prompt | ALWAYS ON -- every token is in every turn, competing with the agent's own output budget |
+| \`system.md\` | the system prompt: role, the turn protocol, what the REPL holds, the standing rules | ALWAYS ON -- every token is in every turn, competing with the agent's own output budget |
+| \`guidance.md\` | working practice and durable facts, appended to the system prompt | ALWAYS ON -- same cost |
 | \`profile.toml\` | the run's limits | never in context: it shapes the run |
 | \`skills/<name>/SKILL.md\` | a reusable workflow | loaded ON DEMAND, only when the agent calls \`skill("<name>")\` in the REPL |
 | \`scripts/<name>.py\` | a deterministic helper, standard library only | imported ON DEMAND in the REPL with \`import <name>\` |
@@ -706,6 +731,7 @@ Frozen: \`contract\`, \`cache_api\`, \`agent_api\`, every \`*_max_tokens\`, \`ou
 
 | file | bound |
 |---|---|
+| \`system.md\` | at most 16000 characters |
 | \`guidance.md\` | at most 12000 characters |
 | skills | at most 16 |
 | each \`SKILL.md\` | at most 8000 characters |
@@ -713,22 +739,27 @@ Frozen: \`contract\`, \`cache_api\`, \`agent_api\`, every \`*_max_tokens\`, \`ou
 | each script | at most 16000 characters |
 
 Every file is UTF-8 with LF line ends, and the folder holds nothing else. A skill name matches
-\`[a-z0-9][a-z0-9-]{0,47}\`. \`{shell}\` in \`guidance.md\` is replaced with the machine's shell; no
-other placeholder exists.
+\`[a-z0-9][a-z0-9-]{0,47}\`. \`{shell}\` in \`system.md\` and \`guidance.md\` is replaced with the
+machine's shell; no other placeholder exists. A harness without \`system.md\` runs prompt v4,
+training's frozen system prompt: it never gains one.
+
+\`system.md\` is the most expensive file here and the easiest to break: every run reads all of it,
+and it names the REPL's helpers. Change it only for a rule that genuinely applies to every task,
+or to correct what it says about the REPL; keep every helper name exactly as the REPL has it.
 
 THREE RULES THAT DISCARD THE WHOLE PROPOSAL. Validation runs before any rollout, and a harness
 that fails it is thrown away entire.
 
 1. EVERY SKILL NEEDS A TRIGGER LINE -- the most violated rule here by a wide margin. If you
-   create or keep \`skills/<name>/SKILL.md\`, its name must appear VERBATIM in \`guidance.md\`, in
-   the SAME edit:
+   create or keep \`skills/<name>/SKILL.md\`, its name must appear VERBATIM in \`guidance.md\` or
+   \`system.md\`, in the SAME edit:
 
        When <the situation this skill handles>, call skill("<name>").
 
    An unnamed skill is never opened anyway: the line is what makes it exist.
 
 2. EVERY SCRIPT YOU NAME MUST EXIST. A \`scripts/<name>.py\` named in a SKILL.md or in
-   \`guidance.md\` must ship in the same proposal, at \`scripts/<name>.py\`; scripts live in that
+   \`guidance.md\` or \`system.md\` must ship in the same proposal, at \`scripts/<name>.py\`; scripts live in that
    one folder, never inside a skill's.
 
 3. EVERY SCRIPT IMPORTS ONLY THE STANDARD LIBRARY AND COMPILES. A script that imports anything
@@ -759,13 +790,14 @@ Submit ONE JSON object as a string, with \`submit(json.dumps({...}))\` -- submit
      "adopt": "inv" or "dom" (only with ADOPT; otherwise null),
      "notes": ["kept|revised|dropped -> <which edit> -> <the evidence>", ...],
      "guidance": "<the whole new guidance.md>" or null,
+     "system": "<the whole new system.md>" or null,
      "toml": {"<table>.<key>": <value>},
      "files": {"<path>": "<the whole new file>" or null}}
 
-- With ADOPT, the named candidate is taken as it is: give \`guidance\` null, and \`toml\` and
-  \`files\` empty.
+- With ADOPT, the named candidate is taken as it is: give \`guidance\` and \`system\` null, and
+  \`toml\` and \`files\` empty.
 - With MERGE or REVISE, the edit is made against the CURRENT harness in \`harness/\`, not against
-  a candidate: \`guidance\` is the whole new text or null, \`toml\` holds only the keys that change,
+  a candidate: \`guidance\` and \`system\` are each the whole new text or null, \`toml\` holds only the keys that change,
   and \`files\` only the skills and scripts that change (null removes one). Copy a candidate's file
   across whole when you keep it; never resend a file to keep it the same, since submit() refuses
   an answer over 100,000 bytes.
@@ -811,9 +843,11 @@ The agent is \`rlmh\`, a Recursive Language Model harness. The model never reads
 directly: it writes Python in a persistent REPL where the input is the string \`context\` (in a
 coding task, a repository is also checked out on disk), hands pieces of it to sub-calls (\`llm\`,
 \`llm_batch\`, \`scan\`, \`ask_files\`, \`rlm\`), and ends with \`submit(answer)\`. Its one tool is
-\`python\`. The system prompt (\`harness/system_prompt.md\`) is frozen; what you can change is the
-harness around it: the guidance text appended to it, a few limits in \`profile.toml\`, and
-on-demand skills and scripts.
+\`python\`. What you can change is the harness: its system prompt (\`harness/system.md\`), the
+guidance text appended to it, a few limits in \`profile.toml\`, and on-demand skills and scripts.
+\`harness/system_prompt.md\` shows the whole system message as the agent saw it. A harness whose
+contract is prompt v4 (it has no \`system.md\`) keeps training's system prompt, which never
+changes; edit its guidance instead.
 
 It works on two kinds of task:
 
