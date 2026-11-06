@@ -157,7 +157,8 @@ describe("rlmh eval --go", () => {
     async () => {
       const home = join(t.dir, "home-credit");
       const out = join(t.dir, "out-credit");
-      const noCredit = t.script({ ...SCRIPT, errors: [{ role: "root", at: 1, kind: "no_credit", status: 402 }] });
+      // Its own file: t.script() writes the shared script.json that later tests in this file still read.
+      const noCredit = t.file("no-credit-script.json", JSON.stringify({ ...SCRIPT, errors: [{ role: "root", at: 1, kind: "no_credit", status: 402 }] }));
       const r = await rlmh(["eval", set, "--go", "--json", "--jobs", "1", "--only", "fx-search-R-01,fx-research-R-01", "--out", out, ...FAKE], { home, script: noCredit });
       expect(r.code).toBe(1);
       expect(r.stderr).toContain("the provider says the account is out of credit (no_credit)");
