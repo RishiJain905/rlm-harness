@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import secrets
 from pathlib import Path
 
 import pytest
 
-from conftest import needs_git, run
-from fakeapp import FakeApp
-from rlm_engine import callformat, contract, loop, workspace
+from conftest import compact_profile, needs_git, run
+from fakeapp import FakeApp, _request_chars
+from rlm_engine import callformat, compaction, contract, loop, workspace
+from rlm_engine.compaction import COMPACT_REQUEST, COMPACTED
 from rlm_engine.errors import InfraError
 from rlm_engine.profiles import BUILTIN_DIR, Profile, load_profile
 from rlm_engine.runlog import RECORD_KEYS, RunLog
@@ -29,14 +31,17 @@ TIMEOUT = 90
 # §5.3, hard-coded on purpose: a change to the wire has to change this table too
 EVENT_KEYS = {
     "run.started": {"tag", "mode", "profile", "prompt_hash", "profile_hash", "contract_hash", "call_format", "root",
-                    "sub", "permission_mode", "workspace", "input", "limits", "log_path"},
+                    "sub", "permission_mode", "workspace", "input", "limits", "log_path", "window", "compaction",
+                    "conversation"},
+    "run.compacted": {"turn", "prompt_index", "child_id", "before_tokens", "after_tokens", "dropped_messages",
+                      "kept_messages", "summary_chars", "seconds"},  # v1 step 3; only a profile with [compaction] sends it
     "run.reply": {"turn", "text", "tool_call", "reasoning", "finish_reason", "usage", "seconds"},
     "run.cell": {"turn", "code", "output", "error", "observation", "seconds", "restarted", "crash", "repo_changed"},
     "run.subcall": {"subcall_id", "origin", "batch", "prompt_chars", "status", "error", "seconds"},
     "run.permission": {"turn", "kind", "detail", "allowed", "asked", "remembered"},
     "run.budget": {"turns_left", "subcalls_left"},
     "run.finished": {"tag", "answer", "submitted", "answer_valid", "turns", "subcalls", "usage", "cost_usd",
-                     "infra_error", "infra_kind", "wall_s", "log_path"},
+                     "infra_error", "infra_kind", "wall_s", "log_path", "prompt_index", "open"},  # the last two: v1 step 4
 }
 
 
@@ -273,7 +278,7 @@ def test_event_shapes_and_order(home: Path) -> None:
     spec = read_spec(home, mode="default")
     record = play(spec, app, home)
     methods = [m for m, _ in app.events]
-    assert set(methods) == set(EVENT_KEYS)
+    assert set(methods) == set(EVENT_KEYS) - {"run.compacted"}  # training-v4 never compacts
     for method, params in app.events:
         assert set(params) == EVENT_KEYS[method] | {"run_id"}, method
         assert params["run_id"] == spec.run_id
@@ -293,6 +298,7 @@ def test_event_shapes_and_order(home: Path) -> None:
     started = app.sent("run.started")[0]
     assert started["input"]["files"] == [spec.inputs[0].as_posix()]
     assert started["limits"]["max_turns"] == 20 and set(started["limits"]) == set(loop.EVENT_LIMITS)
+    assert started["window"] == {"context_window": 0, "max_output": 0} and started["compaction"] is None
     permission = app.sent("run.permission")[0]
     assert permission["allowed"] is False and permission["asked"] is False
     assert record["permissions"] == [{k: v for k, v in permission.items() if k != "run_id"}]
@@ -508,3 +514,136 @@ def test_cancel_during_the_snapshot_kills_git_first(home: Path, git_repo: Path, 
     assert state["git_running_at_finish"] is False and state["scratch_at_kill"] is True
     assert app.sent("run.finished")[0]["infra_kind"] == "cancelled"
     assert not (home / "scratch" / spec.run_id).exists()
+
+
+# ---------------------------------------------------------------------------------------------- compaction (v1 step 3)
+
+V0_REQUESTS = Path(__file__).resolve().parent / "fixtures" / "v0_training_v4_requests.json"
+
+
+def printing(turns: int, chars: int = 3000) -> list[dict]:
+    """`turns` root replies whose cells each print `chars` characters, then a submit."""
+    return [fenced(f"print({'abcdefghij'[i % 10]!r} * {chars})", f"Turn {i + 1}.") for i in range(turns)] + [
+        fenced("submit('x')", "Done.")]
+
+
+def compactions_of(app: FakeApp) -> list[dict]:
+    return [r for r in app.requests if r.get("purpose") == "compact"]
+
+
+def turn_roots(app: FakeApp) -> list[dict]:
+    return [r for r in roots(app) if r.get("purpose") is None]
+
+
+def test_compacts_when_over(home: Path) -> None:
+    compact_profile(home)
+    spec = read_spec(home, load_profile("compact-test", home))
+    app = FakeApp(script={"root": printing(10), "compact": [{"text": "SUMMARY of the work so far."}]})
+    record = play(spec, app, home)
+    assert record["submitted"] and record["infra_error"] is None
+    started = app.sent("run.started")[0]
+    assert started["compaction"] == {"window": 4096, "trigger": 3276, "keep": 614}
+    assert started["window"] == {"context_window": 0, "max_output": 0}
+
+    [event] = app.sent("run.compacted")
+    assert set(event) == EVENT_KEYS["run.compacted"] | {"run_id"}
+    assert event["child_id"] is None and event["prompt_index"] == 0 and event["before_tokens"] > 3276
+    turn = event["turn"]
+    where = app.events.index(("run.compacted", event))
+    reply_at = next(i for i, (m, p) in enumerate(app.events) if m == "run.reply" and p["turn"] == turn)
+    cell_before = next(i for i, (m, p) in enumerate(app.events) if m == "run.cell" and p["turn"] == turn - 1)
+    assert cell_before < where < reply_at  # before the root call it preceded
+
+    [request] = compactions_of(app)
+    assert request["role"] == "root" and request["purpose"] == "compact" and request["turn"] == turn
+    assert request["max_tokens"] == 512 and request["thinking"] == "off" and request["tools"] == []
+    assert request["messages"][-1] == {"role": "user", "content": COMPACT_REQUEST.format(max_words=102)}
+    before = request["messages"][:-1]
+
+    first, after = turn_roots(app)[0], next(r for r in turn_roots(app) if r["turn"] == turn)
+    assert json.dumps(after["messages"][:2]) == json.dumps(first["messages"][:2])  # byte for byte
+    note = after["messages"][2]
+    dropped_turns = event["dropped_messages"] // 2
+    assert note == {"role": "user",
+                    "content": COMPACTED.format(turns=dropped_turns, summary="SUMMARY of the work so far.")}
+    assert note["content"].startswith("[")
+    assert after["messages"][3:] == before[len(before) - event["kept_messages"]:]
+    assert after["messages"][3]["role"] == "assistant"
+    assert event["dropped_messages"] + event["kept_messages"] + 2 == len(before)
+    assert event["summary_chars"] == len("SUMMARY of the work so far.")
+    assert event["after_tokens"] == compaction.estimate(after["messages"], None, 0)
+
+    assert record["compactions"] == [{k: v for k, v in event.items() if k != "run_id"}]
+    summary_input = math.ceil(_request_chars(request) / 4)
+    turn_input = sum(t["usage"]["input_tokens"] for t in record["turns"])
+    assert record["usage"]["root"]["input_tokens"] == turn_input + summary_input
+    assert len(record["turns"]) == 11  # the summary is not a turn
+    assert record["window"] == spec.window and record["prompt_index"] == 0 and record["conversation"] is False
+    assert record["messages"][:len(after["messages"])] == after["messages"]
+
+
+def test_compact_fallback(home: Path) -> None:
+    compact_profile(home)
+    app = FakeApp(script={"root": printing(10), "compact": [{"error": "context_window"}]})
+    record = play(read_spec(home, load_profile("compact-test", home)), app, home)
+    assert record["submitted"] and record["infra_error"] is None
+    [event] = app.sent("run.compacted")
+    [request] = compactions_of(app)
+    middle = request["messages"][2:2 + event["dropped_messages"]]
+    text = compaction.fallback_summary(middle)
+    assert text.startswith("Turn 1: print('a' * 3000)")
+    after = next(r for r in turn_roots(app) if r["turn"] == event["turn"])
+    assert after["messages"][2]["content"] == COMPACTED.format(turns=event["dropped_messages"] // 2, summary=text)
+    turn_input = sum(t["usage"]["input_tokens"] for t in record["turns"])
+    assert record["usage"]["root"]["input_tokens"] == turn_input  # the failed call has no usage
+
+
+def test_compact_server_error_stops(home: Path) -> None:
+    compact_profile(home)
+    app = FakeApp(script={"root": printing(10), "compact": [{"error": "server"}]})
+    record = play(read_spec(home, load_profile("compact-test", home)), app, home)
+    assert record["infra_kind"] == "server" and not record["submitted"]
+    assert app.sent("run.compacted") == [] and record["compactions"] == []
+    assert len(compactions_of(app)) == 1
+
+
+def test_no_loop(home: Path) -> None:
+    """A tail too large to shrink: one compaction, then none for the rest of the prompt, though every later request
+    is still over the trigger."""
+    compact_profile(home)
+    app = FakeApp(script={"root": printing(10, chars=6000)})
+    record = play(read_spec(home, load_profile("compact-test", home)), app, home)
+    [event] = app.sent("run.compacted")
+    assert event["after_tokens"] > 0.8 * event["before_tokens"]
+    later = [r for r in turn_roots(app) if r["turn"] > event["turn"]]
+    assert len(later) >= 3
+    assert all(compaction.estimate(r["messages"], None, 0) > 3276 for r in later)
+    assert len(compactions_of(app)) == 1 and record["submitted"]
+
+
+def test_compacts_again_when_it_helps(home: Path) -> None:
+    compact_profile(home, window=16384, max_turns=20)
+    app = FakeApp(script={"root": printing(18, chars=6000)})
+    record = play(read_spec(home, load_profile("compact-test", home)), app, home)
+    events = app.sent("run.compacted")
+    assert len(events) >= 2 and record["submitted"]
+    assert all(e["after_tokens"] <= 0.8 * e["before_tokens"] for e in events)
+    assert app.sent("run.started")[0]["compaction"] == {"window": 16384, "trigger": 13107, "keep": 2580}
+    second = next(r for r in turn_roots(app) if r["turn"] == events[1]["turn"])
+    notes = [m for m in second["messages"] if m["role"] == "user" and m["content"].startswith("[")]
+    assert notes == [second["messages"][2]]  # the newest summary replaced the old one
+
+
+def test_training_v4_never_compacts(home: Path) -> None:
+    fixture = json.loads(V0_REQUESTS.read_text(encoding="utf-8"))
+    spec = read_spec(home, text=fixture["input"])
+    spec.window = {"context_window": 4096, "max_output": 1024}  # far too small: still no compaction
+    app = FakeApp(script=fixture["script"])
+    record = play(spec, app, home)
+    assert app.sent("run.compacted") == [] and record["compactions"] == []
+    started = app.sent("run.started")[0]
+    assert started["compaction"] is None and started["window"] == spec.window
+    expected = [{**{k: v for k, v in r.items() if k != "messages"}, "messages": fixture["messages"][:r["messages"]]}
+                for r in fixture["requests"]]
+    sent = [{k: v for k, v in r.items() if k != "run_id"} for r in app.requests]
+    assert sent == expected  # what v0's loop sent, request for request

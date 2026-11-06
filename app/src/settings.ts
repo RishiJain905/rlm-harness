@@ -5,8 +5,9 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { PROVIDER_IDS } from "./gateway/providers.ts";
 import { settingsPath } from "./paths.ts";
+import { THINKING_LEVELS } from "./protocol.ts";
 
-export type SettingType = "string" | "enum" | "int" | "bool";
+export type SettingType = "string" | "enum" | "int" | "number" | "bool";
 export type SettingValue = string | number | boolean;
 
 export interface SettingDef {
@@ -17,7 +18,7 @@ export interface SettingDef {
   doc: string;
 }
 
-const THINKING = ["default", "off", "low", "medium", "high"] as const;
+const THINKING = ["default", ...THINKING_LEVELS] as const;
 const PERMISSION_MODES = ["default", "accept-edits", "bypass"] as const;
 const CALL_FORMATS = ["auto", "fenced", "native"] as const;
 const LOCAL_BASE_URL = "http://localhost:8000/v1";
@@ -54,6 +55,33 @@ export const SCHEMA: readonly SettingDef[] = [
   { key: "providers.<id>.base_url", type: "string", default: "", doc: "API base URL, for local and custom providers" },
   { key: "providers.<id>.max_in_flight", type: "int", default: 16, doc: "Most calls in flight at once to this provider" },
   { key: "display.verbose", type: "bool", default: false, doc: "Show the engine's stderr" },
+  // v1 keys (v1 architecture §8)
+  {
+    key: "conversation.follow_ups",
+    type: "bool",
+    default: true,
+    doc: "A question in the interactive app continues the open conversation (same REPL and workspace). Off: every question starts fresh.",
+  },
+  {
+    key: "tune.enabled",
+    type: "bool",
+    default: false,
+    doc: "Harness² tunes each finished task in the background; turned on only through /tune on, after its estimate (D-231)",
+  },
+  { key: "tune.model", type: "string", default: "", doc: "Model for /tune's editor, composer and reflector sessions as provider/model; empty uses root.model (D-232)" },
+  {
+    key: "tune.max_usd",
+    type: "number",
+    default: 1.0,
+    doc: "/tune's hard stop in USD, counting every /tune run and session since /tune on; when it trips, tuning turns off",
+  },
+  { key: "tune.library", type: "bool", default: true, doc: "Write and read the experience library during /tune" },
+  {
+    key: "tune.test",
+    type: "string",
+    default: "",
+    doc: "A test command run in /tune's work copies; a tuned harness whose test fails where the reference's passed is dropped",
+  },
 ];
 
 export type ThinkingSetting = (typeof THINKING)[number];
@@ -71,12 +99,28 @@ export interface Settings {
   call_format: (typeof CALL_FORMATS)[number];
   providers: Record<string, ProviderSettings>;
   display: { verbose: boolean };
+  conversation: { follow_ups: boolean };
+  tune: { enabled: boolean; model: string; max_usd: number; library: boolean; test: string };
 }
 
 export class SettingsError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SettingsError";
+  }
+}
+
+/** The hint for turning tune.enabled on anywhere but /tune on (D-231). */
+export const TUNE_ON_HINT = "Use /tune on, which shows the cost first";
+
+/**
+ * `tune.enabled` turns on only through `/tune on`, after its estimate (D-231). `/settings` and
+ * `rlmh config set` call this before setSetting; `/tune on` itself goes straight to applySetting.
+ * Throws a SettingsError with TUNE_ON_HINT when `value` would turn tuning on; `false` passes.
+ */
+export function refuseTuneOn(key: string, value: unknown): void {
+  if (key === "tune.enabled" && (value === true || value === "true")) {
+    throw new SettingsError(`tune.enabled can't be turned on here. ${TUNE_ON_HINT}.`);
   }
 }
 
@@ -141,7 +185,7 @@ export function defaultSetting(key: string): SettingValue {
   return defaultFor(def, path);
 }
 
-/** Pure: returns a new object. A string is coerced to the key's type ("true"/"false", whole numbers). */
+/** Pure: returns a new object. A string is coerced to the key's type ("true"/"false", whole numbers, decimals). */
 export function setSetting(s: Settings, key: string, value: unknown): Settings {
   const { def, path } = lookup(key);
   const next = structuredClone(s) as unknown as Table;
@@ -210,8 +254,16 @@ function check(def: SettingDef, key: string, value: unknown, coerce: boolean): S
       if (typeof n === "number" && Number.isSafeInteger(n) && n >= 1) return n;
       throw new SettingsError(`${key} must be a whole number, 1 or more (got ${got})`);
     }
+    case "number": {
+      // D-220: finite and above 0; a string must be a plain decimal such as 2.5
+      const n = coerce && typeof value === "string" && DECIMAL.test(value.trim()) ? Number(value.trim()) : value;
+      if (typeof n === "number" && Number.isFinite(n) && n > 0) return n;
+      throw new SettingsError(`${key} must be a number above 0, such as 2.5 (got ${got})`);
+    }
   }
 }
+
+const DECIMAL = /^(\d+(\.\d*)?|\.\d+)$/;
 
 /** The rules beyond the type (step 5): base_url and max_in_flight bounds, and known providers in model refs. */
 function validate(path: string[], key: string, value: SettingValue): SettingValue {
@@ -221,7 +273,7 @@ function validate(path: string[], key: string, value: SettingValue): SettingValu
     if (value !== "" && !isHttpUrl(value as string)) throw new SettingsError(`${key} must be an http:// or https:// URL, or empty (got ${JSON.stringify(value)})`);
   } else if (name === "max_in_flight") {
     if ((value as number) > MAX_IN_FLIGHT) throw new SettingsError(`${key} must be ${MAX_IN_FLIGHT} or less (got ${value})`);
-  } else if ((key === "root.model" || key === "sub.model") && value !== "") {
+  } else if ((key === "root.model" || key === "sub.model" || key === "tune.model") && value !== "") {
     const slash = (value as string).indexOf("/");
     if (slash <= 0 || slash === (value as string).length - 1) {
       throw new SettingsError(`${key} must be provider/model, such as anthropic/claude-sonnet-5 (got ${JSON.stringify(value)})`);
@@ -270,7 +322,17 @@ function setPath(table: Table, path: string[], value: unknown): void {
   node[path[path.length - 1]!] = value;
 }
 
-/** Top-level scalars first, then one [table] per table that holds scalars. Strings via JSON.stringify. */
+/** The keys whose type is `number`: written as TOML floats, so `1` is `1.0`. */
+const NUMBER_KEYS = new Set(SCHEMA.filter((d) => d.type === "number").map((d) => d.key));
+
+function tomlValue(key: string, v: unknown): string {
+  if (typeof v === "string") return JSON.stringify(v);
+  const text = String(v);
+  // String(1e21) is "1e+21", already a TOML float; only a plain whole number needs ".0"
+  return NUMBER_KEYS.has(key) && typeof v === "number" && /^\d+$/.test(text) ? `${text}.0` : text;
+}
+
+/** Top-level scalars first, then one [table] per table that holds scalars. Strings via JSON.stringify; number keys as floats. */
 function toToml(root: Table): string {
   const lines: string[] = [];
   const emit = (table: Table, path: string[]) => {
@@ -280,7 +342,7 @@ function toToml(root: Table): string {
       if (lines.length > 0) lines.push("");
       lines.push(`[${path.map(tomlKey).join(".")}]`);
     }
-    for (const [k, v] of scalars) lines.push(`${tomlKey(k)} = ${typeof v === "string" ? JSON.stringify(v) : String(v)}`);
+    for (const [k, v] of scalars) lines.push(`${tomlKey(k)} = ${tomlValue([...path, k].join("."), v)}`);
     for (const [k, v] of entries) if (isTable(v)) emit(v, [...path, k]);
   };
   emit(root, []);

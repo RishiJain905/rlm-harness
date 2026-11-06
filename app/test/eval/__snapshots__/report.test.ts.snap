@@ -1,0 +1,44 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`buildReport renderReport is stable 1`] = `
+"# Eval report
+
+## Total
+
+| | n | passed | pass rate | mean score | mean f2p share | turns | sub-calls | compactions | cost | cost/run | cache hit | wall s | infra | tamper | leak? |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| total | 5 | 2 | 40.0% | 0.480 | 0.500 | 4.0 | 2.0 | 0.0 | $0.0700 | $0.0140 | 50.0% | 10.0 | 1 | 1 | 1 |
+
+## By split
+
+| | n | passed | pass rate | mean score | mean f2p share | turns | sub-calls | compactions | cost | cost/run | cache hit | wall s | infra | tamper | leak? |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| heldout | 3 | 0 | 0.0% | 0.133 | 0.250 | 4.0 | 2.0 | 0.0 | $0.0500 | $0.0167 | 50.0% | 10.0 | 1 | 0 | 1 |
+| tune | 2 | 2 | 100.0% | 1.000 | 1.000 | 4.0 | 2.0 | 0.0 | $0.0200 | $0.0100 | 50.0% | 10.0 | 0 | 1 | 0 |
+
+## By track
+
+| | n | passed | pass rate | mean score | mean f2p share | turns | sub-calls | compactions | cost | cost/run | cache hit | wall s | infra | tamper | leak? |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| python | 2 | 1 | 50.0% | 0.500 | 0.750 | 4.0 | 2.0 | 0.0 | $0.0200 | $0.0100 | 50.0% | 10.0 | 0 | 1 | 1 |
+| research | 1 | 0 | 0.0% | 0.400 | - | 4.0 | 2.0 | 0.0 | $0.0100 | $0.0100 | 50.0% | 10.0 | 0 | 0 | 0 |
+| search | 1 | 1 | 100.0% | 1.000 | - | 4.0 | 2.0 | 0.0 | $0.0100 | $0.0100 | 50.0% | 10.0 | 0 | 0 | 0 |
+| web | 1 | 0 | 0.0% | 0.000 | 0.000 | 4.0 | 2.0 | 0.0 | $0.0300 | $0.0300 | - | 10.0 | 1 | 0 | 0 |
+
+## By kind
+
+| | n | passed | pass rate | mean score | mean f2p share | turns | sub-calls | compactions | cost | cost/run | cache hit | wall s | infra | tamper | leak? |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| read | 2 | 1 | 50.0% | 0.700 | - | 4.0 | 2.0 | 0.0 | $0.0200 | $0.0100 | 50.0% | 10.0 | 0 | 0 | 0 |
+| repo | 3 | 1 | 33.3% | 0.333 | 0.500 | 4.0 | 2.0 | 0.0 | $0.0500 | $0.0167 | 50.0% | 10.0 | 1 | 1 | 1 |
+
+## By size
+
+| | n | passed | pass rate | mean score | mean f2p share | turns | sub-calls | compactions | cost | cost/run | cache hit | wall s | infra | tamper | leak? |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| R | 2 | 1 | 50.0% | 0.700 | - | 4.0 | 2.0 | 0.0 | $0.0200 | $0.0100 | 50.0% | 10.0 | 0 | 0 | 0 |
+| S | 3 | 1 | 33.3% | 0.333 | 0.500 | 4.0 | 2.0 | 0.0 | $0.0500 | $0.0167 | 50.0% | 10.0 | 1 | 1 | 1 |
+
+One replicate per task, so a held-out difference of a few tasks is within noise (D-170).
+"
+`;

@@ -27,6 +27,7 @@ ERROR_CODES = {
     "UNKNOWN_RUN": -32010,
     "UNKNOWN_PROFILE": -32011,
     "BAD_INPUT": -32012,
+    "RUN_BUSY": -32013,
     "CANCELLED": -32800,
 }
 
@@ -37,6 +38,13 @@ REQUIRED = [
     "run.cancel:result",
     "run.vars:request",
     "run.vars:result",
+    "run.say:request",
+    "run.say:result",
+    "run.say:error:RUN_BUSY",
+    "run.close:request",
+    "run.close:result",
+    "profile.check:request",
+    "profile.check:result",
     "debug.roundtrip:request",
     "debug.roundtrip:result",
     "run.start:request:read",
@@ -46,6 +54,7 @@ REQUIRED = [
     "model.complete:request:sub",
     "model.complete:request:sub-prefix",
     "model.complete:request:child",
+    "model.complete:request:compact",
     "model.complete:result",
     "approval.request:request",
     "approval.request:result",
@@ -60,6 +69,7 @@ REQUIRED = [
     "rpc:error:INTERNAL_ERROR",
     "rpc:error:CANCELLED",
     "run.started:notification",
+    "run.compacted:notification",
     "run.reply:notification",
     "run.cell:notification",
     "run.subcall:notification",
@@ -67,6 +77,7 @@ REQUIRED = [
     "run.permission:notification",
     "run.budget:notification",
     "run.finished:notification",
+    "run.closed:notification",
     "model.cancel:notification",
 ]
 
@@ -76,10 +87,14 @@ METHODS = {
     "run.start": "app->engine",
     "run.cancel": "app->engine",
     "run.vars": "app->engine",
+    "run.say": "app->engine",
+    "run.close": "app->engine",
+    "profile.check": "app->engine",
     "debug.roundtrip": "app->engine",
     "model.complete": "engine->app",
     "approval.request": "engine->app",
     "run.started": "engine->app",
+    "run.compacted": "engine->app",
     "run.reply": "engine->app",
     "run.cell": "engine->app",
     "run.subcall": "engine->app",
@@ -87,6 +102,7 @@ METHODS = {
     "run.permission": "engine->app",
     "run.budget": "engine->app",
     "run.finished": "engine->app",
+    "run.closed": "engine->app",
     "model.cancel": "engine->app",
 }
 
@@ -124,7 +140,7 @@ def enum(*values: str) -> tuple:
 
 
 MESSAGE = ("message",)
-THINKING = enum("off", "low", "medium", "high")
+THINKING = enum("off", "minimal", "low", "medium", "high", "xhigh", "max")
 FINISH_REASON = enum("stop", "length", "tool_call", "content_filter", "other")
 PERMISSION_MODE = enum("default", "accept-edits", "bypass")
 CALL_FORMAT = enum("fenced", "native")
@@ -145,7 +161,7 @@ USAGE = obj(
 MODEL_ERROR_DATA = obj(
     {
         "kind": enum(
-            "auth", "no_key", "bad_request", "rate_limit", "server", "timeout",
+            "auth", "no_key", "bad_request", "rate_limit", "no_credit", "server", "timeout",
             "network", "context_window", "unknown_model", "cancelled", "other",
         ),
         "provider": STR,
@@ -156,12 +172,32 @@ MODEL_ERROR_DATA = obj(
 )
 ORIGIN = obj({"turn": INT, "line": nullable(INT)}, {"child": INT})  # child: a request an rlm() run made (D-160)
 BATCH = obj({"id": STR, "index": INT, "size": INT})
+WINDOW = obj({"context_window": INT, "max_output": INT})  # the root model's catalog numbers, 0 when unknown (v1 step 3)
 MESSAGES = {
     "system": obj({"role": enum("system"), "content": STR}),
     "user": obj({"role": enum("user"), "content": STR}),
     "assistant": obj({"role": enum("assistant"), "content": STR}, {"tool_call": TOOL_CALL}),
     "tool": obj({"role": enum("tool"), "tool_call_id": STR, "content": STR}),
 }
+
+# engine.info's per-mode limits: contract.Limits.as_dict() (v1 step 2, D-198).
+PROFILE_LIMITS = obj(
+    {
+        "max_turns": INT,
+        "max_subcalls": INT,
+        "root_max_tokens": INT,
+        "output_max_chars": INT,
+        "cell_timeout_s": NUM,
+        "cpus": NUM,
+        "memory_mb": INT,
+        "pids": INT,
+        "grader_timeout_s": nullable(INT),
+        "subcall_max_chars": INT,
+        "subcall_max_tokens": INT,
+        "subcall_thinking": nullable(STR),
+        "subcall_oversize": STR,
+    }
+)
 
 # params (requests, notifications) or result, per "<method>:<kind>".
 FIELDS = {
@@ -174,7 +210,20 @@ FIELDS = {
             "contract": nullable(STR),
             "contract_hash": nullable(STR),
             "training_hash": nullable(STR),
-            "profiles": list_of(obj({"name": STR, "source": enum("builtin", "user"), "prompt_hash": STR, "profile_hash": STR})),
+            "profiles": list_of(
+                obj(
+                    {
+                        "name": STR,
+                        "source": enum("builtin", "user"),
+                        "contract": enum("v4", "rlmh-1"),  # the profile's own contract (D-256)
+                        "prompt_hash": STR,
+                        "profile_hash": STR,
+                        "agent_api": BOOL,
+                        "limits": obj({"read": PROFILE_LIMITS, "repo": PROFILE_LIMITS}),
+                        "path": STR,  # the profile's absolute folder (v1 step 6, D-208)
+                    }
+                )
+            ),
         }
     ),
     "run.start:request": obj(
@@ -199,12 +248,22 @@ FIELDS = {
             "tag": STR,
             "batch": STR,
             "log_dir": STR,
+            "window": WINDOW,
+            "conversation": BOOL,
         },
     ),
     "run.start:result": obj({"run_id": STR, "log_path": STR}),
     "run.cancel:request": obj({"run_id": STR}),
     "run.cancel:result": obj({}),
     "run.vars:request": obj({"run_id": STR}),
+    "run.say:request": obj({"run_id": STR, "text": STR}),
+    "run.say:result": obj({"prompt_index": INT}),
+    "run.close:request": obj({"run_id": STR}),
+    "run.close:result": obj({}),
+    # v1 step 6: a candidate folder against a base profile (v1 architecture §3.1)
+    "profile.check:request": obj({"path": STR, "base": nullable(STR)}, {"gated": BOOL}),
+    "profile.check:result": obj({"ok": BOOL, "errors": list_of(STR), "prompt_hash": nullable(STR),
+                                 "profile_hash": nullable(STR), "changed": list_of(STR)}),
     "run.vars:result": obj({"vars": list_of(obj({"name": STR, "type": STR, "len": nullable(INT), "chars": INT}))}),
     "debug.roundtrip:request": obj({"count": INT}),
     "debug.roundtrip:result": obj({"texts": list_of(STR)}),
@@ -221,7 +280,7 @@ FIELDS = {
             "turn": INT,
         },
         {"subcall_id": INT, "origin": ORIGIN, "batch": BATCH, "prefix": obj({"chars": INT, "key": STR}),
-         "child": obj({"id": INT, "turn": INT, "max_turns": INT, "depth": INT})},
+         "child": obj({"id": INT, "turn": INT, "max_turns": INT, "depth": INT}), "purpose": enum("compact")},
     ),
     "model.complete:result": obj(
         {
@@ -265,6 +324,23 @@ FIELDS = {
                 }
             ),
             "log_path": STR,
+            "window": WINDOW,
+            "compaction": nullable(obj({"window": INT, "trigger": INT, "keep": INT})),
+            "conversation": BOOL,
+        }
+    ),
+    "run.compacted:notification": obj(
+        {
+            "run_id": STR,
+            "turn": INT,
+            "prompt_index": INT,
+            "child_id": nullable(INT),
+            "before_tokens": INT,
+            "after_tokens": INT,
+            "dropped_messages": INT,
+            "kept_messages": INT,
+            "summary_chars": INT,
+            "seconds": NUM,
         }
     ),
     "run.reply:notification": obj(
@@ -342,8 +418,11 @@ FIELDS = {
             "infra_kind": nullable(STR),
             "wall_s": NUM,
             "log_path": STR,
+            "prompt_index": INT,
+            "open": BOOL,
         }
     ),
+    "run.closed:notification": obj({"run_id": STR, "prompts": INT}),
     "model.cancel:notification": obj({"run_id": STR}),
 }
 
@@ -399,7 +478,7 @@ def method_of(ex: dict) -> str:
 
 def test_file_shape() -> None:
     data = json.loads(EXAMPLES_PATH.read_text(encoding="utf-8"))
-    assert data["protocol"] == 1 == PROTOCOL_VERSION
+    assert data["protocol"] == 2 == PROTOCOL_VERSION
     assert set(data) == {"protocol", "examples"}
     names = [ex["name"] for ex in EXAMPLES]
     assert len(names) == len(set(names)), "duplicate names"
@@ -491,6 +570,9 @@ def test_fields() -> None:
     assert sorted(m["role"] for m in root["messages"]) == ["assistant", "system", "tool", "user"]
     assert sub["role"] == "sub" and {"subcall_id", "origin", "batch"} <= set(sub)
     assert sub["tools"] == [] and [m["role"] for m in sub["messages"]] == ["user"]
+    compact = names["model.complete:request:compact"]["message"]["params"]
+    assert compact["purpose"] == "compact" and compact["role"] == "root"
+    assert compact["messages"][-1]["role"] == "user"
 
 
 def test_python_tool() -> None:

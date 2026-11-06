@@ -64,6 +64,10 @@ export function transcriptLines(entries: readonly Entry[], width: number, theme:
       case "note":
         block(e.text, "", 6, e.tone === "info" ? { dim: true } : { color: paint(theme, e.tone === "warn" ? "yellow" : "red") });
         break;
+      case "compacting":
+        out.push([]);
+        out.push([span(`${theme.on} compacting${theme.more}`, { bold: true }), span(` ${spinner}`, { color: paint(theme, "cyan") })]);
+        break;
     }
   }
   return out;
@@ -88,12 +92,17 @@ export function Transcript(props: { lines: Line[]; scroll: number; width: number
 }
 
 /** Shown while nothing has run yet. */
-export function bannerLines(info: { app: string; engine: string | null; folder: string; root: string; sub: string }, width: number): Line[] {
+/** `followUps`: the `conversation.follow_ups` setting (v1 step 4); without it each question is a new run, as in v0. */
+export function followUpLine(followUps: boolean): string {
+  return followUps ? "Follow-ups continue the open conversation; /clear starts fresh." : "Each question is a new run.";
+}
+
+export function bannerLines(info: { app: string; engine: string | null; folder: string; root: string; sub: string; followUps?: boolean }, width: number): Line[] {
   const text = [
     `rlmh ${info.app}${info.engine ? `   engine ${info.engine}` : ""}`,
     `folder ${info.folder}`,
     `root ${info.root}   sub ${info.sub}`,
-    "Each question is a new run.",
+    followUpLine(info.followUps ?? false),
     "@file reads those files; a question with no mention works on this folder (Shift+Tab: repo or read mode). /help lists the commands.",
   ];
   return text.flatMap((t, i) => wrapText(t, width).map((l) => [span(l, i === 0 ? { bold: true } : { dim: i > 2 })]));

@@ -1,5 +1,5 @@
 {
-  "protocol": 1,
+  "protocol": 2,
   "examples": [
     {
       "name": "engine.info:request",
@@ -13,15 +13,15 @@
       "kind": "result",
       "message": {"jsonrpc": "2.0", "id": 1, "result": {
         "version": "0.1.0",
-        "protocol": 1,
+        "protocol": 2,
         "python": "3.12.8",
         "contract": "v4",
         "contract_hash": "1111111111111111111111111111111111111111111111111111111111111111",
         "training_hash": "a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6",
         "profiles": [
-          {"name": "default", "source": "builtin", "prompt_hash": "2222222222222222222222222222222222222222222222222222222222222222", "profile_hash": "3333333333333333333333333333333333333333333333333333333333333333"},
-          {"name": "training-v4", "source": "builtin", "prompt_hash": "a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6", "profile_hash": "4444444444444444444444444444444444444444444444444444444444444444"},
-          {"name": "example-user-profile", "source": "user", "prompt_hash": "5555555555555555555555555555555555555555555555555555555555555555", "profile_hash": "6666666666666666666666666666666666666666666666666666666666666666"}
+          {"name": "default", "source": "builtin", "contract": "rlmh-1", "prompt_hash": "2222222222222222222222222222222222222222222222222222222222222222", "profile_hash": "3333333333333333333333333333333333333333333333333333333333333333", "agent_api": true, "limits": {"read": {"max_turns": 50, "max_subcalls": 80, "root_max_tokens": 16384, "output_max_chars": 8000, "cell_timeout_s": 120, "cpus": 1.0, "memory_mb": 512, "pids": 64, "grader_timeout_s": null, "subcall_max_chars": 60000, "subcall_max_tokens": 16384, "subcall_thinking": null, "subcall_oversize": "error"}, "repo": {"max_turns": 150, "max_subcalls": 80, "root_max_tokens": 16384, "output_max_chars": 8000, "cell_timeout_s": 300, "cpus": 2.0, "memory_mb": 4096, "pids": 256, "grader_timeout_s": 600, "subcall_max_chars": 60000, "subcall_max_tokens": 16384, "subcall_thinking": "low", "subcall_oversize": "error"}}, "path": "/home/me/.rlm-harness/engine/0.2.0/rlm_engine/profiles/default"},
+          {"name": "training-v4", "source": "builtin", "contract": "v4", "prompt_hash": "a71401e2e3bb2e94a424309d2ac01b58ec53a3407a7d9053e589512742b8a1d6", "profile_hash": "4444444444444444444444444444444444444444444444444444444444444444", "agent_api": false, "limits": {"read": {"max_turns": 20, "max_subcalls": 80, "root_max_tokens": 4096, "output_max_chars": 8000, "cell_timeout_s": 120, "cpus": 1.0, "memory_mb": 512, "pids": 64, "grader_timeout_s": null, "subcall_max_chars": 60000, "subcall_max_tokens": 4096, "subcall_thinking": null, "subcall_oversize": "error"}, "repo": {"max_turns": 30, "max_subcalls": 80, "root_max_tokens": 4096, "output_max_chars": 8000, "cell_timeout_s": 300, "cpus": 2.0, "memory_mb": 4096, "pids": 256, "grader_timeout_s": 600, "subcall_max_chars": 60000, "subcall_max_tokens": 4096, "subcall_thinking": "low", "subcall_oversize": "error"}}, "path": "/home/me/.rlm-harness/engine/0.2.0/rlm_engine/profiles/training-v4"},
+          {"name": "example-user-profile", "source": "user", "contract": "v4", "prompt_hash": "5555555555555555555555555555555555555555555555555555555555555555", "profile_hash": "6666666666666666666666666666666666666666666666666666666666666666", "agent_api": true, "limits": {"read": {"max_turns": 50, "max_subcalls": 80, "root_max_tokens": 16384, "output_max_chars": 8000, "cell_timeout_s": 120, "cpus": 1.0, "memory_mb": 512, "pids": 64, "grader_timeout_s": null, "subcall_max_chars": 60000, "subcall_max_tokens": 16384, "subcall_thinking": null, "subcall_oversize": "error"}, "repo": {"max_turns": 150, "max_subcalls": 80, "root_max_tokens": 16384, "output_max_chars": 8000, "cell_timeout_s": 300, "cpus": 2.0, "memory_mb": 4096, "pids": 256, "grader_timeout_s": 600, "subcall_max_chars": 60000, "subcall_max_tokens": 16384, "subcall_thinking": "low", "subcall_oversize": "error"}}, "path": "/home/me/.rlm-harness/profiles/example-user-profile"}
         ]
       }}
     },
@@ -39,8 +39,10 @@
         "permission_mode": "accept-edits",
         "call_format": "native",
         "interactive": true,
+        "conversation": true,
         "tag": "example-task-1",
-        "batch": "interactive"
+        "batch": "interactive",
+        "window": {"context_window": 200000, "max_output": 64000}
       }}
     },
     {
@@ -99,6 +101,48 @@
       "direction": "engine->app",
       "kind": "error",
       "message": {"jsonrpc": "2.0", "id": 4, "error": {"code": -32010, "message": "unknown run: r_0123456789ab"}}
+    },
+    {
+      "name": "run.say:request",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 6, "method": "run.say", "params": {"run_id": "r_0123456789ab", "text": "And how long is it?"}}
+    },
+    {
+      "name": "run.say:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 6, "result": {"prompt_index": 1}}
+    },
+    {
+      "name": "run.say:error:RUN_BUSY",
+      "direction": "engine->app",
+      "kind": "error",
+      "message": {"jsonrpc": "2.0", "id": 6, "error": {"code": -32013, "message": "run r_0123456789ab is still answering a prompt"}}
+    },
+    {
+      "name": "run.close:request",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 7, "method": "run.close", "params": {"run_id": "r_0123456789ab"}}
+    },
+    {
+      "name": "run.close:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 7, "result": {}}
+    },
+    {
+      "name": "profile.check:request",
+      "direction": "app->engine",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": 10, "method": "profile.check", "params": {"path": "/home/me/.rlm-harness/tune/mine-20261104-120000/rounds/1/profiles/mine-r1-inv", "base": "v1-baseline", "gated": false}}
+    },
+    {
+      "name": "profile.check:result",
+      "direction": "engine->app",
+      "kind": "result",
+      "message": {"jsonrpc": "2.0", "id": 10, "result": {"ok": true, "errors": [], "prompt_hash": "7777777777777777777777777777777777777777777777777777777777777777", "profile_hash": "8888888888888888888888888888888888888888888888888888888888888888", "changed": ["read.max_turns", "guidance", "scripts/fixture_tool.py", "skills/fixture-recipe/SKILL.md"]}}
     },
     {
       "name": "run.vars:request",
@@ -223,6 +267,34 @@
       }}
     },
     {
+      "name": "model.complete:request:compact",
+      "direction": "engine->app",
+      "kind": "request",
+      "message": {"jsonrpc": "2.0", "id": "e7", "method": "model.complete", "params": {
+        "run_id": "r_0123456789ab",
+        "role": "root",
+        "purpose": "compact",
+        "model": {"provider": "anthropic", "model": "example-root-model", "thinking": null},
+        "messages": [
+          {"role": "system", "content": "Example system prompt."},
+          {"role": "user", "content": "Example question?\n\nThe input is in `context`."},
+          {"role": "assistant", "content": "Let me look at the input first.", "tool_call": {"id": "call_1", "name": "python", "arguments": {"code": "print(len(context))"}}},
+          {"role": "tool", "tool_call_id": "call_1", "content": "48210\n\nExample turns and sub-calls left."},
+          {"role": "user", "content": "Stop work on the task for this one reply. Example compaction request."}
+        ],
+        "tools": [
+          {"name": "python",
+           "description": "Run one cell of Python in the persistent REPL. Variables persist between calls. The result is what the cell printed, followed by your remaining turns and sub-calls.",
+           "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "The Python code to run."}},
+                          "required": ["code"], "additionalProperties": false}}
+        ],
+        "max_tokens": 8192,
+        "temperature": 1.0,
+        "thinking": "off",
+        "turn": 9
+      }}
+    },
+    {
       "name": "model.complete:result",
       "direction": "app->engine",
       "kind": "result",
@@ -313,7 +385,27 @@
         "workspace": "/example/home/scratch/r_0123456789ab",
         "input": {"chars": 48210, "lines": 1022, "sha256": "7777777777777777777777777777777777777777777777777777777777777777", "files": ["/example/input.txt"]},
         "limits": {"max_turns": 10, "max_subcalls": 50, "root_max_tokens": 4096, "output_max_chars": 4000, "cell_timeout_s": 120, "subcall_max_chars": 200000, "subcall_max_tokens": 2048},
-        "log_path": "/example/home/runs/interactive/runs.jsonl"
+        "log_path": "/example/home/runs/interactive/runs.jsonl",
+        "window": {"context_window": 200000, "max_output": 64000},
+        "compaction": {"window": 200000, "trigger": 130368, "keep": 31344},
+        "conversation": true
+      }}
+    },
+    {
+      "name": "run.compacted:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.compacted", "params": {
+        "run_id": "r_0123456789ab",
+        "turn": 9,
+        "prompt_index": 0,
+        "child_id": null,
+        "before_tokens": 131022,
+        "after_tokens": 33870,
+        "dropped_messages": 12,
+        "kept_messages": 4,
+        "summary_chars": 2310,
+        "seconds": 14.2
       }}
     },
     {
@@ -418,8 +510,16 @@
         "infra_error": null,
         "infra_kind": null,
         "wall_s": 14.2,
-        "log_path": "/example/home/runs/interactive/runs.jsonl"
+        "log_path": "/example/home/runs/interactive/runs.jsonl",
+        "prompt_index": 0,
+        "open": true
       }}
+    },
+    {
+      "name": "run.closed:notification",
+      "direction": "engine->app",
+      "kind": "notification",
+      "message": {"jsonrpc": "2.0", "method": "run.closed", "params": {"run_id": "r_0123456789ab", "prompts": 2}}
     },
     {
       "name": "model.cancel:notification",

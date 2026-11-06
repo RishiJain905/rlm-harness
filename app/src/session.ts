@@ -19,7 +19,10 @@ import {
   type EngineInfo,
   type ModelCompleteParams,
   type ModelRef,
+  type ModelWindow,
   type PermissionMode,
+  type ProfileCheckResult,
+  type RunSayResult,
   type RunStartParams,
   type RunStartResult,
   type RunVarsResult,
@@ -48,6 +51,8 @@ export interface StartRun {
   tag?: string;
   batch?: string;
   logDir?: string;
+  /** v1 step 4: keep the run open for follow-ups (run.say). Only the interactive app sets it; scripts stay one-shot. */
+  conversation?: boolean;
 }
 
 /** A mistake in what the user asked for; the CLI prints it and exits 2. */
@@ -76,17 +81,21 @@ export function thinkingOf(settings: Settings, role: "root" | "sub"): ModelRef["
 }
 
 type ResolveCallFormat = (ref: ModelRef, setting: "auto" | "fenced" | "native") => CallFormat;
+type WindowOf = (ref: ModelRef) => ModelWindow;
 
-/** Pure: the snake_case `run.start` params, with every default taken from `settings`. Throws UsageError. */
-export function buildRunParams(r: StartRun, deps: { settings: Settings; resolveCallFormat: ResolveCallFormat }): RunStartParams {
+/** Pure: the snake_case `run.start` params, with every default taken from `settings`. `windowOf` gives the root model's
+ *  catalog window (v1 step 3); without it, `window` is zeros, which the engine reads as unknown. Throws UsageError. */
+export function buildRunParams(
+  r: StartRun,
+  deps: { settings: Settings; resolveCallFormat: ResolveCallFormat; windowOf?: WindowOf },
+): RunStartParams {
   const { settings } = deps;
   if (r.mode !== "read" && r.mode !== "repo") throw new UsageError(`mode must be read or repo (got ${JSON.stringify(r.mode)})`);
   const root = r.root ?? settingRef(settings, "root");
   if (!root) {
     throw new UsageError("no root model: pass --root provider/model, or pick one with `rlmh config set root.model provider/model`");
   }
-  // An empty sub.model is the root's provider and model, with the sub thinking setting, never the root's.
-  const sub = r.sub ?? settingRef(settings, "sub") ?? { provider: root.provider, model: root.model, thinking: thinkingOf(settings, "sub") };
+  const sub = r.sub ?? subRef(settings, root);
   const permissionMode = r.permissionMode ?? settings.permissions.mode;
   if (!PERMISSION_MODES.includes(permissionMode)) {
     throw new UsageError(`permission mode must be one of ${PERMISSION_MODES.join(", ")} (got ${JSON.stringify(permissionMode)})`);
@@ -115,7 +124,21 @@ export function buildRunParams(r: StartRun, deps: { settings: Settings; resolveC
   if (r.tag !== undefined) p.tag = r.tag;
   if (r.batch !== undefined) p.batch = r.batch;
   if (r.logDir !== undefined) p.log_dir = resolve(r.logDir);
+  p.window = deps.windowOf?.(root) ?? { context_window: 0, max_output: 0 };
+  p.conversation = r.conversation ?? false;
   return p;
+}
+
+/** The root and sub models a run with no overrides starts with, as buildRunParams fills them; root is undefined while
+ *  no root model is picked. The interactive app compares them with an open conversation's (v1 step 4). */
+export function settingsRefs(settings: Settings): { root: ModelRef | undefined; sub: ModelRef | undefined } {
+  const root = settingRef(settings, "root");
+  return { root, sub: root ? subRef(settings, root) : undefined };
+}
+
+/** An empty sub.model is the root's provider and model, with the sub thinking setting, never the root's. */
+function subRef(settings: Settings, root: ModelRef): ModelRef {
+  return settingRef(settings, "sub") ?? { provider: root.provider, model: root.model, thinking: thinkingOf(settings, "sub") };
 }
 
 function settingRef(settings: Settings, role: "root" | "sub"): ModelRef | undefined {
@@ -152,8 +175,17 @@ export class Session {
     this.engine = parts.engine;
   }
 
-  /** Throws SettingsError, EngineNotFound, ProtocolMismatch (the engine is killed) or EngineStartError. */
-  static async open(opts: { home: string; verbose?: boolean; approvals: (p: ApprovalParams) => Promise<ApprovalResult> }): Promise<Session> {
+  /**
+   * Throws SettingsError, EngineNotFound, ProtocolMismatch (the engine is killed) or EngineStartError. `env` is merged
+   * over process.env before findEngine, so the engine (and through it the worker) gets it, key-like names still
+   * stripped at both hops (`rlmh eval`'s evalEngineEnv, v1 step 2).
+   */
+  static async open(opts: {
+    home: string;
+    verbose?: boolean;
+    approvals: (p: ApprovalParams) => Promise<ApprovalResult>;
+    env?: Record<string, string>;
+  }): Promise<Session> {
     const settings = loadSettings(opts.home);
     const keys = new KeyStore({ home: opts.home });
     const catalog = new Catalog(opts.home);
@@ -161,7 +193,7 @@ export class Session {
     const gateway = new Gateway({ keys, catalog, settings, bus });
     // engine.ts strips key-like variables from the engine's env (D-29)
     const verbose = opts.verbose ?? settings.display.verbose;
-    const engine = startEngine(findEngine({ home: opts.home, env: process.env }), {
+    const engine = startEngine(findEngine({ home: opts.home, env: { ...process.env, ...opts.env } }), {
       onStderr: verbose ? (line) => process.stderr.write(`${line}\n`) : undefined,
     });
     const { link } = engine;
@@ -204,7 +236,14 @@ export class Session {
   start(r: StartRun): Promise<RunStartResult> {
     let params: RunStartParams;
     try {
-      params = buildRunParams(r, { settings: this.settings, resolveCallFormat: (ref, s) => this.gateway.resolveCallFormat(ref, s) });
+      params = buildRunParams(r, {
+        settings: this.settings,
+        resolveCallFormat: (ref, s) => this.gateway.resolveCallFormat(ref, s),
+        windowOf: (ref) => {
+          const m = this.catalog.get(ref.provider, ref.model);
+          return { context_window: m?.context_window ?? 0, max_output: m?.max_output ?? 0 };
+        },
+      });
     } catch (err) {
       return Promise.reject(err);
     }
@@ -218,6 +257,26 @@ export class Session {
     } catch (err) {
       if (!(err instanceof RpcError && err.code === ErrorCode.UNKNOWN_RUN)) throw err;
     }
+  }
+
+  /** The next question of an open conversation (v1 step 4). Passes the engine's RpcError through: -32010 when the
+   *  conversation is gone, -32013 while a prompt is still running, -32602 for empty text. */
+  say(runId: string, text: string): Promise<RunSayResult> {
+    return this.engine.link.request<RunSayResult>("run.say", { run_id: runId, text });
+  }
+
+  /** Ends an open conversation; returns once run.closed was sent. A run that is unknown or already closed is no error. */
+  async closeRun(runId: string): Promise<void> {
+    try {
+      await this.engine.link.request("run.close", { run_id: runId });
+    } catch (err) {
+      if (!(err instanceof RpcError && err.code === ErrorCode.UNKNOWN_RUN)) throw err;
+    }
+  }
+
+  /** v1 step 6: checks a candidate profile folder against `base` (`profile.check`); profile content never throws. */
+  checkProfile(path: string, base: string | null, gated = false): Promise<ProfileCheckResult> {
+    return this.engine.link.request<ProfileCheckResult>("profile.check", { path: resolve(path), base, gated });
   }
 
   async vars(runId: string): Promise<VarInfo[]> {

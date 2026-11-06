@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ProtocolMismatch } from "../src/engine.ts";
+import { RpcError } from "../src/link.ts";
 import type { ApprovalParams, ApprovalResult, ModelRef, RunFinishedParams } from "../src/protocol.ts";
 import { buildRunParams, Session, thinkingOf, UsageError, type StartRun } from "../src/session.ts";
 import { defaultSettings, setSetting, type Settings } from "../src/settings.ts";
@@ -42,7 +43,49 @@ describe("buildRunParams", () => {
       permission_mode: "accept-edits", // S-27
       call_format: "native", // auto: fake/scripted is an API model with tool calls
       interactive: false,
+      window: { context_window: 0, max_output: 0 }, // no windowOf
+      conversation: false, // v1 step 4: one-shot unless the interactive app asks
     });
+  });
+
+  test("conversation is false by default and passes through when asked (v1 step 4)", () => {
+    expect(build(readRun, { "root.model": "fake/scripted" }).conversation).toBe(false);
+    expect(build({ ...readRun, conversation: true }, { "root.model": "fake/scripted" }).conversation).toBe(true);
+    expect(build({ ...readRun, conversation: false }, { "root.model": "fake/scripted" }).conversation).toBe(false);
+  });
+
+  test("window comes from windowOf for the root model (v1 step 3)", () => {
+    const asked: ModelRef[] = [];
+    const p = buildRunParams(
+      { ...readRun, sub: { provider: "openai", model: "gpt-x", thinking: null } },
+      {
+        settings: settingsWith({ "root.model": "fake/scripted" }),
+        resolveCallFormat: () => "fenced",
+        windowOf: (ref) => {
+          asked.push(ref);
+          return { context_window: 128_000, max_output: 16_384 };
+        },
+      },
+    );
+    expect(p.window).toEqual({ context_window: 128_000, max_output: 16_384 });
+    expect(asked).toEqual([FAKE]); // the root's model, not the sub's
+  });
+
+  test("window is zeros without windowOf, and for a model the catalog doesn't know", () => {
+    expect(build(readRun, { "root.model": "fake/scripted" }).window).toEqual({ context_window: 0, max_output: 0 });
+    // the same lookup Session.start makes, against the rig's real catalog
+    const windowOf = (ref: ModelRef) => {
+      const m = gw.catalog.get(ref.provider, ref.model);
+      return { context_window: m?.context_window ?? 0, max_output: m?.max_output ?? 0 };
+    };
+    const settings = settingsWith({});
+    const known = buildRunParams({ ...readRun, root: FAKE }, { settings, resolveCallFormat: () => "fenced", windowOf });
+    expect(known.window).toEqual({ context_window: 1_000_000, max_output: 0 });
+    const unknown = buildRunParams(
+      { ...readRun, root: { provider: "openai", model: "no-such-model-FAKE", thinking: null } },
+      { settings, resolveCallFormat: () => "fenced", windowOf },
+    );
+    expect(unknown.window).toEqual({ context_window: 0, max_output: 0 });
   });
 
   test("settings other than the defaults", () => {
@@ -143,7 +186,7 @@ test(
         "  buf += decoder.decode(chunk, { stream: true }); let nl;",
         "  while ((nl = buf.indexOf('\\n')) >= 0) {",
         "    const msg = JSON.parse(buf.slice(0, nl)); buf = buf.slice(nl + 1);",
-        "    const info = { version: '0.1.0', protocol: 2, python: '3.12.0', contract: null, contract_hash: null, training_hash: null, profiles: [] };",
+        "    const info = { version: '0.1.0', protocol: 3, python: '3.12.0', contract: null, contract_hash: null, training_hash: null, profiles: [] };",
         "    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: info }) + '\\n');",
         "  }",
         "}",
@@ -159,7 +202,7 @@ test(
         caught = err;
       }
       expect(caught).toBeInstanceOf(ProtocolMismatch);
-      expect((caught as Error).message).toBe("engine speaks protocol 2, this rlmh speaks 1");
+      expect((caught as Error).message).toBe("engine speaks protocol 3, this rlmh speaks 2");
       expect(existsSync(marker)).toBe(true); // the engine was told to go before open gave up
     } finally {
       restore();
@@ -219,7 +262,7 @@ describe("with the real engine and the fake provider", () => {
   test(
     "a read run, run.started to run.finished on the bus",
     async () => {
-      expect((await session.info()).protocol).toBe(1);
+      expect((await session.info()).protocol).toBe(2);
       script({ root: [{ text: "", tool_call: { code: "submit('42')" } }] });
       const { run_id, log_path } = await session.start(readRun());
       expect(run_id).toMatch(/^r_[0-9a-f]{12}$/);
@@ -286,6 +329,42 @@ describe("with the real engine and the fake provider", () => {
         off();
         session.gateway.cancelRun = real;
       }
+    },
+    REAL,
+  );
+
+  test(
+    "a conversation (v1 step 4): start with conversation, say, then closeRun: two run.finished, one run.closed",
+    async () => {
+      script({ root: [{ text: "", tool_call: { code: "x = 41\nsubmit(1)" } }, { text: "", tool_call: { code: "submit(x + 1)" } }] });
+      const { run_id } = await session.start(readRun({ interactive: true, conversation: true }));
+      const mine = () => events.filter((e) => e.params.run_id === run_id);
+      const first = await finished(run_id);
+      expect([first.prompt_index, first.open, first.answer]).toEqual([0, true, 1]);
+      expect(mine().find((e) => e.method === "run.started")!.params.conversation).toBe(true);
+      // the REPL waits between prompts: its variables are there
+      expect((await session.vars(run_id)).map((v) => v.name)).toContain("x");
+      expect(await session.say(run_id, "And one more?")).toEqual({ prompt_index: 1 });
+      const second = await new Promise<RunFinishedParams>((resolve) => {
+        const check = () => {
+          const f = mine().filter((e) => e.method === "run.finished");
+          if (f.length === 2) {
+            off();
+            resolve(f[1]!.params);
+          }
+        };
+        const off = session.bus.on("engine.event", () => queueMicrotask(check));
+        check();
+      });
+      expect([second.prompt_index, second.open, second.answer]).toEqual([1, true, 42]);
+      await session.closeRun(run_id); // returns once run.closed was sent
+      const methods = mine().map((e) => e.method);
+      expect(methods.filter((m) => m === "run.finished").length).toBe(2);
+      expect(methods.filter((m) => m === "run.closed").length).toBe(1);
+      expect(methods[methods.length - 1]).toBe("run.closed");
+      expect(mine().find((e) => e.method === "run.closed")!.params.prompts).toBe(2);
+      await session.closeRun(run_id); // a closed run: -32010, swallowed
+      expect(await session.say(run_id, "again?").catch((e: unknown) => (e instanceof RpcError ? e.code : e))).toBe(-32010);
     },
     REAL,
   );

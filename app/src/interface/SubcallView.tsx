@@ -8,19 +8,11 @@ import { useInput } from "ink";
 import { useState } from "react";
 import { formatCost, formatDuration, formatTokens, wrapText } from "./format.ts";
 import { Lines } from "./Lines.tsx";
-import type { Block, ChildInfo, SubcallRow } from "./store.ts";
+import { issuedBy, type Block, type ChildInfo, type SubcallRow } from "./store.ts";
 import { rowSeconds, rowTokens, statusColor, statusWord } from "./SubcallPanel.tsx";
 import { paint, span, useTheme, type Line, type Theme } from "./theme.ts";
 
-/** "Issued by turn T, line L: <that line of the cell>", once the cell's code is known; `rlm<n> turn T` for a call an
- *  rlm() child made, whose cells `cellCode` then holds. */
-export function issuedBy(row: SubcallRow, cellCode: Record<number, string>): string {
-  const { turn, line } = row.origin;
-  const by = row.origin.child === undefined ? `turn ${turn}` : `rlm${row.origin.child} turn ${turn}`;
-  if (line === null) return `Issued by ${by}, line unknown`;
-  const text = cellCode[turn]?.split("\n")[line - 1]?.trim();
-  return `Issued by ${by}, line ${line}${text ? `: ${text}` : ""}`;
-}
+export { issuedBy };
 
 export function subcallViewLines(row: SubcallRow, block: Block | undefined, cellCode: Record<number, string>, now: number, width: number, theme: Theme): Line[] {
   const lines: Line[] = [];

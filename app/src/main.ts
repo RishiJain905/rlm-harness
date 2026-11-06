@@ -6,7 +6,9 @@
 import { parseArgs } from "node:util";
 import { batchCommand, preflightBatch } from "./cli/batch.ts";
 import { configCommand } from "./cli/config.ts";
+import { evalCommand, evalSubcommand, preflightEval } from "./cli/eval.ts";
 import { preflightRun, runCommand, type CliIO } from "./cli/run.ts";
+import { preflightTune, tuneCommand } from "./cli/tune.ts";
 import { ensureEngine, runSetup } from "./cli/setup.ts";
 import { isCompiledBinary, runUpdate, sweepOldBinaries, type UpdateOptions } from "./cli/update.ts";
 import { EngineNotFound, fetchInfo, findEngine, startEngine, type EngineProcess } from "./engine.ts";
@@ -25,6 +27,11 @@ Commands:
   rlmh             open the interactive app
   rlmh run         one run: --question Q --input FILE..., or --task T --repo DIR [--test-hint CMD]
   rlmh batch       every task in a TASKS.jsonl file: rlmh batch TASKS.jsonl [--jobs N] [--out DIR]
+  rlmh eval        run an eval set and grade it: rlmh eval SET [--split S] [--only IDS] [--go] [--max-usd X]
+  rlmh eval report OUT      rebuild report.json and report.md of an eval output
+  rlmh eval compare A B     pair two eval outputs task by task
+  rlmh eval ledger          what every --go has spent, against the $30 cap
+  rlmh tune        Harness² on an eval set's tune split: rlmh tune SET --root P/M --base P --name N --from OUT [--go] [--gated]
   rlmh config      list, get KEY, or set KEY VALUE in settings.toml
   rlmh info        start the engine and print its info as JSON
   rlmh setup       install Python 3.12 (through uv, after asking) and the engine: [--yes|-y] [--force]
@@ -156,6 +163,25 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<number>
     const stop = await (deps.engineReady ?? engineReady)();
     if (stop !== null) return stop;
     return command === "run" ? runCommand(own, io) : batchCommand(own, io);
+  }
+  if (command === "eval") {
+    // as for batch: the set, the selection and the models are checked before setup may offer a download;
+    // report, compare and ledger start no engine
+    const refused = await preflightEval(own, io);
+    if (refused !== null) return refused;
+    if (evalSubcommand(own) === null) {
+      const stop = await (deps.engineReady ?? engineReady)();
+      if (stop !== null) return stop;
+    }
+    return evalCommand(own, io);
+  }
+  if (command === "tune") {
+    // as for eval: the set, --from and the flags are checked before setup may offer a download
+    const refused = await preflightTune(own, io);
+    if (refused !== null) return refused;
+    const stop = await (deps.engineReady ?? engineReady)();
+    if (stop !== null) return stop;
+    return tuneCommand(own, io);
   }
   if (command === "config") return configCommand(own, io);
   if (command === "setup") return setup(own.filter((a) => a !== "--verbose"));

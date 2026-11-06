@@ -8,13 +8,14 @@ and `FakeApp(script=...)`.
 from __future__ import annotations
 
 import json
+import math
 import secrets
 from pathlib import Path, PurePosixPath
 
 import pytest
 
-from conftest import run
-from fakeapp import FakeApp
+from conftest import compact_profile, run
+from fakeapp import FakeApp, _request_chars
 from rlm_engine import inputs, loop
 from rlm_engine.profiles import BUILTIN_DIR, ProfileError, load_profile
 from rlm_engine.worker import agentapi
@@ -182,7 +183,8 @@ def test_thinking_and_empty_replies(home: Path) -> None:
         "try:\n    llm('Blank one', schema=int, thinking='high')\nexcept ValueError as e:\n    print('ValueError')",
         "print(llm_batch(['Blank two', 'Give a number'], schema=int, thinking='medium'))",
         "print(llm('Give a number', thinking='low'))",
-        "try:\n    llm('x', thinking='max')\nexcept ValueError as e:\n    print(e)",
+        "try:\n    llm('x', thinking='huge')\nexcept ValueError as e:\n    print(e)",
+        "print(llm('Give a number', thinking='xhigh'), llm('Give a number', thinking='max'))",
         "submit(1)",
     ]
     app = FakeApp(script={"root": [fenced(c) for c in cells],
@@ -192,13 +194,13 @@ def test_thinking_and_empty_replies(home: Path) -> None:
     assert out[0] == "ValueError\n"
     assert out[1].endswith("[None, 41]\n")
     assert out[2] == "41\n"
-    assert out[3].startswith("thinking must be one of 'off', 'low', 'medium', 'high'")
+    assert out[3].startswith("thinking must be one of 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'")
     subs = [(r["messages"][-1]["content"], r["thinking"]) for r in app.requests if r["role"] == "sub"]
     blank = [(p, t) for p, t in subs if p.startswith("Blank one")]
     assert [t for _, t in blank] == ["high", "off"]  # the retry of an empty reply does not think (D-164)
     assert "ran out of room" in blank[1][0] and "Your previous reply was" not in blank[1][0]
     assert [t for p, t in subs if p.startswith("Blank two")] == ["medium", "off"]
-    assert [t for p, t in subs if p.startswith("Give a number")] == ["medium", "low"]
+    assert [t for p, t in subs if p.startswith("Give a number")] == ["medium", "low", "xhigh", "max"]  # D-250
 
 
 def test_training_v4_has_none_of_it(home: Path) -> None:
@@ -305,6 +307,7 @@ def deep_profile(home: Path, **rlm: int):
     folder = home / "profiles" / name
     folder.mkdir(parents=True)
     (folder / "profile.toml").write_text(text, encoding="utf-8")
+    (folder / "system.md").write_bytes((BUILTIN_DIR / "default" / "system.md").read_bytes())  # rlmh-1 (D-256)
     return load_profile(name, home)
 
 
@@ -443,3 +446,34 @@ def test_git_runs_no_repository_hook(tmp_path: Path) -> None:
     tree = workspace.snapshot(repo, scratch)
     workspace.diff(repo, tree, scratch)
     assert not marker.exists()
+
+
+def test_rlm_child_compacts(home: Path) -> None:
+    """A child run compacts as the run does (v1 step 3): its summary call is role "sub" with its `child` field and
+    `purpose`, its run.compacted carries the child's id, and the summary's usage is the child's."""
+    compact_profile(home)
+    cells = ["ans = rlm('Print a lot, then answer', context='x')\nprint(ans)", "submit(ans)"]
+    child = [fenced(f"print({c!r} * 3000)") for c in "abcdefgh"] + [fenced("submit('child done')")]
+    app = FakeApp(script={"root": [fenced(c) for c in cells], "children": {"1": child},
+                          "compact": [{"text": "CHILD SUMMARY"}]})
+    record = play(read_spec(home, {"a.txt": "x\n"}, profile=load_profile("compact-test", home)), app, home)
+    assert record["answer"] == "child done"
+    [event] = app.sent("run.compacted")
+    assert event["child_id"] == 1 and event["prompt_index"] == 0
+    assert record["compactions"] == [{k: v for k, v in event.items() if k != "run_id"}]
+    [kid] = record["children"]
+    [summary] = [r for r in app.requests if r.get("purpose") == "compact"]
+    assert summary["role"] == "sub" and summary["subcall_id"] == kid["subcall_id"]
+    assert summary["child"] == {"id": 1, "turn": event["turn"], "max_turns": kid["max_turns"], "depth": 1}
+    assert summary["batch"] == {"id": "rlm1", "index": 0, "size": 1} and summary["max_tokens"] == 512
+    assert summary["messages"][-1]["content"].startswith("Stop work on the task for this one reply.")
+    turns = [r for r in app.requests if r.get("child") and r.get("purpose") is None]
+    after = next(r for r in turns if r["child"]["turn"] == event["turn"])
+    assert after["messages"][:2] == turns[0]["messages"][:2]
+    assert after["messages"][2]["content"].endswith(
+        "CHILD SUMMARY\n\n[The newest turns follow as they were. The REPL still holds every variable.]")
+    turn_input = sum(t["usage"]["input_tokens"] for t in kid["turns"])
+    summary_input = math.ceil(_request_chars(summary) / 4)
+    assert kid["usage"]["input_tokens"] == turn_input + summary_input
+    assert record["usage"]["sub"]["input_tokens"] == kid["usage"]["input_tokens"]  # through finish_child
+    assert not any(r.get("purpose") for r in app.requests if r["role"] == "root")

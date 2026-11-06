@@ -159,7 +159,7 @@ class Worker:
     """One run's REPL worker. Restarted after a timeout or a crash; `close()` kills it for good.
 
         worker = Worker(mode="read", context=text, workspace=scratch, scratch=scratch, limits=limits,
-                        messages=contract.cell_messages(limits, edit=False), on_request=bridge.handle,
+                        messages=profile.texts.cell_messages(limits, False), on_request=bridge.handle,
                         shell=workspace.find_shell())
         await worker.start()
         result = await worker.run_cell("print(len(context))")

@@ -1,13 +1,13 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
 // /settings: every row of the one schema that `rlmh config` uses, plus a base_url and
-// max_in_flight pair per listed provider. Enum: Left/Right cycles. Bool: Space toggles. String and
-// int: type, Enter. d resets to the default. Each change is saved at once; a validation error
-// shows under the row and nothing is saved.
+// max_in_flight pair per listed provider. Enum: Left/Right cycles. Bool: Space toggles. String, int
+// and number: type, Enter. d resets to the default. Each change is saved at once; a validation error
+// shows under the row and nothing is saved. tune.enabled is never turned on here (D-231).
 
 import { useInput } from "ink";
 import { useEffect, useState } from "react";
 import { PROVIDERS } from "../../gateway/providers.ts";
-import { defaultSetting, getSetting, SCHEMA, type SettingDef } from "../../settings.ts";
+import { defaultSetting, getSetting, refuseTuneOn, SCHEMA, type SettingDef } from "../../settings.ts";
 import { applySetting } from "../store.ts";
 import { paint, span, useTheme, type Line } from "../theme.ts";
 import { fit, Frame, listLines } from "./common.tsx";
@@ -58,6 +58,7 @@ export function SettingsScreen(props: ScreenProps) {
   const value = (key: string) => getSetting(deps.session.settings, key);
   const set = (key: string, v: unknown) => {
     try {
+      refuseTuneOn(key, v); // only /tune on, after its estimate, sets it to true
       applySetting(deps, key, v);
       setError(null);
       redraw((n) => n + 1);
@@ -87,7 +88,7 @@ export function SettingsScreen(props: ScreenProps) {
         set(row.key, choices[next]);
       } else if (input === " " && row.def.type === "bool") {
         set(row.key, !value(row.key));
-      } else if (key.return && (row.def.type === "string" || row.def.type === "int") && !(row.key === "profile" && profiles)) {
+      } else if (key.return && (row.def.type === "string" || row.def.type === "int" || row.def.type === "number") && !(row.key === "profile" && profiles)) {
         setEditing(String(value(row.key)));
         setError(null);
       } else if (input === "d") {

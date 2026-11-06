@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { runsDir } from "../../paths.ts";
 import { formatCost } from "../format.ts";
 import { Lines } from "../Lines.tsx";
-import { listRuns, readRun, RUN_LOG_FORMAT, type RunSummary } from "../runs.ts";
+import { listRuns, READABLE_FORMATS, readRun, type RunSummary } from "../runs.ts";
 import { viewFromRecord, type RunView } from "../store.ts";
 import { allRows, blockOfRow, rowCellCode, SubcallPanel, type PanelState } from "../SubcallPanel.tsx";
 import { SubcallView } from "../SubcallView.tsx";
@@ -28,8 +28,9 @@ function date(seconds: number): string {
 
 export function runRow(r: RunSummary, more: string): string {
   // the row names the format; Enter says it was written by another format version
-  const status = r.format !== RUN_LOG_FORMAT ? `format ${r.format}` : r.infraKind ? `failed:${r.infraKind}` : "ok";
-  const text = r.text.replace(/\s+/g, " ");
+  const status = !READABLE_FORMATS.includes(r.format) ? `format ${r.format}` : r.infraKind ? `failed:${r.infraKind}` : "ok";
+  // a follow-up's record (v1 step 4) names its prompt before its question
+  const text = `${r.promptIndex > 0 ? `follow-up ${r.promptIndex}: ` : ""}${r.text}`.replace(/\s+/g, " ");
   const start = text.length > 40 ? `${text.slice(0, 40 - more.length)}${more}` : text.padEnd(40);
   return `${date(r.startedAt)}  ${r.mode.padEnd(4)}  ${r.root.padEnd(24)}  ${formatCost(r.costUsd).padStart(8)}  ${String(r.turns).padStart(5)}  ${start}  ${status}`;
 }
@@ -58,7 +59,9 @@ export function RunsScreen(props: ScreenProps) {
       else if (key.downArrow) setSel((s) => Math.min(Math.max(0, (runs?.length ?? 1) - 1), s + 1));
       else if (key.return && runs?.[sel]) {
         const r = runs[sel];
-        if (r.format !== RUN_LOG_FORMAT) return setMessage(`That run was ${OTHER_FORMAT} (format ${r.format}); this rlmh reads format ${RUN_LOG_FORMAT}.`);
+        if (!READABLE_FORMATS.includes(r.format)) {
+          return setMessage(`That run was ${OTHER_FORMAT} (format ${r.format}); this rlmh reads formats ${READABLE_FORMATS.join(" and ")}.`);
+        }
         readRun(r).then(
           (record) => {
             setMessage(null);
@@ -79,7 +82,7 @@ export function RunsScreen(props: ScreenProps) {
   else if (runs?.length === 0) body.push([span("No runs yet.", { dim: true })]);
   else if (runs) {
     body.push([span(fit(`${"date".padEnd(16)}  mode  ${"root model".padEnd(24)}  ${"cost".padStart(8)}  turns  ${"question or task".padEnd(40)}  status`, w, theme), { dim: true })]);
-    const rows: Line[] = runs.map((r) => [span(fit(runRow(r, theme.more), w, theme), { color: r.infraKind && r.format === RUN_LOG_FORMAT ? paint(theme, "red") : undefined })]);
+    const rows: Line[] = runs.map((r) => [span(fit(runRow(r, theme.more), w, theme), { color: r.infraKind && READABLE_FORMATS.includes(r.format) ? paint(theme, "red") : undefined })]);
     body.push(...listLines(rows, sel, Math.max(1, props.height - 5)));
   }
   if (message) body.push([span(fit(message, w, theme), { color: paint(theme, "yellow") })]);

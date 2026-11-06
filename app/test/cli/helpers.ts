@@ -83,13 +83,14 @@ export function jsonLines(stdout: string): any[] {
 
 /** §5.3 params plus run_id, by event; and the gateway.call line (§7.8). */
 export const EVENT_KEYS: Record<string, string[]> = {
-  "run.started": ["run_id", "tag", "mode", "profile", "prompt_hash", "profile_hash", "contract_hash", "call_format", "root", "sub", "permission_mode", "workspace", "input", "limits", "log_path"],
+  "run.started": ["run_id", "tag", "mode", "profile", "prompt_hash", "profile_hash", "contract_hash", "call_format", "root", "sub", "permission_mode", "workspace", "input", "limits", "log_path", "window", "compaction", "conversation"],
+  "run.compacted": ["run_id", "turn", "prompt_index", "child_id", "before_tokens", "after_tokens", "dropped_messages", "kept_messages", "summary_chars", "seconds"],
   "run.reply": ["run_id", "turn", "text", "tool_call", "reasoning", "finish_reason", "usage", "seconds"],
   "run.cell": ["run_id", "turn", "code", "output", "error", "observation", "seconds", "restarted", "crash", "repo_changed"],
   "run.subcall": ["run_id", "subcall_id", "origin", "batch", "prompt_chars", "status", "error", "seconds"],
   "run.permission": ["run_id", "turn", "kind", "detail", "allowed", "asked", "remembered"],
   "run.budget": ["run_id", "turns_left", "subcalls_left"],
-  "run.finished": ["run_id", "tag", "answer", "submitted", "answer_valid", "turns", "subcalls", "usage", "cost_usd", "infra_error", "infra_kind", "wall_s", "log_path"],
+  "run.finished": ["run_id", "tag", "answer", "submitted", "answer_valid", "turns", "subcalls", "usage", "cost_usd", "infra_error", "infra_kind", "wall_s", "log_path", "prompt_index", "open"],
   "gateway.call": ["run_id", "role", "subcall_id", "model", "usage", "seconds", "error", "endpoint"],
 };
 
@@ -99,7 +100,7 @@ export const RECORD_KEYS = [
   "profile_hash", "mode", "call_format", "root", "sub", "permission_mode", "limits", "started_at", "wall_s", "question",
   "input", "workspace", "base_tree", "messages", "turns", "subcalls", "children", "fetches", "permissions", "submitted", "answer",
   "answer_valid", "usage", "cost_usd", "cache", "timeouts", "crashes", "restarts", "diff", "infra_error", "infra_kind",
-  "host_traceback",
+  "host_traceback", "window", "compactions", "prompt_index", "conversation", // format 2 (v1 step 3)
 ];
 
 export function sorted(keys: Iterable<string>): string[] {

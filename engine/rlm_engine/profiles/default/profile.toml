@@ -1,4 +1,5 @@
-contract = "v4"
+contract = "rlmh-1"           # rlmh's own texts (rlmhcontract.py); prompt v4 stays training-v4's (D-256)
+system = "system.md"          # the system prompt; guidance.md follows it
 guidance = "guidance.md"
 cache_api = true              # cache-shaped sub-calls: segments(), llm(..., over=), llm_batch(..., shared=, over=) (D-119)
 agent_api = true              # ask_files, schema=, llm_async, rlm, review, check, outline (D-157 to D-162)
@@ -14,7 +15,13 @@ max_turns = 30                # each child's turn limit; rlm(max_turns=) can onl
 max_depth = 1                 # the root's children cannot start children of their own
 max_parallel = 4              # children running at once; the rest wait
 
-[read]                        # contract.READ_LIMITS_V4 with more turns and output tokens (D-152)
+[compaction]              # default profile
+window = 262144           # W': compact as if the model's window were at most this many tokens
+keep_ratio = 0.16         # DeepSeek Harness: keep the newest 16% of (W' - out) verbatim
+reserve = 65536           # DeepSeek Harness's margin
+summary_max_tokens = 8192
+
+[read]                        # the base read limits (prompt v4's READ_LIMITS_V4, D-256) with more turns and output tokens (D-152)
 max_turns = 50
 max_subcalls = 80
 root_max_tokens = 16384
@@ -23,8 +30,9 @@ cell_timeout_s = 120
 subcall_max_chars = 60000
 subcall_max_tokens = 16384
 subcall_oversize = "error"
+submit_check = 0.5            # hold a first submit() resting on under half of `context`, once (D-251)
 
-[repo]                        # contract.EDIT_LIMITS_V4 with more turns and output tokens (D-152)
+[repo]                        # the base repo limits (prompt v4's EDIT_LIMITS_V4, D-256) with more turns and output tokens (D-152)
 max_turns = 150
 max_subcalls = 80
 root_max_tokens = 16384

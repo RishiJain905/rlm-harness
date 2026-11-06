@@ -98,7 +98,7 @@ if [ "$win" = 1 ]; then [ "$(pykeys)" = "$keys_before" ] || fail "setup added ke
 
 say "5. info"
 "$bin" info </dev/null >"$work/info.json"
-jq -e --arg v "$version" '.engine.protocol == 1 and .engine.version == $v and (.engine.python | test("^3\\.12\\."))' "$work/info.json" >/dev/null ||
+jq -e --arg v "$version" '.engine.protocol == 2 and .engine.version == $v and (.engine.python | test("^3\\.12\\."))' "$work/info.json" >/dev/null ||
   fail "info: $(cat "$work/info.json")"
 python=$(jq -r .python "$marker")
 pydir="$H/python"

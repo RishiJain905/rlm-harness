@@ -1,12 +1,14 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
-// /model: the root and sub rows. Enter picks a provider, then a model (typing filters, and Enter
-// on a typed id the catalog lacks takes it as written), then the thinking level. Each pick is
-// saved through applySetting and applies to the next run.
+// /model: the root, sub and tuning rows. Enter picks a provider, then a model (typing filters, and
+// Enter on a typed id the catalog lacks takes it as written), then, for root and sub, the thinking
+// level. The tuning row is tune.model, the model of /tune's sessions (D-232); it has no thinking
+// setting. Each pick is saved through applySetting and applies to the next run.
 
 import { useInput } from "ink";
 import { useEffect, useState } from "react";
 import type { ModelInfo } from "../../gateway/catalog.ts";
 import { PROVIDERS } from "../../gateway/providers.ts";
+import { thinkingRule } from "../../gateway/thinking.ts";
 import { SettingsError } from "../../settings.ts";
 import { formatTokens } from "../format.ts";
 import { applySetting, isActive } from "../store.ts";
@@ -14,9 +16,14 @@ import { paint, span, useTheme, type Line } from "../theme.ts";
 import { fit, Frame, listLines } from "./common.tsx";
 import type { ScreenProps } from "./index.ts";
 
-type Role = "root" | "sub";
-const THINKING = ["default", "off", "low", "medium", "high"] as const;
+type Role = "root" | "sub" | "tuning";
+const ROLES: readonly Role[] = ["root", "sub", "tuning"];
 const SAME = "same as root";
+
+/** The settings key each row writes: tuning is tune.model, which takes no thinking level. */
+function modelKey(role: Role): string {
+  return role === "tuning" ? "tune.model" : `${role}.model`;
+}
 
 type Step =
   | { step: "roles" }
@@ -38,7 +45,7 @@ export function ModelScreen(props: ScreenProps) {
   useEffect(() => setSel(0), [step.step]);
 
   const settings = deps.session.settings;
-  const providers = [...(step.step === "provider" && step.role === "sub" ? [SAME] : []), ...PROVIDERS.filter((p) => p.id !== "fake" || env.RLMH_FAKE_SCRIPT).map((p) => p.id)];
+  const providers = [...(step.step === "provider" && step.role !== "root" ? [SAME] : []), ...PROVIDERS.filter((p) => p.id !== "fake" || env.RLMH_FAKE_SCRIPT).map((p) => p.id)];
   const models: { id: string; info?: ModelInfo }[] = [];
   if (step.step === "model") {
     const list = step.provider === "fake" ? [deps.catalog.get("fake", "scripted")!] : deps.catalog.models(step.provider);
@@ -58,7 +65,9 @@ export function ModelScreen(props: ScreenProps) {
     }
   };
 
-  const count = step.step === "roles" ? 2 : step.step === "provider" ? providers.length : step.step === "model" ? models.length : THINKING.length;
+  // the levels this model takes (D-250); "default" leaves it to the profile
+  const thinking = step.step === "thinking" ? ["default", "off", ...thinkingRule(...splitRef(step.ref), deps.catalog.get(...splitRef(step.ref))).levels] : [];
+  const count = step.step === "roles" ? ROLES.length : step.step === "provider" ? providers.length : step.step === "model" ? models.length : thinking.length;
   useInput(
     (input, key) => {
       if (key.escape) {
@@ -72,22 +81,25 @@ export function ModelScreen(props: ScreenProps) {
       if (key.downArrow) return setSel((s) => Math.min(Math.max(0, count - 1), s + 1));
       if (key.return) {
         setMessage(null);
-        if (step.step === "roles") setStep({ step: "provider", role: sel === 0 ? "root" : "sub" });
+        if (step.step === "roles") setStep({ step: "provider", role: ROLES[sel]! });
         else if (step.step === "provider") {
           const id = providers[sel]!;
-          if (id === SAME) save([["sub.model", ""]], "The sub-call model is now the root model.");
+          if (id === SAME) save([[modelKey(step.role), ""]], step.role === "sub" ? "The sub-call model is now the root model." : "The tuning model is now the root model.");
           else setStep({ step: "model", role: step.role, provider: id, filter: "" });
         } else if (step.step === "model") {
           const m = models[sel];
-          if (m) setStep({ step: "thinking", role: step.role, ref: `${step.provider}/${m.id}` });
+          if (!m) return;
+          const ref = `${step.provider}/${m.id}`;
+          if (step.role === "tuning") save([["tune.model", ref]], `tuning is ${ref}.${m.info ? "" : " Window and prices unknown."}`);
+          else setStep({ step: "thinking", role: step.role, ref });
         } else {
-          const known = deps.catalog.get(...(splitRef(step.ref) as [string, string]));
+          const known = deps.catalog.get(...splitRef(step.ref));
           save(
             [
               [`${step.role}.model`, step.ref],
-              [`${step.role}.thinking`, THINKING[sel]!],
+              [`${step.role}.thinking`, thinking[sel]!],
             ],
-            `${step.role} is ${step.ref}, thinking ${THINKING[sel]}.${known ? "" : " Window and prices unknown."}`,
+            `${step.role} is ${step.ref}, thinking ${thinking[sel]}.${known ? "" : " Window and prices unknown."}`,
           );
         }
         return;
@@ -105,11 +117,12 @@ export function ModelScreen(props: ScreenProps) {
   const body: Line[] = [];
   const room = Math.max(1, props.height - 5);
   if (step.step === "roles") {
-    const rows: Line[] = (["root", "sub"] as Role[]).map((r) => {
+    const rows: Line[] = ROLES.map((r) => {
+      if (r === "tuning") return [span(fit(`${r.padEnd(6)} ${settings.tune.model || SAME}`, w, theme))];
       const model = settings[r].model || (r === "sub" ? SAME : "none picked");
-      return [span(fit(`${r.padEnd(5)} ${model}   thinking ${settings[r].thinking}`, w, theme))];
+      return [span(fit(`${r.padEnd(6)} ${model}   thinking ${settings[r].thinking}`, w, theme))];
     });
-    body.push(...listLines(rows, sel, 2));
+    body.push(...listLines(rows, sel, ROLES.length));
   } else if (step.step === "provider") {
     body.push([span(`Provider for ${step.role}`, { dim: true })]);
     body.push(...listLines(providers.map((p) => [span(fit(p === SAME ? SAME : `${p.padEnd(12)} ${PROVIDERS.find((d) => d.id === p)!.name}`, w, theme))]), sel, room));
@@ -122,7 +135,7 @@ export function ModelScreen(props: ScreenProps) {
     body.push(...listLines(rows, sel, room));
   } else {
     body.push([span(`Thinking for ${step.role} ${step.ref}`, { dim: true })]);
-    body.push(...listLines(THINKING.map((t) => [span(t)]), sel, room));
+    body.push(...listLines(thinking.map((t) => [span(t)]), sel, room));
   }
   if (message) body.push([], [span(fit(message.text, w, theme), { color: paint(theme, message.error ? "red" : "green") })]);
   return <Frame title="/model" hint="Up/Down  Enter chooses  Esc goes back" body={body} width={w} height={props.height} />;

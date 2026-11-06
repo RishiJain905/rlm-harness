@@ -7,7 +7,8 @@ import { anthropicFamily, buildAnthropicRequest, thinkingBudget } from "../../sr
 import { RETRY } from "../../src/gateway/gateway.ts";
 import { buildOpenAIRequest } from "../../src/gateway/openai.ts";
 import { provider } from "../../src/gateway/providers.ts";
-import type { Message, ModelCompleteParams, Thinking, ToolDef } from "../../src/protocol.ts";
+import { fitThinking, thinkingRule } from "../../src/gateway/thinking.ts";
+import { THINKING_LEVELS, type Message, type ModelCompleteParams, type Thinking, type ToolDef } from "../../src/protocol.ts";
 import { anthropicStream, cutMidStream, httpError, openaiStream, startFakeProvider, type FakeServer } from "../fakes/http.ts";
 import { caught, params, recordSleeps, ref, rig, type Rig } from "./helpers.ts";
 
@@ -140,7 +141,7 @@ describe("streaming", () => {
 });
 
 describe("mapping tables", () => {
-  const LEVELS: Thinking[] = ["off", "low", "medium", "high"];
+  const LEVELS: Thinking[] = [...THINKING_LEVELS];
   const ROWS: { id: string; model: string; path: string; host: string; maxField: string; temperature: boolean; cache: Record<string, unknown> }[] = [
     { id: "openai", model: "gpt-4.1", path: "/v1/chat/completions", host: "api.openai.com", maxField: "max_completion_tokens", temperature: true, cache: { prompt_cache_key: "r_0123456789ab" } },
     { id: "openai", model: "gpt-5", path: "/v1/chat/completions", host: "api.openai.com", maxField: "max_completion_tokens", temperature: false, cache: { prompt_cache_key: "r_0123456789ab" } },
@@ -172,8 +173,9 @@ describe("mapping tables", () => {
     test(`${row.id} ${row.model}`, async () => {
       r = await rig({ server, keys: ["openai", "deepseek", "openrouter", "gemini"], settings: { "providers.custom.base_url": "http://custom.example:9000/v2" } });
       server.script(() => openaiStream({ text: "ok" }));
-      for (const level of LEVELS) {
-        await r.gateway.complete(params(ref(row.id, row.model), { thinking: level, max_tokens: 777, temperature: 0.3 }));
+      for (const asked of LEVELS) {
+        await r.gateway.complete(params(ref(row.id, row.model), { thinking: asked, max_tokens: 777, temperature: 0.3 }));
+        const level = fitThinking(asked, thinkingRule(row.id, row.model, r.catalog.get(row.id, row.model))); // D-250
         const req = server.requests[server.requests.length - 1]!;
         expect(req.path).toBe(row.path);
         expect(req.headers["x-orig-host"]).toBe(row.host);
@@ -334,8 +336,8 @@ describe("retries", () => {
     expect((await caught(r.gateway.complete(params(ref("openai", "gpt-4.1"))))).data.kind).toBe("bad_request");
     server.script(() => httpError(429, { error: { message: "You exceeded your current quota.", type: "insufficient_quota", code: "insufficient_quota" } }));
     const err = await caught(r.gateway.complete(params(ref("openai", "gpt-4.1"))));
-    expect(err.data.kind).toBe("rate_limit");
-    expect(err.message).toBe("OpenAI says the account is out of quota or credit (HTTP 429): You exceeded your current quota.");
+    expect(err.data.kind).toBe("no_credit");
+    expect(err.message).toBe("OpenAI says the account is out of credit (HTTP 429): You exceeded your current quota. Add credit, then run again.");
     expect(server.requests.length).toBe(2);
     expect(sleeps.delays).toEqual([]);
   });
@@ -427,6 +429,20 @@ describe("replay (D-33)", () => {
     r.bus.emit("engine.event", { method: "run.finished", params: { run_id: "r_0123456789ab" } });
     await r.gateway.complete(followUp(res, model));
     expect(server.requests[3]!.body.messages[1].content.map((b: any) => b.type)).toEqual(["text", "tool_use"]);
+  });
+
+  test("a conversation keeps the thinking blocks across run.finished {open: true}, and drops them at run.closed (v1 step 4)", async () => {
+    r = await rig({ server, keys: ["anthropic"] });
+    const thinking = [{ thinking: "first thought", signature: "SIG+/=1" }];
+    server.script([() => anthropicStream({ thinking, text: "Let me look.", toolCall: { id: "toolu_1", arguments: { code: "print(1)" } } }), () => anthropicStream({ text: "done" })]);
+    const model = ref("anthropic", "claude-sonnet-5");
+    const res = await r.gateway.complete(params(model, { tools: [PYTHON_TOOL], thinking: "low" }));
+    r.bus.emit("engine.event", { method: "run.finished", params: { run_id: "r_0123456789ab", prompt_index: 0, open: true } });
+    await r.gateway.complete(followUp(res, model)); // the next prompt replays the conversation's earlier turns
+    expect(server.requests[1]!.body.messages[1].content[0].type).toBe("thinking");
+    r.bus.emit("engine.event", { method: "run.closed", params: { run_id: "r_0123456789ab", prompts: 2 } });
+    await r.gateway.complete(followUp(res, model));
+    expect(server.requests[2]!.body.messages[1].content.map((b: any) => b.type)).toEqual(["text", "tool_use"]);
   });
 
   test("deepseek reasoning_content, only when the request has tools", async () => {

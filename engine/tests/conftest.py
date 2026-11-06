@@ -267,3 +267,31 @@ class StubApp(AppPort):
     def sent(self, method: str) -> list[dict]:
         """The params of every event of one method, in order."""
         return [params for m, params in self.events if m == method]
+
+
+def compact_profile(home: Path, name: str = "compact-test", *, window: int = 4096, max_turns: int = 12,
+                    root_max_tokens: int = 256) -> Path:
+    """v1 step 3's test profile: `default` with `[read] root_max_tokens` and `max_turns` lowered and `[compaction]`
+    shrunk, so W' = 4,096, trigger = 3,276 and keep = 614 at the defaults. `[repo] root_max_tokens` is lowered too,
+    because both modes' must be below `window` (D-244). Saved as a user profile; returns its folder."""
+    from rlm_engine.profiles import BUILTIN_DIR
+
+    source = BUILTIN_DIR / "default"
+    lines = (source / "profile.toml").read_text(encoding="utf-8").splitlines()
+    changes = {"read": {"root_max_tokens": root_max_tokens, "max_turns": max_turns},
+               "repo": {"root_max_tokens": root_max_tokens},
+               "compaction": {"window": window, "keep_ratio": 0.16, "reserve": 0, "summary_max_tokens": 512}}
+    section = None
+    for i, line in enumerate(lines):
+        if line.startswith("["):
+            section = line.split("]")[0].strip("[")
+        key = line.split("=")[0].strip()
+        if key in changes.get(section, {}):
+            lines[i] = f"{key} = {json.dumps(changes[section].pop(key))}"
+    assert not any(changes.values()), changes
+    folder = home / "profiles" / name
+    folder.mkdir(parents=True)
+    (folder / "profile.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    shutil.copyfile(source / "guidance.md", folder / "guidance.md")
+    shutil.copyfile(source / "system.md", folder / "system.md")  # default's rlmh-1 system prompt (D-256)
+    return folder

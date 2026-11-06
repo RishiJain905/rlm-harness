@@ -275,7 +275,7 @@ def _architecture_record_keys() -> list[str]:
 
 
 def test_record_keys_match_the_architecture() -> None:
-    assert FORMAT_VERSION == 1
+    assert FORMAT_VERSION == 2
     assert isinstance(RECORD_KEYS, tuple) and len(set(RECORD_KEYS)) == len(RECORD_KEYS)
     if not ARCHITECTURE.exists():
         pytest.skip("documentation is not part of this checkout")
@@ -284,7 +284,8 @@ def test_record_keys_match_the_architecture() -> None:
 
 def test_record_keys_spot_checks() -> None:
     assert RECORD_KEYS[:3] == ("format", "run_id", "tag")
-    assert RECORD_KEYS[-3:] == ("infra_error", "infra_kind", "host_traceback")
+    assert RECORD_KEYS[-7:-4] == ("infra_error", "infra_kind", "host_traceback")
+    assert RECORD_KEYS[-4:] == ("window", "compactions", "prompt_index", "conversation")  # format 2 (v1 step 3)
     assert "question" in RECORD_KEYS and "task" not in RECORD_KEYS  # repo-mode records carry `task` in its place
     assert RECORD_KEYS.index("wall_s") + 1 == RECORD_KEYS.index("question")
     assert RECORD_KEYS.index("question") + 1 == RECORD_KEYS.index("input")

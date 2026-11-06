@@ -8,7 +8,8 @@ It enforces the sub-call budget and the prompt-size rule, sends each sub-call to
 reports `run.subcall` and `run.budget` (§5.3), makes `fetch` GET requests for the worker (D-16), and hands `approve`
 requests to `Permissions`. Nothing the worker sends can set `infra_error`: only a failure on this side does. Under
 agent_api, `rlm` requests go to `children` (child.py, D-160), whose child runs use this bridge's budget: each child is
-one sub-call, and its own sub-calls come through `_llm` with `child` set.
+one sub-call, and its own sub-calls come through `_llm` with `child` set. Behind the gate (D-234), an `llm` request's
+`agent` sends that agent's text as the sub-call's system message, the same bytes on every call.
 """
 
 from __future__ import annotations
@@ -33,9 +34,10 @@ from .permissions import KINDS, Permissions
 from .profiles import Profile
 
 OPS = ("llm", "llm_batch", "fetch", "approve", "rlm")
-THINKING = ("off", "low", "medium", "high")  # a request's own thinking level for its sub-calls (D-164)
+THINKING = ("off", "minimal", "low", "medium", "high", "xhigh", "max")  # a request's own thinking level for its sub-calls (D-164, D-250)
 INFRA_REPLY = "sub-call failed for an infrastructure reason; this episode will be discarded"
 PREFIX_SEPARATOR = "\n\n"  # cacheapi.SEPARATOR: between a sub-call's stable prefix and its prompt (D-119)
+AGENT_SEPARATOR = "\n\n"  # between an agent's text and an rlm() child's task (D-234)
 
 # fetch (D-16). Module-level, so tests can patch them.
 FETCH_TIMEOUT_S = 30
@@ -75,18 +77,38 @@ class Bridge:
         self.sub_ref = sub_ref
         self.permissions = permissions
         self.limits = profile.mode(mode).limits
+        self.texts = profile.texts  # the sub-call errors' words: prompt v4's or rlmh-1's (D-256)
         self.max_subcalls = self.limits.max_subcalls
         self.turn = 0  # set by the loop before each cell
-        self.subcalls_used = 0
+        self.subcalls_used = 0  # ids count across a conversation's prompts, so each stays unique in the run (D-199)
         self.records: list[SubcallRecord] = []
         self.fetches: list[dict] = []  # {url, status, chars, error, seconds}, one per fetch call
+        self.prompt_base = 0  # subcalls_used when this prompt started: budgets count from here (v1 step 4)
+        self.fetch_base = 0  # len(fetches) when this prompt started
+        self._record_base = 0  # len(records) when this prompt started
         self.infra_error: str | None = None
         self.infra_kind: str | None = None
         self.children: Any = None  # child.Children under agent_api (D-160); None refuses `rlm`
         self._batches = 0
 
+    def start_prompt(self) -> None:
+        """A conversation's next prompt (v1 step 4): the sub-call budget starts over, the ids go on counting."""
+        self.prompt_base = self.subcalls_used
+        self.fetch_base = len(self.fetches)
+        self._record_base = len(self.records)
+
+    def prompt_used(self) -> int:
+        """The sub-call ids this prompt has taken."""
+        return self.subcalls_used - self.prompt_base
+
     def subcalls_left(self) -> int:
-        return max(0, self.max_subcalls - self.subcalls_used)
+        return max(0, self.max_subcalls - self.prompt_used())
+
+    def prompt_records(self) -> list[SubcallRecord]:
+        """This prompt's sub-call records, by id. A record lands when its call ends, so this is every record that
+        arrived since `start_prompt`: the prompt's own, plus a call an earlier prompt left running (D-203), which
+        would otherwise be in no record at all (D-246)."""
+        return sorted(self.records[self._record_base:], key=lambda r: r.subcall_id)
 
     async def handle(self, request: dict) -> dict:
         """The reply fields for a worker `request`, or an `InfraError` (after `infra_error` and `infra_kind` are set)."""
@@ -112,6 +134,10 @@ class Bridge:
             return {"error": "prompts must be a list of strings"}
         if op == "llm" and len(prompts) != 1:
             return {"error": "llm takes exactly one prompt"}
+        agent = request.get("agent")  # agentapi's agent= (D-234, gated); training's requests have none
+        if agent is not None and agent not in self.profile.agents:
+            return {"error": unknown_agent(agent, self.profile)}
+        system = self.profile.agents[agent].text if agent is not None else None
         thinking = request.get("thinking")  # agentapi's thinking= (D-164); training's requests have none
         if thinking is not None and thinking not in THINKING:
             return {"error": f"thinking must be one of {', '.join(THINKING)}"}
@@ -123,12 +149,12 @@ class Bridge:
             return {"error": "prefixes must be a list of strings or nulls, one per prompt"}
         if self.infra_error:
             return {"error": INFRA_REPLY}
-        if self.subcalls_used + len(prompts) > self.max_subcalls:
-            return self._reject(prompts, request, contract.budget_exhausted_message(self.max_subcalls), child)
+        if self.prompt_used() + len(prompts) > self.max_subcalls:
+            return self._reject(prompts, request, self.texts.budget_exhausted_message(self.max_subcalls), child)
         if self.limits.subcall_oversize == "error":
             longest = max((len(_joined(prefix, p)) for prefix, p in zip(prefixes, prompts)), default=0)
             if longest > self.limits.subcall_max_chars:
-                return self._reject(prompts, request, contract.oversize_message(longest, self.limits.subcall_max_chars),
+                return self._reject(prompts, request, self.texts.oversize_message(longest, self.limits.subcall_max_chars),
                                     child)
         if not prompts:
             return {"outputs": []}
@@ -143,7 +169,8 @@ class Bridge:
 
         tasks = [
             asyncio.ensure_future(
-                self._one(first_id + i, prompt, origin, {"id": batch_id, "index": i, "size": n}, prefixes[i], thinking))
+                self._one(first_id + i, prompt, origin, {"id": batch_id, "index": i, "size": n}, prefixes[i], thinking,
+                          system))
             for i, prompt in enumerate(prompts)
         ]
         results = await self._settle(tasks)
@@ -205,8 +232,8 @@ class Bridge:
         reply fields of a refusal (an infra failure, or no sub-calls left)."""
         if self.infra_error:
             return {"error": INFRA_REPLY}
-        if self.subcalls_used + 1 > self.max_subcalls:
-            return self._reject([task], request, contract.budget_exhausted_message(self.max_subcalls), parent)
+        if self.prompt_used() + 1 > self.max_subcalls:
+            return self._reject([task], request, self.texts.budget_exhausted_message(self.max_subcalls), parent)
         self.subcalls_used += 1
         subcall_id = self.subcalls_used
         origin = self._origin(request, parent)
@@ -224,7 +251,7 @@ class Bridge:
                                       "subcalls_left": self.subcalls_left()})
 
     async def _one(self, subcall_id: int, prompt: str, origin: dict, batch: dict, prefix: str | None = None,
-                   thinking: str | None = None) -> str:
+                   thinking: str | None = None, system: str | None = None) -> str:
         if prefix is not None:
             prefix = contract.clean_text(prefix)
         prompt = contract.truncate_prompt(_joined(prefix, contract.clean_text(prompt)), self.limits.subcall_max_chars)
@@ -232,7 +259,8 @@ class Bridge:
             "run_id": self.run_id,
             "role": "sub",
             "model": dict(self.sub_ref),
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": ([{"role": "system", "content": system}] if system is not None else [])
+            + [{"role": "user", "content": prompt}],
             "tools": [],
             "max_tokens": self.limits.subcall_max_tokens,
             "temperature": self.profile.sub_temperature,
@@ -356,6 +384,11 @@ class Bridge:
 
 
 # ---------------------------------------------------------------------------------------------- errors
+
+
+def unknown_agent(agent: object, profile: Profile) -> str:
+    names = ", ".join(profile.agents) or "none"
+    return f"unknown agent {agent!r}; this profile's agents are: {names}"
 
 
 def _utf16_len(text: str) -> int:

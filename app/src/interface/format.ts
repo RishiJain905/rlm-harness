@@ -4,7 +4,7 @@
 // tool output from breaking the terminal. Nothing here imports Ink.
 
 export type Tone = "ok" | "warn" | "high";
-export type StatusId = "state" | "root" | "sub" | "ctx" | "cost" | "cache" | "budget" | "mode" | "run";
+export type StatusId = "state" | "root" | "sub" | "ctx" | "cost" | "cache" | "budget" | "mode" | "run" | "tune";
 export interface StatusSegment {
   id: StatusId;
   text: string;
@@ -25,6 +25,12 @@ export interface Glyphs {
 /** One decimal under 100 units, none from 100. */
 function scale(value: number): number {
   return value < 100 ? Math.round(value * 10) / 10 : Math.round(value);
+}
+
+/** A token count in thousands, for the compaction lines (`~<n>k`, v1 step 3): one decimal under 100k, none from 100k.
+ *  `131022` is `131`, `33870` is `33.9`, `3276` is `3.3`, `400` is `0.4`. */
+export function thousands(n: number): string {
+  return String(scale(Math.max(0, n) / 1e3));
 }
 
 /** `999`, `1k`, `12.3k`, `123k`, `1M`, `1.2M`. A value that rounds to 1000k prints as `1M`. */
@@ -163,7 +169,8 @@ export function layoutHeights(
 }
 
 const SEPARATOR = " | ";
-const DROP_ORDER: readonly StatusId[] = ["mode", "sub", "cache", "root", "cost", "ctx", "budget", "run"]; // "run" shows only when it is not auto (D-156): it goes last
+// "tune" (v1 step 9) goes first; "run" shows only when it is not auto (D-156): it goes last
+const DROP_ORDER: readonly StatusId[] = ["tune", "mode", "sub", "cache", "root", "cost", "ctx", "budget", "run"];
 
 /** The segments that fit `columns` joined with ` | `. `state` is never dropped, and order is kept. */
 export function layoutStatus(segments: readonly StatusSegment[], columns: number): StatusSegment[] {

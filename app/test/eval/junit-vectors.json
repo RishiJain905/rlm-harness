@@ -1,0 +1,2956 @@
+{
+ "source": {
+  "repo": "RishiJain905/rlm",
+  "commit": "55e2d62",
+  "read_at": "042e486",
+  "file": "rlm_rl/grader.py",
+  "export": "git -C F:\\Personal\\RLM\\RLM archive --format=tar 042e486 rlm_rl | tar -x -C <scratch>/src",
+  "command": "F:\\Personal\\RLM\\RLM\\.venv\\Scripts\\python.exe -I <scratch>\\gen_vectors.py app\\test\\eval\\junit-vectors.json F:\\Personal\\RLM\\rlm-harness\\engine\\.venv\\Scripts\\python.exe",
+  "python": "3.12.0",
+  "note": "Every expected value was computed by training's own functions (rlm_rl.grader) in the RLM venv; the inputs were written by hand. The real reports come from pytest in the engine venv run under training's PYTEST_BOOT, with the repo path, host name and times scrubbed."
+ },
+ "pytest_key": [
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": ".",
+   "key": "tests/test_x.py::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x.TestA",
+   "name": "test_b[1]",
+   "base": ".",
+   "key": "tests/test_x.py::TestA::test_b[1]"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x.TestA.TestInner",
+   "name": "test_deep",
+   "base": ".",
+   "key": "tests/test_x.py::TestA::TestInner::test_deep"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_p[1-2]",
+   "base": ".",
+   "key": "tests/test_x.py::test_p[1-2]"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_p[a::b]",
+   "base": ".",
+   "key": "tests/test_x.py::test_p[a::b]"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_p[1.5-x.y]",
+   "base": ".",
+   "key": "tests/test_x.py::test_p[1.5-x.y]"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_p[\\xfcn\\xef]",
+   "base": ".",
+   "key": "tests/test_x.py::test_p[\\xfcn\\xef]"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_\u00fcn\u00ef[\u00df-\u017f]",
+   "base": ".",
+   "key": "tests/test_x.py::test_\u00fcn\u00ef[\u00df-\u017f]"
+  },
+  {
+   "file": "pkg/sub/tests/test_y.py",
+   "classname": "pkg.sub.tests.test_y",
+   "name": "test_y",
+   "base": ".",
+   "key": "pkg/sub/tests/test_y.py::test_y"
+  },
+  {
+   "file": "pkg/sub/tests/test_y.py",
+   "classname": "pkg.sub.tests.test_y.TestY",
+   "name": "test_y2",
+   "base": ".",
+   "key": "pkg/sub/tests/test_y.py::TestY::test_y2"
+  },
+  {
+   "file": "pkg/tests/test_y.py",
+   "classname": "tests.test_y.TestK",
+   "name": "test_k",
+   "base": ".",
+   "key": "pkg/tests/test_y.py::TestK::test_k"
+  },
+  {
+   "file": "a/b/c/test_m.py",
+   "classname": "c.test_m.TestX",
+   "name": "test_x",
+   "base": ".",
+   "key": "a/b/c/test_m.py::TestX::test_x"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "",
+   "name": "test_noclass",
+   "base": ".",
+   "key": "tests/test_x.py::test_noclass"
+  },
+  {
+   "file": "tests/test_a.py",
+   "classname": "other.Foo",
+   "name": "test_unrelated",
+   "base": ".",
+   "key": "tests/test_a.py::other::Foo::test_unrelated"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x.",
+   "name": "test_trailing_dot",
+   "base": ".",
+   "key": "tests/test_x.py::::test_trailing_dot"
+  },
+  {
+   "file": "src/pkg/tests/test_s.py",
+   "classname": "src.pkg.tests.test_s",
+   "name": "test_s",
+   "base": ".",
+   "key": "src/pkg/tests/test_s.py::test_s"
+  },
+  {
+   "file": "src/pkg/tests/test_s.py",
+   "classname": "pkg.tests.test_s.TestS",
+   "name": "test_s2",
+   "base": ".",
+   "key": "src/pkg/tests/test_s.py::TestS::test_s2"
+  },
+  {
+   "file": "tests\\test_w.py",
+   "classname": "tests.test_w.TestW",
+   "name": "test_w",
+   "base": ".",
+   "key": "tests/test_w.py::TestW::test_w"
+  },
+  {
+   "file": "pkg\\sub\\tests\\test_w.py",
+   "classname": "pkg.sub.tests.test_w",
+   "name": "test_w2",
+   "base": ".",
+   "key": "pkg/sub/tests/test_w.py::test_w2"
+  },
+  {
+   "file": "docs/index.rst",
+   "classname": "docs.index",
+   "name": "index.rst",
+   "base": ".",
+   "key": "docs/index.rst::docs::index::index.rst"
+  },
+  {
+   "file": "pkg/mod.py",
+   "classname": "pkg.mod",
+   "name": "pkg.mod.func",
+   "base": ".",
+   "key": "pkg/mod.py::pkg.mod.func"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "",
+   "base": ".",
+   "key": null
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "",
+   "name": "",
+   "base": ".",
+   "key": null
+  },
+  {
+   "file": "",
+   "classname": "tests.test_x.TestA",
+   "name": "test_b",
+   "base": ".",
+   "key": "tests/test_x.py::TestA::test_b"
+  },
+  {
+   "file": null,
+   "classname": "tests.test_x.TestA",
+   "name": "test_b",
+   "base": ".",
+   "key": "tests/test_x.py::TestA::test_b"
+  },
+  {
+   "file": null,
+   "classname": "tests.test_x",
+   "name": "test_c",
+   "base": ".",
+   "key": "tests/test_x.py::test_c"
+  },
+  {
+   "file": null,
+   "classname": "",
+   "name": "test_d",
+   "base": ".",
+   "key": ".py::test_d"
+  },
+  {
+   "file": null,
+   "classname": "Test",
+   "name": "test_e",
+   "base": ".",
+   "key": ".py::Test::test_e"
+  },
+  {
+   "file": null,
+   "classname": "tests.test_u.\u00c9clair",
+   "name": "test_f",
+   "base": ".",
+   "key": "tests/test_u.py::\u00c9clair::test_f"
+  },
+  {
+   "file": null,
+   "classname": "tests.test_u.\u00e9lan",
+   "name": "test_g",
+   "base": ".",
+   "key": "tests/test_u/\u00e9lan.py::test_g"
+  },
+  {
+   "file": null,
+   "classname": "tests.test_u.1Case",
+   "name": "test_h",
+   "base": ".",
+   "key": "tests/test_u/1Case.py::test_h"
+  },
+  {
+   "file": null,
+   "classname": "tests.test_x.test_inner_lower",
+   "name": "test_i",
+   "base": ".",
+   "key": "tests/test_x/test_inner_lower.py::test_i"
+  },
+  {
+   "file": null,
+   "classname": "pkg.sub.TestA.TestB",
+   "name": "test_j[a::b]",
+   "base": ".",
+   "key": "pkg/sub.py::TestA::TestB::test_j[a::b]"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "sub",
+   "key": "sub/tests/test_x.py::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "sub/dir",
+   "key": "sub/dir/tests/test_x.py::test_a"
+  },
+  {
+   "file": "../x/test_a.py",
+   "classname": "x.test_a",
+   "name": "test_a",
+   "base": "sub/dir",
+   "key": "sub/x/test_a.py::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "sub\\dir",
+   "key": "sub\\dir/tests/test_x.py::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "",
+   "key": "tests/test_x.py::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "./sub",
+   "key": "sub/tests/test_x.py::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "/abs/base",
+   "key": "/abs/base/tests/test_x.py::test_a"
+  },
+  {
+   "file": "/abs/tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "sub",
+   "key": "/abs/tests/test_x.py::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "//double",
+   "key": "//double/tests/test_x.py::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "///triple",
+   "key": "/triple/tests/test_x.py::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "sub/",
+   "key": "sub/tests/test_x.py::test_a"
+  },
+  {
+   "file": "../../test_x.py",
+   "classname": "test_x",
+   "name": "test_a",
+   "base": "a",
+   "key": "../test_x.py::test_a"
+  },
+  {
+   "file": "../../test_x.py",
+   "classname": "test_x",
+   "name": "test_a",
+   "base": ".",
+   "key": "../../test_x.py::test_a"
+  },
+  {
+   "file": "./tests//test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "sub",
+   "key": "sub/tests/test_x.py::tests::test_x::test_a"
+  },
+  {
+   "file": "tests/test_x.py",
+   "classname": "tests.test_x",
+   "name": "test_a",
+   "base": "..",
+   "key": "../tests/test_x.py::test_a"
+  }
+ ],
+ "test_path": [
+  {
+   "path": "tests/test_x.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "test/foo.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "src/tests/helper.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "src/pkg/test_mod.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "src/pkg/mod_test.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "pkg/testing.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "pkg/tests.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "pkg/test.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "pkg/_test.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "pkg/test_.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "pkg/mytest.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "conftest.py",
+   "is_test_path": false,
+   "is_test_config": true
+  },
+  {
+   "path": "tests/conftest.py",
+   "is_test_path": true,
+   "is_test_config": true
+  },
+  {
+   "path": "pkg/conftest.py",
+   "is_test_path": false,
+   "is_test_config": true
+  },
+  {
+   "path": "conftest.pyc",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "pytest.ini",
+   "is_test_path": false,
+   "is_test_config": true
+  },
+  {
+   "path": "sub/pytest.ini",
+   "is_test_path": false,
+   "is_test_config": true
+  },
+  {
+   "path": "tox.ini",
+   "is_test_path": false,
+   "is_test_config": true
+  },
+  {
+   "path": "setup.cfg",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "pyproject.toml",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "noxfile.py",
+   "is_test_path": false,
+   "is_test_config": true
+  },
+  {
+   "path": ".coveragerc",
+   "is_test_path": false,
+   "is_test_config": true
+  },
+  {
+   "path": "sub/.coveragerc",
+   "is_test_path": false,
+   "is_test_config": true
+  },
+  {
+   "path": "setup.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "docs/tests/index.md",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "README.md",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "test_data/x.json",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "tests",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "a/test/b/c.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "tests/__init__.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "tests/data/fixture.json",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "testsuite/x.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "x/y/test_z.pyc",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "tests/",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "tests/t\u00ebst_\u00fc.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "tests\\test_x.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "src/pkg/__tests__/x.js",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "web/test/task-1.spec.js",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "web/app.spec.js",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "playwright.config.js",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "package.json",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "pkg/tests_helper.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "pkg/test_helper.txt",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "tests.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "test_x.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "x_test.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "a/b/c/d/test_deep.py",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "node_modules/pkg/tests/x.js",
+   "is_test_path": true,
+   "is_test_config": false
+  },
+  {
+   "path": "vendor/test-util/index.js",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "gpu.py",
+   "is_test_path": false,
+   "is_test_config": false
+  },
+  {
+   "path": "kernels.py",
+   "is_test_path": false,
+   "is_test_config": false
+  }
+ ],
+ "touches_test_config": [
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 2.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q -x\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\nfilterwarnings = ignore\n\n[flake8]\nmax-line-length = 100\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\nauthor = me\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n    numpy\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[tool:pytest]\nxfail_strict = true\n\n[flake8]\nmax-line-length = 100\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": true,
+   "why": "adds a test section to setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\n\n[flake8]\nmax-line-length = 100\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\n# nothing\n\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 120\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n\n[coverage:run]\nbranch = true\n",
+   "result": true,
+   "why": "adds a test section to setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n\n[coverage:run]\nbranch = true\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n\n[coverage:run]\nbranch = false\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n\n[testenv]\ndeps = pytest\n",
+   "result": true,
+   "why": "adds a test section to setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\r\nname = demo\r\nversion = 1.0\r\n\r\n[options]\r\npackages = find:\r\ninstall_requires =\r\n    requests\r\n\r\n[tool:pytest]\r\naddopts = -q\r\ntestpaths = tests\r\n\r\n[flake8]\r\nmax-line-length = 100\r\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\r\nname = demo\r\nversion = 1.0\r\n\r\n[options]\r\npackages = find:\r\ninstall_requires =\r\n    requests\r\n\r\n[tool:pytest]\r\naddopts = -q\r\ntestpaths = tests\r\n\r\n[flake8]\r\nmax-line-length = 100\r\n",
+   "after": "[metadata]\r\nname = demo\r\nversion = 1.0\r\n\r\n[options]\r\npackages = find:\r\ninstall_requires =\r\n    requests\r\n\r\n[tool:pytest]\r\naddopts = -x\r\ntestpaths = tests\r\n\r\n[flake8]\r\nmax-line-length = 100\r\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\r\nname = demo\r\nversion = 1.0\r\n\r\n[options]\r\npackages = find:\r\ninstall_requires =\r\n    requests\r\n\r\n[tool:pytest]\r\naddopts = -q\r\ntestpaths = tests\r\n\r\n[flake8]\r\nmax-line-length = 100\r\n",
+   "after": "[metadata]\r\nname = demo\r\nversion = 3.0\r\n\r\n[options]\r\npackages = find:\r\ninstall_requires =\r\n    requests\r\n\r\n[tool:pytest]\r\naddopts = -q\r\ntestpaths = tests\r\n\r\n[flake8]\r\nmax-line-length = 100\r\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[tool:pytest]\naddopts = -q",
+   "after": "[tool:pytest]\naddopts = -q\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = a\n[tool:pytest]\naddopts = -q\n",
+   "after": "[metadata]\nname = a\nversion = 1\n[tool:pytest]\naddopts = -q\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": null,
+   "after": "[metadata]\nname = demo\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": null,
+   "after": "[tool:pytest]\naddopts = -q\n",
+   "result": true,
+   "why": "adds a test section to setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": null,
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\n",
+   "after": null,
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "\ufeff[tool:pytest]\naddopts = -q\n",
+   "after": "\ufeff[tool:pytest]\naddopts = -x\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = a\n\u001c[tool:pytest]\u001c\naddopts = -q\n",
+   "after": "[metadata]\nname = a\n\u001c[tool:pytest]\u001c\naddopts = -x\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = a\n\u00a0[tool:pytest]\u00a0\naddopts = -q\n",
+   "after": "[metadata]\nname = a\n\u00a0[tool:pytest]\u00a0\naddopts = -x\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "sub/pkg/setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -x\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "sub/pkg/setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.1\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q -x\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 88\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = false\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\", \"numpy\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\nversion = \"1\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\nfoo = 1\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.pytest.ini_options.markers]\nslow = 1\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.ruff]\nline-length = 90\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[[tool.pytest]]\nx = 1\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[test]\nx = 1\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": null,
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": true,
+   "why": "adds a test section to pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": null,
+   "after": "[project]\nname = \"demo\"\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": null,
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\r\nrequires = [\"setuptools\"]\r\n\r\n[project]\r\nname = \"demo\"\r\ndependencies = [\"requests\"]\r\n\r\n[tool.pytest.ini_options]\r\naddopts = \"-q\"\r\ntestpaths = [\"tests\"]\r\n\r\n[tool.black]\r\nline-length = 100\r\n\r\n[tool.coverage.run]\r\nbranch = true\r\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n\n[tool.pytest.ini_options]\nxdist = 1\n",
+   "result": true,
+   "why": "a test section of pyproject.toml"
+  },
+  {
+   "path": "pyproject.toml",
+   "before": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "after": "[build-system]\nrequires = [\"setuptools\"]\n\n[project]\nrequires-python = \">=3.9\"\nname = \"demo\"\ndependencies = [\"requests\"]\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\ntestpaths = [\"tests\"]\n\n[tool.black]\nline-length = 100\n\n[tool.coverage.run]\nbranch = true\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "tox.ini",
+   "before": "[tox]\nenvlist = py312\n\n[testenv]\ncommands = pytest\n",
+   "after": "[tox]\nenvlist = py311\n\n[testenv]\ncommands = pytest\n",
+   "result": true,
+   "why": "test configuration file"
+  },
+  {
+   "path": "tox.ini",
+   "before": "[tox]\nenvlist = py312\n\n[testenv]\ncommands = pytest\n",
+   "after": "[tox]\nenvlist = py312\n\n[testenv]\ncommands = pytest -x\n",
+   "result": true,
+   "why": "test configuration file"
+  },
+  {
+   "path": "tox.ini",
+   "before": null,
+   "after": "[tox]\nenvlist = py312\n\n[testenv]\ncommands = pytest\n",
+   "result": true,
+   "why": "test configuration file"
+  },
+  {
+   "path": "conftest.py",
+   "before": "import pytest\n",
+   "after": "import pytest\nx = 1\n",
+   "result": true,
+   "why": "test configuration file"
+  },
+  {
+   "path": "tests/conftest.py",
+   "before": null,
+   "after": "import pytest\n",
+   "result": true,
+   "why": "test configuration file"
+  },
+  {
+   "path": "pytest.ini",
+   "before": "[pytest]\naddopts = -q\n",
+   "after": "[pytest]\naddopts = -x\n",
+   "result": true,
+   "why": "test configuration file"
+  },
+  {
+   "path": "noxfile.py",
+   "before": "import nox\n",
+   "after": "import nox\nx = 1\n",
+   "result": true,
+   "why": "test configuration file"
+  },
+  {
+   "path": ".coveragerc",
+   "before": "[run]\nbranch = True\n",
+   "after": "[run]\nbranch = False\n",
+   "result": true,
+   "why": "test configuration file"
+  },
+  {
+   "path": "README.md",
+   "before": "# demo\n",
+   "after": "# demo\n\nmore\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "src/pkg/mod.py",
+   "before": "x = 1\n",
+   "after": "x = 2\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "src/pkg/test_mod.py",
+   "before": "x = 1\n",
+   "after": "x = 2\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.py",
+   "before": "from setuptools import setup\nsetup()\n",
+   "after": "from setuptools import setup\nsetup(name='x')\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\nzip_safe = false\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "after": "[metadata]\nname = demo\nversion = 1.0\n\n[options]\npackages = find:\ninstall_requires =\n    requests\n\n[tool:pytest]\naddopts = -q\naddopts = -q\naddopts = -q\ntestpaths = tests\n\n[flake8]\nmax-line-length = 100\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = a\n\n[tool:pytest]\nx = 1\n\n[options]\ny = 1\n\n[tool:pytest]\nz = 1\n",
+   "after": "[metadata]\nname = b\n\n[tool:pytest]\nx = 1\n\n[options]\ny = 2\n\n[tool:pytest]\nz = 1\n",
+   "result": false,
+   "why": null
+  },
+  {
+   "path": "setup.cfg",
+   "before": "[metadata]\nname = a\n\n[tool:pytest]\nx = 1\n\n[options]\ny = 1\n\n[tool:pytest]\nz = 1\n",
+   "after": "[metadata]\nname = a\n\n[tool:pytest]\nx = 1\n\n[options]\ny = 2\n\n[tool:pytest]\nz = 2\n",
+   "result": true,
+   "why": "a test section of setup.cfg"
+  }
+ ],
+ "score": [
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "passed",
+    "t/b.py::test_c": "passed",
+    "t/b.py::test_d": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d"
+   ],
+   "f2p_passed": 2,
+   "p2p_failed": 0,
+   "resolved": true
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "failed",
+    "t/b.py::test_c": "passed",
+    "t/b.py::test_d": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d"
+   ],
+   "f2p_passed": 1,
+   "p2p_failed": 0,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "error",
+    "t/b.py::test_c": "passed",
+    "t/b.py::test_d": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d"
+   ],
+   "f2p_passed": 1,
+   "p2p_failed": 0,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "skipped",
+    "t/b.py::test_c": "passed",
+    "t/b.py::test_d": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d"
+   ],
+   "f2p_passed": 1,
+   "p2p_failed": 0,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/b.py::test_c": "passed",
+    "t/b.py::test_d": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d"
+   ],
+   "f2p_passed": 1,
+   "p2p_failed": 0,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "passed",
+    "t/b.py::test_c": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d"
+   ],
+   "f2p_passed": 2,
+   "p2p_failed": 1,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "passed",
+    "t/b.py::test_c": "passed",
+    "t/b.py::test_d": "failed"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d"
+   ],
+   "f2p_passed": 2,
+   "p2p_failed": 1,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "passed",
+    "t/b.py::test_c": "passed",
+    "t/b.py::test_d": "error"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d"
+   ],
+   "f2p_passed": 2,
+   "p2p_failed": 1,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "passed",
+    "t/b.py::test_c": "passed",
+    "t/b.py::test_d": "skipped"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d"
+   ],
+   "f2p_passed": 2,
+   "p2p_failed": 1,
+   "resolved": false
+  },
+  {
+   "results": {},
+   "f2p": [
+    "t/a.py::test_a"
+   ],
+   "p2p": [
+    "t/b.py::test_c"
+   ],
+   "f2p_passed": 0,
+   "p2p_failed": 1,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a"
+   ],
+   "p2p": [],
+   "f2p_passed": 1,
+   "p2p_failed": 0,
+   "resolved": true
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/b.py::test_c": "failed"
+   },
+   "f2p": [],
+   "p2p": [
+    "t/b.py::test_c"
+   ],
+   "f2p_passed": 0,
+   "p2p_failed": 1,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/b.py::test_c": "passed"
+   },
+   "f2p": [],
+   "p2p": [
+    "t/b.py::test_c"
+   ],
+   "f2p_passed": 0,
+   "p2p_failed": 0,
+   "resolved": false
+  },
+  {
+   "results": {},
+   "f2p": [],
+   "p2p": [],
+   "f2p_passed": 0,
+   "p2p_failed": 0,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "passed",
+    "t/b.py::test_c": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_a"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_c"
+   ],
+   "f2p_passed": 2,
+   "p2p_failed": 0,
+   "resolved": true
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "failed"
+   },
+   "f2p": [
+    "t/a.py::test_a",
+    "t/a.py::test_a",
+    "t/a.py::test_b"
+   ],
+   "p2p": [],
+   "f2p_passed": 2,
+   "p2p_failed": 0,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a": "passed",
+    "t/a.py::test_b": "passed",
+    "t/b.py::test_c": "failed",
+    "t/b.py::test_d": "failed",
+    "x::y": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a"
+   ],
+   "p2p": [
+    "t/b.py::test_c",
+    "t/b.py::test_d",
+    "t/c.py::test_gone"
+   ],
+   "f2p_passed": 1,
+   "p2p_failed": 3,
+   "resolved": false
+  },
+  {
+   "results": {
+    "t/a.py::test_a[1::2]": "passed"
+   },
+   "f2p": [
+    "t/a.py::test_a[1::2]"
+   ],
+   "p2p": [],
+   "f2p_passed": 1,
+   "p2p_failed": 0,
+   "resolved": true
+  }
+ ],
+ "junit_docs": [
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"b\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"b\" file=\"x.py\"><failure message=\"m\">t</failure></testcase></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     "x.py",
+     "a",
+     "b",
+     "failed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"b\"><error message=\"m\"/></testcase></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "error"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"b\"><skipped/></testcase></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "skipped"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"b\"><skipped/><error/></testcase></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "error"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"b\"><skipped/><failure/></testcase></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "failed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"b\"><system-out>ok</system-out></testcase></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"b\"><nested><failure/></nested></testcase></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"n&amp;m &lt;t&gt; &quot;q&quot; &apos;x&apos; &#65;&#x42;&#x1F600; &#10;|\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "n&m <t> \"q\" 'x' AB\ud83d\ude00 \n|",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname='a\"b' name='it&apos;s \"x\"'/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a\"b",
+     "it's \"x\"",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"x&#13;y\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "x\ry",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"line1\nline2\ttab\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "line1 line2 tab",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"x&#10;y&#9;z\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "x\ny\tz",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"r1\r\nr2\rr3\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "r1 r2 r3",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"b\"><failure><![CDATA[<testcase name=\"inner\"/> & ]]]]><![CDATA[> ]]></failure></testcase></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "failed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><!-- <testcase name=\"in-comment\"/> --><testcase classname=\"a\" name=\"b\"/><!-- x --></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><?pi data?><testcase classname=\"a\" name=\"b\"/><?pi2?></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"outer\"><testsuite name=\"inner\"><testcase classname=\"a\" name=\"b\"/></testsuite><testcase classname=\"a\" name=\"c\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ],
+    [
+     null,
+     "a",
+     "c",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite><testcase classname=\"a\" name=\"1\"/><testcase classname=\"a\" name=\"2\"/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "1",
+     "passed"
+    ],
+    [
+     null,
+     "a",
+     "2",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testcase classname=\"a\" name=\"root-case\"/>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "root-case",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite/>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite></testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuites/>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite>\n  <testcase\n    classname = \"a\"\n    name\n  =\n\"b\"  >\n  </testcase  >\n</testsuite  >",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite><testcase classname=\"a\" name=\"b\" classname2=\"x\" file=\"\"/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     "",
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite><testcase classname=\"\" name=\"\"/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "",
+     "",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite><testcase name=\"only-name\"/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "",
+     "only-name",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite><testcase classname=\"only-class\"/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "only-class",
+     "",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"caf\u00e9 \u203a \u4e2d\u6587 \ud83d\ude00 e\u0301\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "caf\u00e9 \u203a \u4e2d\u6587 \ud83d\ude00 e\u0301",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"task-1.spec.js\" name=\"describe \u203a title \u203a deep\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "task-1.spec.js",
+     "describe \u203a title \u203a deep",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "\ufeff<testsuites><testsuite name=\"s\"><testcase classname=\"a\" name=\"bom\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "bom",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites>\r\n<testsuite name=\"s\">\r\n<testcase classname=\"a\" name=\"b\"/>\r\n</testsuite>\r\n</testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<!DOCTYPE testsuite><testsuite><testcase classname=\"a\" name=\"b\"/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><!-- c --><testsuite><testcase classname='a' name='b'/></testsuite><!-- tail -->\n<?pi?>\n",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "a",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuites xmlns:x=\"urn:u\"><testsuite><x:testcase name=\"prefixed\"/><testcase name=\"plain\"/></testsuite></testsuites>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "",
+     "plain",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite xmlns=\"urn:u\"><testcase name=\"default-namespaced\"/></testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite xmlns=\"urn:u\"><testcase xmlns=\"\" name=\"undeclared\"/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "",
+     "undeclared",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite><testcase x:name=\"p\" xmlns:x=\"urn:u\" name=\"plain\"/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "",
+     "plain",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite><testcase name=\"b\" a=\"1>2\" b='x>y'/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a-b.c_d:e\"/><t-e.s_t/></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "",
+     "a-b.c_d:e",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite><testcase name=\"b\">text &amp; more &#x41; <![CDATA[raw <>&]]> tail</testcase></testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "",
+     "b",
+     "passed"
+    ]
+   ]
+  },
+  {
+   "xml": "<testsuite>text <b/> mixed</testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "not xml",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "   ",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name='b'/>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name='b'></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite></testSuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><a></testsuite></a>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite/><testsuite/>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite/>junk",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "junk<testsuite/>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite/><!-- fine -->junk",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a\" name=\"b\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=b/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a\"classname=\"b\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase disabled/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a\" / ></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a<b\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&b\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&nbsp;b\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&#65\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&#0;\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&#xD800;\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&#x110000;\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&#X41;\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&#x;\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&#;\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&#8;\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a&#xFFFE;\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>a &nbsp; b</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>a & b</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>a ]]> b</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>a ]] > b</testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite>a \u0001 b</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>a \u000b b</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>a \u001f b</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>a \ufffe b</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>a \u0000 b</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name=\"a\u0001\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>a \t\n\r b</testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite><!-- a -- b --></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><!-- a ---></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><!-- a --></testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite><!----></testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite><!-- never closed </testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><![CDATA[never closed</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><![CDATA[ok]]></testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite><![CDATA[]]></testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite><?pi never closed</testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><?xml version='1.0'?></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><?XML foo?></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><?xml-stylesheet href='a'?></testsuite>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": " <?xml version=\"1.0\" encoding=\"utf-8\"?><testsuite/>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "\n<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuite/>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><?xml version=\"1.0\" encoding=\"utf-8\"?><testsuite/>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<?xml?><testsuite/>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<?xml version=\"1.0\"?><testsuite/>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><testsuite/>",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite><testcase name='x'/ ></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name='x'",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase name='x",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><1bad/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><-bad/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><b c/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><b c=/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><b c='1' ='2'/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite></testsuite foo='1'>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite></testsuite >",
+   "wellformed": true,
+   "cases": []
+  },
+  {
+   "xml": "<testsuite></ testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><x:testcase name='unbound'/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><testcase x:name=\"unbound-attr\"/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><a:b:c/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><a:/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><:a/></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><!DOCTYPE x></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite><!bogus></testsuite>",
+   "wellformed": false,
+   "cases": null
+  },
+  {
+   "xml": "<testsuite>\u00a0<testcase name='nbsp'/>\u3000</testsuite>",
+   "wellformed": true,
+   "cases": [
+    [
+     null,
+     "",
+     "nbsp",
+     "passed"
+    ]
+   ]
+  }
+ ],
+ "junit_reports": [
+  {
+   "label": "pass twice",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "passed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "pass then fail",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "fail then pass",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "pass then error",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><error message='x'>t</error></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "error"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "error then pass",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><error message='x'>t</error></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "error"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "error then fail",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><error message='x'>t</error></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "fail then error",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><error message='x'>t</error></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "error twice",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><error message='x'>t</error></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><error message='x'>t</error></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "error"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "fail twice",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "skip twice",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><skipped/></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><skipped/></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "skipped"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "skip then pass",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><skipped/></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "skipped"
+    ]
+   ],
+   "build_failed": false,
+   "bad": "tests/test_m.py::t1 reported as both skipped and passed"
+  },
+  {
+   "label": "pass then skip",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><skipped/></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "passed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": "tests/test_m.py::t1 reported as both passed and skipped"
+  },
+  {
+   "label": "skip then error",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><skipped/></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><error message='x'>t</error></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "skipped"
+    ]
+   ],
+   "build_failed": false,
+   "bad": "tests/test_m.py::t1 reported as both skipped and error"
+  },
+  {
+   "label": "fail then skip",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><skipped/></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": "tests/test_m.py::t1 reported as both failed and skipped"
+  },
+  {
+   "label": "three: pass, error, fail",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><error message='x'>t</error></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "three: pass, error, pass",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><error message='x'>t</error></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "error"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "a conflict, then a second one: the first message stays",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><skipped/></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_m\" name=\"t2\" file=\"tests/test_m.py\"><skipped/></testcase><testcase classname=\"tests.test_m\" name=\"t2\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "skipped"
+    ]
+   ],
+   "build_failed": false,
+   "bad": "tests/test_m.py::t1 reported as both skipped and passed"
+  },
+  {
+   "label": "a conflict does not stop the others",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"><skipped/></testcase><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_m\" name=\"t2\" file=\"tests/test_m.py\"></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "skipped"
+    ]
+   ],
+   "build_failed": false,
+   "bad": "tests/test_m.py::t1 reported as both skipped and passed"
+  },
+  {
+   "label": "the same name in two classes",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m.A\" name=\"t\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_m.B\" name=\"t\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::A::t",
+     "passed"
+    ],
+    [
+     "tests/test_m.py::B::t",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "the same name in two files",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t\" file=\"tests/test_m.py\"></testcase><testcase classname=\"tests.test_n\" name=\"t\" file=\"tests/test_m.py\"><failure message='x'>t</failure></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t",
+     "passed"
+    ],
+    [
+     "tests/test_m.py::tests::test_n::t",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "no file attribute",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m.TestA\" name=\"t1\"></testcase><testcase classname=\"tests.test_m\" name=\"t2\"><failure message='x'>t</failure></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::TestA::t1",
+     "passed"
+    ],
+    [
+     "tests/test_m.py::t2",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "a testcase with no name is ignored",
+   "xml": "<testsuites><testsuite><testcase classname=\"a\"/><testcase classname=\"a\" name=\"ok\" file=\"a.py\"/></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "a.py::ok",
+     "passed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "empty suite",
+   "xml": "<testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"0\"></testsuite></testsuites>",
+   "base": ".",
+   "results": [],
+   "build_failed": true,
+   "bad": null
+  },
+  {
+   "label": "windows paths",
+   "xml": "<testsuites><testsuite name=\"s\"><testcase classname=\"tests.test_m\" name=\"t1\" file=\"tests\\test_m.py\"></testcase></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_m.py::t1",
+     "passed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null
+  },
+  {
+   "label": "malformed xml",
+   "xml": "<testsuites><testsuite><testcase name='x'></testsuite>",
+   "base": ".",
+   "results": [],
+   "build_failed": false,
+   "bad": "JUnit XML doesn't parse: mismatched tag: line 1, column 44"
+  },
+  {
+   "label": "not xml at all",
+   "xml": "Traceback (most recent call last):\n  boom",
+   "base": ".",
+   "results": [],
+   "build_failed": false,
+   "bad": "JUnit XML doesn't parse: syntax error: line 1, column 0"
+  },
+  {
+   "label": "empty text",
+   "xml": "",
+   "base": ".",
+   "results": [],
+   "build_failed": false,
+   "bad": "JUnit XML doesn't parse: no element found: line 1, column 0"
+  },
+  {
+   "label": "pytest 9.2 on Windows, run from the repo root",
+   "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"3\" failures=\"6\" skipped=\"3\" tests=\"20\" time=\"0.000\" timestamp=\"2000-01-01T00:00:00.000000+00:00\" hostname=\"host\"><testcase classname=\"tests.test_basic\" name=\"test_pass\" file=\"tests\\test_basic.py\" line=\"3\" time=\"0.000\" /><testcase classname=\"tests.test_basic\" name=\"test_fail\" file=\"tests\\test_basic.py\" line=\"7\" time=\"0.000\"><failure message=\"assert 1 == 2\">tests\\test_basic.py:9: in test_fail\n    assert 1 == 2\nE   assert 1 == 2</failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_setup_error\" file=\"tests\\test_basic.py\" line=\"16\" time=\"0.000\"><error message=\"failed on setup with &quot;RuntimeError: boom&quot;\">tests\\test_basic.py:14: in broken\n    raise RuntimeError(\"boom\")\nE   RuntimeError: boom</error></testcase><testcase classname=\"tests.test_basic\" name=\"test_skipped\" file=\"tests\\test_basic.py\" line=\"20\" time=\"0.000\"><skipped type=\"pytest.skip\" message=\"not today\">/work/repo/tests\\test_basic.py:21: not today</skipped></testcase><testcase classname=\"tests.test_basic\" name=\"test_param[a::b]\" file=\"tests\\test_basic.py\" line=\"25\" time=\"0.000\" /><testcase classname=\"tests.test_basic\" name=\"test_param[x y]\" file=\"tests\\test_basic.py\" line=\"25\" time=\"0.000\"><failure message=\"AssertionError: assert 'x y' != 'x y'\">tests\\test_basic.py:28: in test_param\n    assert v != \"x y\"\nE   AssertionError: assert 'x y' != 'x y'</failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_param[1.5]\" file=\"tests\\test_basic.py\" line=\"25\" time=\"0.000\" /><testcase classname=\"tests.test_basic\" name=\"test_param[\\xfcn\\xef]\" file=\"tests\\test_basic.py\" line=\"25\" time=\"0.000\" /><testcase classname=\"tests.test_basic\" name=\"test_param[[br]]\" file=\"tests\\test_basic.py\" line=\"25\" time=\"0.000\" /><testcase classname=\"tests.test_basic.TestOuter\" name=\"test_m\" file=\"tests\\test_basic.py\" line=\"31\" time=\"0.000\" /><testcase classname=\"tests.test_basic.TestOuter.TestInner\" name=\"test_n\" file=\"tests\\test_basic.py\" line=\"35\" time=\"0.000\"><failure message=\"assert False\">tests\\test_basic.py:37: in test_n\n    assert False\nE   assert False</failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_fail_and_teardown_error\" file=\"tests\\test_basic.py\" line=\"45\" time=\"0.000\"><failure message=\"assert False\">tests\\test_basic.py:47: in test_fail_and_teardown_error\n    assert False\nE   assert False</failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_fail_and_teardown_error\" file=\"tests\\test_basic.py\" line=\"45\" time=\"0.000\"><error message=\"failed on teardown with &quot;RuntimeError: teardown&quot;\">tests\\test_basic.py:43: in teardown_breaks\n    raise RuntimeError(\"teardown\")\nE   RuntimeError: teardown</error></testcase><testcase classname=\"tests.test_basic\" name=\"test_pass_and_teardown_error\" file=\"tests\\test_basic.py\" line=\"49\" time=\"0.000\"><error message=\"failed on teardown with &quot;RuntimeError: teardown&quot;\">tests\\test_basic.py:43: in teardown_breaks\n    raise RuntimeError(\"teardown\")\nE   RuntimeError: teardown</error></testcase><testcase classname=\"tests.test_basic\" name=\"test_xfail\" file=\"tests\\test_basic.py\" line=\"53\" time=\"0.000\"><skipped type=\"pytest.xfail\" message=\"known\" /></testcase><testcase classname=\"tests.test_basic\" name=\"test_xpass_strict\" file=\"tests\\test_basic.py\" line=\"58\" time=\"0.000\"><failure message=\"[XPASS(strict)] \">[XPASS(strict)] </failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_skip_inside\" file=\"tests\\test_basic.py\" line=\"63\" time=\"0.000\"><skipped type=\"pytest.skip\" message=\"inside\">/work/repo/tests\\test_basic.py:65: inside</skipped></testcase><testcase classname=\"pkg.sub.tests.test_deep.TestDeep\" name=\"test_ok\" file=\"pkg\\sub\\tests\\test_deep.py\" line=\"1\" time=\"0.000\" /><testcase classname=\"pkg.sub.tests.test_deep.TestDeep\" name=\"test_bad\" file=\"pkg\\sub\\tests\\test_deep.py\" line=\"4\" time=\"0.000\"><failure message=\"AssertionError: assert 'a' == 'b'&#10;  &#10;  - b&#10;  + a\">pkg\\sub\\tests\\test_deep.py:6: in test_bad\n    assert \"a\" == \"b\"\nE   AssertionError: assert 'a' == 'b'\nE     \nE     - b\nE     + a</failure></testcase><testcase classname=\"pkg.sub.tests.test_deep\" name=\"test_top_level\" file=\"pkg\\sub\\tests\\test_deep.py\" line=\"8\" time=\"0.000\" /></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_basic.py::test_pass",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::test_fail",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_setup_error",
+     "error"
+    ],
+    [
+     "tests/test_basic.py::test_skipped",
+     "skipped"
+    ],
+    [
+     "tests/test_basic.py::test_param[a::b]",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::test_param[x y]",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_param[1.5]",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::test_param[\\xfcn\\xef]",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::test_param[[br]]",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::TestOuter::test_m",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::TestOuter::TestInner::test_n",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_fail_and_teardown_error",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_pass_and_teardown_error",
+     "error"
+    ],
+    [
+     "tests/test_basic.py::test_xfail",
+     "skipped"
+    ],
+    [
+     "tests/test_basic.py::test_xpass_strict",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_skip_inside",
+     "skipped"
+    ],
+    [
+     "pkg/sub/tests/test_deep.py::TestDeep::test_ok",
+     "passed"
+    ],
+    [
+     "pkg/sub/tests/test_deep.py::TestDeep::test_bad",
+     "failed"
+    ],
+    [
+     "pkg/sub/tests/test_deep.py::test_top_level",
+     "passed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null,
+   "real": true
+  },
+  {
+   "label": "the same report as Linux writes it (file= with /)",
+   "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"3\" failures=\"6\" skipped=\"3\" tests=\"20\" time=\"0.000\" timestamp=\"2000-01-01T00:00:00.000000+00:00\" hostname=\"host\"><testcase classname=\"tests.test_basic\" name=\"test_pass\" file=\"tests/test_basic.py\" line=\"3\" time=\"0.000\" /><testcase classname=\"tests.test_basic\" name=\"test_fail\" file=\"tests/test_basic.py\" line=\"7\" time=\"0.000\"><failure message=\"assert 1 == 2\">tests\\test_basic.py:9: in test_fail\n    assert 1 == 2\nE   assert 1 == 2</failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_setup_error\" file=\"tests/test_basic.py\" line=\"16\" time=\"0.000\"><error message=\"failed on setup with &quot;RuntimeError: boom&quot;\">tests\\test_basic.py:14: in broken\n    raise RuntimeError(\"boom\")\nE   RuntimeError: boom</error></testcase><testcase classname=\"tests.test_basic\" name=\"test_skipped\" file=\"tests/test_basic.py\" line=\"20\" time=\"0.000\"><skipped type=\"pytest.skip\" message=\"not today\">/work/repo/tests\\test_basic.py:21: not today</skipped></testcase><testcase classname=\"tests.test_basic\" name=\"test_param[a::b]\" file=\"tests/test_basic.py\" line=\"25\" time=\"0.000\" /><testcase classname=\"tests.test_basic\" name=\"test_param[x y]\" file=\"tests/test_basic.py\" line=\"25\" time=\"0.000\"><failure message=\"AssertionError: assert 'x y' != 'x y'\">tests\\test_basic.py:28: in test_param\n    assert v != \"x y\"\nE   AssertionError: assert 'x y' != 'x y'</failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_param[1.5]\" file=\"tests/test_basic.py\" line=\"25\" time=\"0.000\" /><testcase classname=\"tests.test_basic\" name=\"test_param[\\xfcn\\xef]\" file=\"tests/test_basic.py\" line=\"25\" time=\"0.000\" /><testcase classname=\"tests.test_basic\" name=\"test_param[[br]]\" file=\"tests/test_basic.py\" line=\"25\" time=\"0.000\" /><testcase classname=\"tests.test_basic.TestOuter\" name=\"test_m\" file=\"tests/test_basic.py\" line=\"31\" time=\"0.000\" /><testcase classname=\"tests.test_basic.TestOuter.TestInner\" name=\"test_n\" file=\"tests/test_basic.py\" line=\"35\" time=\"0.000\"><failure message=\"assert False\">tests\\test_basic.py:37: in test_n\n    assert False\nE   assert False</failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_fail_and_teardown_error\" file=\"tests/test_basic.py\" line=\"45\" time=\"0.000\"><failure message=\"assert False\">tests\\test_basic.py:47: in test_fail_and_teardown_error\n    assert False\nE   assert False</failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_fail_and_teardown_error\" file=\"tests/test_basic.py\" line=\"45\" time=\"0.000\"><error message=\"failed on teardown with &quot;RuntimeError: teardown&quot;\">tests\\test_basic.py:43: in teardown_breaks\n    raise RuntimeError(\"teardown\")\nE   RuntimeError: teardown</error></testcase><testcase classname=\"tests.test_basic\" name=\"test_pass_and_teardown_error\" file=\"tests/test_basic.py\" line=\"49\" time=\"0.000\"><error message=\"failed on teardown with &quot;RuntimeError: teardown&quot;\">tests\\test_basic.py:43: in teardown_breaks\n    raise RuntimeError(\"teardown\")\nE   RuntimeError: teardown</error></testcase><testcase classname=\"tests.test_basic\" name=\"test_xfail\" file=\"tests/test_basic.py\" line=\"53\" time=\"0.000\"><skipped type=\"pytest.xfail\" message=\"known\" /></testcase><testcase classname=\"tests.test_basic\" name=\"test_xpass_strict\" file=\"tests/test_basic.py\" line=\"58\" time=\"0.000\"><failure message=\"[XPASS(strict)] \">[XPASS(strict)] </failure></testcase><testcase classname=\"tests.test_basic\" name=\"test_skip_inside\" file=\"tests/test_basic.py\" line=\"63\" time=\"0.000\"><skipped type=\"pytest.skip\" message=\"inside\">/work/repo/tests\\test_basic.py:65: inside</skipped></testcase><testcase classname=\"pkg.sub.tests.test_deep.TestDeep\" name=\"test_ok\" file=\"pkg/sub/tests/test_deep.py\" line=\"1\" time=\"0.000\" /><testcase classname=\"pkg.sub.tests.test_deep.TestDeep\" name=\"test_bad\" file=\"pkg/sub/tests/test_deep.py\" line=\"4\" time=\"0.000\"><failure message=\"AssertionError: assert 'a' == 'b'&#10;  &#10;  - b&#10;  + a\">pkg\\sub\\tests\\test_deep.py:6: in test_bad\n    assert \"a\" == \"b\"\nE   AssertionError: assert 'a' == 'b'\nE     \nE     - b\nE     + a</failure></testcase><testcase classname=\"pkg.sub.tests.test_deep\" name=\"test_top_level\" file=\"pkg/sub/tests/test_deep.py\" line=\"8\" time=\"0.000\" /></testsuite></testsuites>",
+   "base": ".",
+   "results": [
+    [
+     "tests/test_basic.py::test_pass",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::test_fail",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_setup_error",
+     "error"
+    ],
+    [
+     "tests/test_basic.py::test_skipped",
+     "skipped"
+    ],
+    [
+     "tests/test_basic.py::test_param[a::b]",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::test_param[x y]",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_param[1.5]",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::test_param[\\xfcn\\xef]",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::test_param[[br]]",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::TestOuter::test_m",
+     "passed"
+    ],
+    [
+     "tests/test_basic.py::TestOuter::TestInner::test_n",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_fail_and_teardown_error",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_pass_and_teardown_error",
+     "error"
+    ],
+    [
+     "tests/test_basic.py::test_xfail",
+     "skipped"
+    ],
+    [
+     "tests/test_basic.py::test_xpass_strict",
+     "failed"
+    ],
+    [
+     "tests/test_basic.py::test_skip_inside",
+     "skipped"
+    ],
+    [
+     "pkg/sub/tests/test_deep.py::TestDeep::test_ok",
+     "passed"
+    ],
+    [
+     "pkg/sub/tests/test_deep.py::TestDeep::test_bad",
+     "failed"
+    ],
+    [
+     "pkg/sub/tests/test_deep.py::test_top_level",
+     "passed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null,
+   "real": true
+  },
+  {
+   "label": "pytest 9.2 on Windows, run from svc/ (a cwd below the repo root)",
+   "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"1\" skipped=\"0\" tests=\"2\" time=\"0.000\" timestamp=\"2000-01-01T00:00:00.000000+00:00\" hostname=\"host\"><testcase classname=\"tests.test_svc\" name=\"test_svc_ok\" file=\"tests\\test_svc.py\" line=\"0\" time=\"0.000\" /><testcase classname=\"tests.test_svc\" name=\"test_svc_bad\" file=\"tests\\test_svc.py\" line=\"4\" time=\"0.000\"><failure message=\"assert [1] == [2]&#10;  &#10;  At index 0 diff: 1 != 2&#10;  Use -v to get more diff\">tests\\test_svc.py:6: in test_svc_bad\n    assert [1] == [2]\nE   assert [1] == [2]\nE     \nE     At index 0 diff: 1 != 2\nE     Use -v to get more diff</failure></testcase></testsuite></testsuites>",
+   "base": "svc",
+   "results": [
+    [
+     "svc/tests/test_svc.py::test_svc_ok",
+     "passed"
+    ],
+    [
+     "svc/tests/test_svc.py::test_svc_bad",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null,
+   "real": true
+  },
+  {
+   "label": "the same, as Linux writes it",
+   "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"1\" skipped=\"0\" tests=\"2\" time=\"0.000\" timestamp=\"2000-01-01T00:00:00.000000+00:00\" hostname=\"host\"><testcase classname=\"tests.test_svc\" name=\"test_svc_ok\" file=\"tests/test_svc.py\" line=\"0\" time=\"0.000\" /><testcase classname=\"tests.test_svc\" name=\"test_svc_bad\" file=\"tests/test_svc.py\" line=\"4\" time=\"0.000\"><failure message=\"assert [1] == [2]&#10;  &#10;  At index 0 diff: 1 != 2&#10;  Use -v to get more diff\">tests\\test_svc.py:6: in test_svc_bad\n    assert [1] == [2]\nE   assert [1] == [2]\nE     \nE     At index 0 diff: 1 != 2\nE     Use -v to get more diff</failure></testcase></testsuite></testsuites>",
+   "base": "svc",
+   "results": [
+    [
+     "svc/tests/test_svc.py::test_svc_ok",
+     "passed"
+    ],
+    [
+     "svc/tests/test_svc.py::test_svc_bad",
+     "failed"
+    ]
+   ],
+   "build_failed": false,
+   "bad": null,
+   "real": true
+  }
+ ],
+ "pytest_boot_template": "import os, sys\nrepo = os.path.realpath(%r)\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n",
+ "pytest_boot": [
+  {
+   "repo": "/work/repo",
+   "code": "import os, sys\nrepo = os.path.realpath('/work/repo')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/eval/work/x/fx-python-S-01",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/eval/work/x/fx-python-S-01')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "C:\\Users\\Someone\\.rlm-harness\\eval\\work\\set-all-20260101-000000\\t-1",
+   "code": "import os, sys\nrepo = os.path.realpath('C:\\\\Users\\\\Someone\\\\.rlm-harness\\\\eval\\\\work\\\\set-all-20260101-000000\\\\t-1')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "C:/Users/Someone/eval/work",
+   "code": "import os, sys\nrepo = os.path.realpath('C:/Users/Someone/eval/work')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/it's",
+   "code": "import os, sys\nrepo = os.path.realpath(\"/tmp/it's\")\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/say \"hi\"",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/say \"hi\"')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/both ' and \"",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/both \\' and \"')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/with space/x y",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/with space/x y')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/\u00fcn\u00ef/\u00df\u017f",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/\u00fcn\u00ef/\u00df\u017f')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/tab\there",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/tab\\there')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/nl\nx",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/nl\\nx')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/cr\rx",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/cr\\rx')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/zw\u200bsp",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/zw\\u200bsp')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/nb\u00a0sp",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/nb\\xa0sp')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/emoji\ud83d\ude00",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/emoji\ud83d\ude00')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/cjk\u4e2d\u6587",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/cjk\u4e2d\u6587')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/del\u007fx",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/del\\x7fx')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/ctl\u0001x",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/ctl\\x01x')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/sep\u2028x",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/sep\\u2028x')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/private\ue000x",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/private\\ue000x')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/back\\slash",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/back\\\\slash')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/dq\"only",
+   "code": "import os, sys\nrepo = os.path.realpath('/tmp/dq\"only')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/tmp/sq'only",
+   "code": "import os, sys\nrepo = os.path.realpath(\"/tmp/sq'only\")\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "",
+   "code": "import os, sys\nrepo = os.path.realpath('')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  },
+  {
+   "repo": "/",
+   "code": "import os, sys\nrepo = os.path.realpath('/')\ndef inside(p):\n    p = os.path.realpath(p or '.')\n    return p == repo or p.startswith(repo + os.sep)\nif sys.path and not sys.path[0]:\n    del sys.path[0]\nkept = [(i, p) for i, p in enumerate(sys.path) if inside(p)]\nsys.path[:] = [p for p in sys.path if not inside(p)]\nimport pytest\ntry:\n    from _pytest.config import default_plugins\nexcept Exception:\n    default_plugins = ()\nfor name in default_plugins:\n    try:\n        __import__('_pytest.' + name)\n    except Exception:\n        pass\nimport doctest, pdb, unittest\nfor i, p in kept:\n    sys.path.insert(i, p)\nsys.path.insert(0, os.getcwd())\nimport runpy\nrunpy.run_module('pytest', run_name='__main__', alter_sys=True)\n"
+  }
+ ],
+ "pytest_args": [
+  {
+   "junit": "/work/repo/grade-logs/t/junit.xml",
+   "files": [
+    "tests/test_fix.py",
+    "tests/test_basic.py"
+   ],
+   "args": [
+    "-p",
+    "no:cacheprovider",
+    "-o",
+    "junit_family=xunit1",
+    "--junitxml=/work/repo/grade-logs/t/junit.xml",
+    "--tb=short",
+    "-q",
+    "tests/test_fix.py",
+    "tests/test_basic.py"
+   ]
+  },
+  {
+   "junit": "C:\\Users\\Someone\\out\\grade-logs\\fx-python-S-01\\junit.xml",
+   "files": [
+    "tests/test_fix.py"
+   ],
+   "args": [
+    "-p",
+    "no:cacheprovider",
+    "-o",
+    "junit_family=xunit1",
+    "--junitxml=C:\\Users\\Someone\\out\\grade-logs\\fx-python-S-01\\junit.xml",
+    "--tb=short",
+    "-q",
+    "tests/test_fix.py"
+   ]
+  },
+  {
+   "junit": "/x/junit.xml",
+   "files": [],
+   "args": [
+    "-p",
+    "no:cacheprovider",
+    "-o",
+    "junit_family=xunit1",
+    "--junitxml=/x/junit.xml",
+    "--tb=short",
+    "-q"
+   ]
+  },
+  {
+   "junit": "/x/with space/junit.xml",
+   "files": [
+    "a b/test c.py",
+    "tests/test_\u00fc.py"
+   ],
+   "args": [
+    "-p",
+    "no:cacheprovider",
+    "-o",
+    "junit_family=xunit1",
+    "--junitxml=/x/with space/junit.xml",
+    "--tb=short",
+    "-q",
+    "a b/test c.py",
+    "tests/test_\u00fc.py"
+   ]
+  }
+ ]
+}

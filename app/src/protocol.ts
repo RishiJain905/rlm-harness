@@ -13,13 +13,17 @@ export const ErrorCode = {
   UNKNOWN_RUN: -32010,
   UNKNOWN_PROFILE: -32011,
   BAD_INPUT: -32012,
+  /** v1 step 4: run.say or run.close while a prompt is still running. */
+  RUN_BUSY: -32013,
   CANCELLED: -32800,
 } as const;
 export type ErrorCodeName = keyof typeof ErrorCode;
 
 // -- §4 shared types --
 
-export type Thinking = "off" | "low" | "medium" | "high";
+/** Every thinking level, least first (D-250). A model takes only some of them; the gateway sends the nearest it has. */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type Thinking = (typeof THINKING_LEVELS)[number];
 
 /** `thinking: null` means the profile's default (D-08). */
 export interface ModelRef {
@@ -62,6 +66,7 @@ export type ModelErrorKind =
   | "no_key"
   | "bad_request"
   | "rate_limit"
+  | "no_credit"
   | "server"
   | "timeout"
   | "network"
@@ -100,11 +105,51 @@ export type ApprovalKind = "write" | "shell" | "network";
 
 // -- §5.1 app -> engine --
 
+/** One mode's limits as the engine runs them: contract.Limits.as_dict(). */
+export interface ProfileLimits {
+  max_turns: number;
+  max_subcalls: number;
+  root_max_tokens: number;
+  output_max_chars: number;
+  cell_timeout_s: number;
+  cpus: number;
+  memory_mb: number;
+  pids: number;
+  grader_timeout_s: number | null;
+  subcall_max_chars: number;
+  subcall_max_tokens: number;
+  subcall_thinking: string | null;
+  subcall_oversize: string;
+}
+
 export interface ProfileInfo {
   name: string;
   source: "builtin" | "user";
   prompt_hash: string;
   profile_hash: string;
+  /** v1 step 2 (D-198): an added field, so the protocol number stays. */
+  agent_api: boolean;
+  limits: { read: ProfileLimits; repo: ProfileLimits };
+  /** v1 step 6 (D-208): the folder the engine loaded the profile from, absolute. */
+  path: string;
+  /** D-256: the profile's contract, "v4" (training's prompt, frozen) or "rlmh-1" (rlmh's own, with system.md). */
+  contract: string;
+}
+
+/** v1 step 6: `profile.check` (architecture §3.1). `gated` is D-234's. */
+export interface ProfileCheckParams {
+  path: string;
+  base: string | null;
+  gated?: boolean;
+}
+
+export interface ProfileCheckResult {
+  ok: boolean;
+  errors: string[];
+  prompt_hash: string | null;
+  profile_hash: string | null;
+  /** The dotted keys that differ from `base`, then "guidance", then the skill, script and gated file paths. */
+  changed: string[];
 }
 
 /** `contract*` and `profiles` are null and [] until step 3. */
@@ -137,6 +182,16 @@ export interface RunStartParams {
   tag?: string;
   batch?: string;
   log_dir?: string;
+  /** The root model's catalog numbers, 0 when unknown (v1 step 3); the engine plans compaction from them. */
+  window?: ModelWindow;
+  /** v1 step 4: true keeps the run open after each answer for run.say (the interactive app only). Default false. */
+  conversation?: boolean;
+}
+
+/** A model's catalog window: its context window and its largest output, in tokens; 0 means unknown. */
+export interface ModelWindow {
+  context_window: number;
+  max_output: number;
 }
 
 export interface RunStartResult {
@@ -145,6 +200,22 @@ export interface RunStartResult {
 }
 
 export interface RunCancelParams {
+  run_id: string;
+}
+
+/** v1 step 4: the next question of an open conversation. */
+export interface RunSayParams {
+  run_id: string;
+  text: string;
+}
+
+/** Returned before that prompt's first model.complete. */
+export interface RunSayResult {
+  prompt_index: number;
+}
+
+/** v1 step 4: ends an open conversation; the result comes after run.closed was sent. */
+export interface RunCloseParams {
   run_id: string;
 }
 
@@ -193,6 +264,9 @@ export interface ModelCompleteParams {
   /** A root turn of an `rlm()` child run (D-160): `role` is "sub", `subcall_id` is the child's row, and the conversation
    *  grows turn by turn like a root's, so the gateway caches and routes it as one (cache.ts routeKey). */
   child?: ChildTurn;
+  /** The summary call of a compaction (v1 step 3). The gateway treats it as the role it carries: same routing key, same
+   *  cache markers, same accounting. */
+  purpose?: "compact";
 }
 
 /** Which child run a `model.complete` turn belongs to: its id, this turn and the child's limit, and its depth (1: the
@@ -262,6 +336,34 @@ export interface RunStartedParams {
   input: RunInputInfo;
   limits: RunLimits;
   log_path: string;
+  /** As run.start sent it (v1 step 3). */
+  window: ModelWindow;
+  /** This run's compaction numbers, or null when the profile has no `[compaction]` table. */
+  compaction: CompactionPlan | null;
+  /** v1 step 4: as run.start sent it. */
+  conversation: boolean;
+}
+
+/** The numbers of v1 architecture §4.1, in tokens. */
+export interface CompactionPlan {
+  window: number;
+  trigger: number;
+  keep: number;
+}
+
+/** One compaction (v1 step 3): the loop replaced the middle of the conversation with the model's summary. `child_id`
+ *  names the `rlm()` child whose conversation it was, or null for the root's. */
+export interface RunCompactedParams {
+  run_id: string;
+  turn: number;
+  prompt_index: number;
+  child_id: number | null;
+  before_tokens: number;
+  after_tokens: number;
+  dropped_messages: number;
+  kept_messages: number;
+  summary_chars: number;
+  seconds: number;
 }
 
 export interface RunReplyParams {
@@ -349,6 +451,16 @@ export interface RunFinishedParams {
   infra_kind: string | null;
   wall_s: number;
   log_path: string;
+  /** v1 step 4: which prompt of the run this is (0 for a one-shot run), and whether a conversation now waits for
+   *  run.say. `turns`, `subcalls`, `usage` and `cost_usd` cover this prompt only. */
+  prompt_index: number;
+  open: boolean;
+}
+
+/** v1 step 4: sent once when a conversation ends; never for a run started with `conversation: false`. */
+export interface RunClosedParams {
+  run_id: string;
+  prompts: number;
 }
 
 export interface ModelCancelParams {
@@ -358,6 +470,7 @@ export interface ModelCancelParams {
 /** Every engine notification, by method. */
 export type EngineEvents = {
   "run.started": RunStartedParams;
+  "run.compacted": RunCompactedParams;
   "run.reply": RunReplyParams;
   "run.cell": RunCellParams;
   "run.subcall": RunSubcallParams;
@@ -365,5 +478,6 @@ export type EngineEvents = {
   "run.permission": RunPermissionParams;
   "run.budget": RunBudgetParams;
   "run.finished": RunFinishedParams;
+  "run.closed": RunClosedParams;
   "model.cancel": ModelCancelParams;
 };

@@ -31,12 +31,15 @@ import { KeyReadError, last4Of, type KeyStore, type ResolvedKey } from "./keys.t
 import { buildOpenAIRequest, DROPPABLE_FIELDS, streamOpenAI } from "./openai.ts";
 import { openRouterEndpoint, provider, providerName, type ProviderDef } from "./providers.ts";
 import { AttemptError, causeText, formatBytes, type Failure, type Replay, type StreamHooks, type StreamResult } from "./stream.ts";
+import { fitThinking, levelsFromEfforts, thinkingRule } from "./thinking.ts";
 import { billedCost, emptyUsage, replyChars, requestChars, RunTotals, toUsage } from "./usage.ts";
 
 export type AppEvents = {
   "call.start": { call_id: string; run_id: string; role: "root" | "sub"; subcall_id?: number; batch?: Batch; origin?: Origin; model: ModelRef; prompt: string; started_at: number;
                   /** A root turn of an rlm() child (D-160): the interface adds it to the child's row instead of starting the row again. */
-                  child?: ChildTurn };
+                  child?: ChildTurn;
+                  /** A compaction's summary call (v1 step 3): the interface labels it "compacting" instead of a reply. */
+                  purpose?: "compact" };
   /** reset: a broken stream is retried whole; drop this call's text and reasoning so far. */
   "call.delta": { call_id: string; text?: string; reasoning?: string; reset?: true };
   "call.end": { call_id: string; run_id: string; usage: Usage; finish_reason: string; seconds: number; error?: ModelErrorData;
@@ -107,7 +110,8 @@ interface RunState {
   replay: Map<string, Replay>;
   fake: FakeRunState;
   calls: Set<AbortController>;
-  /** The engine said run.finished (or exited): only a finished run with no call left may be dropped from the history. */
+  /** The engine said run.finished with `open` false, or run.closed (or exited): only a finished run with no call left
+   *  may be dropped from the history. */
   finished: boolean;
 }
 
@@ -164,7 +168,10 @@ export class Gateway {
     this.fake = new FakeProvider(opts.env ?? process.env);
     this.gate = new BatchGate(LIMITS);
     this.bus.on("engine.event", (e) => {
-      if (e.method !== "run.finished" || typeof e.params?.run_id !== "string") return;
+      if (typeof e.params?.run_id !== "string") return;
+      // a conversation's run.finished {open: true} ends one prompt, not the run: its replay table, scripted position and
+      // totals carry on into the next prompt until run.closed (v1 step 4)
+      if (!(e.method === "run.finished" && e.params.open !== true) && e.method !== "run.closed") return;
       this.finishRun(this.runs.get(e.params.run_id));
       this.gate.dropRun(e.params.run_id);
       this.prune();
@@ -187,13 +194,16 @@ export class Gateway {
       ...(p.batch !== undefined ? { batch: p.batch } : {}),
       ...(p.origin !== undefined ? { origin: p.origin } : {}),
       ...(p.child !== undefined ? { child: p.child } : {}),
+      ...(p.purpose !== undefined ? { purpose: p.purpose } : {}),
       model: p.model,
       prompt: p.messages[p.messages.length - 1]?.content ?? "",
       started_at: startedAt,
     });
     p = this.capOutput(p); // before lastRoot, so /context shows the reply room actually asked for
     const run = this.run(p.run_id);
-    if (p.role === "root") run.lastRoot = p;
+    // A compaction's summary call (v1 step 3) is routed, cached and counted as the root call it is, but /context keeps
+    // showing the conversation itself: the summary request is the same list plus one request the next turn won't carry.
+    if (p.role === "root" && p.purpose === undefined) run.lastRoot = p;
     const ac = new AbortController();
     const onAbort = () => ac.abort(signal?.reason);
     if (signal?.aborted) ac.abort(signal.reason);
@@ -449,13 +459,17 @@ export class Gateway {
   }
 
   private buildBody(c: Call, ticket: BatchTicket | null): Record<string, unknown> {
-    const { p, def, run } = c;
+    let { p } = c;
+    const { def, run } = c;
     const modelKey = `${def.id}\0${p.model.model}`;
     const dropped = this.dropped.get(modelKey) ?? new Set<string>();
     const replay = (m: Extract<Message, { role: "assistant" }>) => (m.tool_call ? run.replay.get(replayKey(m.content, m.tool_call.id, p)) : undefined);
     // a child's turns grow like the root's, so each turn marks the conversation so far for the next (D-160)
     const markers = p.role === "root" || p.child !== undefined || (ticket?.marker ?? false);
     const prefixMark = prefixWorthMarking(p, c.info?.cache_min_tokens ?? null);
+    // the level the model takes nearest to the one asked for (D-250); a sub-call's thinking= can name any level
+    const thinking = fitThinking(p.thinking, thinkingRule(def.id, p.model.model, c.info));
+    if (thinking !== p.thinking) p = { ...p, thinking };
     if (def.client === "anthropic") return buildAnthropicRequest(p, { shape: this.shapes.get(modelKey), dropped, markers, prefixMark, replay });
     return buildOpenAIRequest(p, { provider: def, info: c.info, dropped, replay, markers, prefixMark, endpoint: this.endpointFor(c) });
   }
@@ -704,7 +718,7 @@ export class Gateway {
     }
     if (s === 400 || s === 413 || s === 422) return this.error("bad_request", p, s, `${P} refused the request (HTTP ${s}): ${detail}`);
     if (s === 404) return this.error("unknown_model", p, s, `${P} has no model "${p.model.model}" (HTTP 404). Pick another in /model, or use Refresh models in /providers.`);
-    if (s === 429 && isQuota(f)) return this.error("rate_limit", p, s, `${P} says the account is out of quota or credit (HTTP 429): ${detail}`);
+    if (s === 402 || (s === 429 && isQuota(f))) return this.error("no_credit", p, s, `${P} says the account is out of credit (HTTP ${s}): ${detail.replace(/\.$/, "")}. Add credit, then run again.`);
     if (s === 429) return this.error("rate_limit", p, s, `${P} is rate limiting requests (HTTP 429)${after}: ${detail}`);
     if (s === 408) return this.error("timeout", p, s, `${P} did not answer in time${after}.`);
     if (s !== null && s >= 500) return this.error("server", p, s, `${P} failed with HTTP ${s}${after}: ${detail}`);
@@ -773,7 +787,7 @@ class Slots {
 function retryable(f: Failure): boolean {
   if (f.kind === "stream" || f.kind === "network" || f.kind === "timeout") return true;
   if (f.kind !== "http" || f.status === null) return false;
-  if (f.status === 429) return !isQuota(f);
+  if (f.status === 429) return !isQuota(f); // 402 is not in RETRY_STATUSES: no credit is never retried (D-257)
   return RETRY_STATUSES.has(f.status) || f.status >= 500;
 }
 
@@ -891,6 +905,9 @@ function fetchedModel(providerId: string, id: string, row: Record<string, any>, 
     m.tool_call = row.supported_parameters.includes("tools");
     m.reasoning = row.supported_parameters.includes("reasoning");
   }
+  const levels = levelsFromEfforts(row.reasoning?.supported_efforts);
+  if (levels) m.thinking_levels = levels;
+  else delete m.thinking_levels;
   return m;
 }
 

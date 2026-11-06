@@ -1,0 +1,42 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`trajectoryText a hand-made record, reasoning left out, sub-calls under their turn 1`] = `
+"# Trajectory
+
+turns: 2
+sub-calls: 1
+submitted: yes
+infra: none
+
+## Turn 1
+
+### Reply
+
+Count the lines.
+
+### Code
+
+\`\`\`python
+n = len(context.splitlines())
+print(n)
+\`\`\`
+
+### Output
+
+\`\`\`
+5
+\`\`\`
+
+### Sub-calls
+
+- sub-call 1: 42 prompt chars, ok: five lines
+
+## Turn 2
+
+### Code
+
+\`\`\`python
+submit(n)
+\`\`\`
+"
+`;

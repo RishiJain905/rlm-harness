@@ -250,7 +250,7 @@ describe("the app around it", () => {
     await finished(log, second);
     expect(app.engine.calls.filter((c) => c.method === "run.start")[1]!.params.permission_mode).toBe("default");
     expect(app.startCalls).toHaveLength(2);
-    expect(await app.session.info()).toMatchObject({ protocol: 1, contract: "v4" });
+    expect(await app.session.info()).toMatchObject({ protocol: 2, contract: "v4" });
   });
 
   test("bad input and unknown profile reject start", async () => {
@@ -327,11 +327,57 @@ describe("helpers", () => {
       "profile", "profile_hash", "mode", "call_format", "root", "sub", "permission_mode", "limits", "started_at",
       "wall_s", "question", "input", "workspace", "base_tree", "messages", "turns", "subcalls", "children", "fetches",
       "permissions", "submitted", "answer", "answer_valid", "usage", "cost_usd", "cache", "timeouts", "crashes",
-      "restarts", "diff", "infra_error", "infra_kind", "host_traceback",
+      "restarts", "diff", "infra_error", "infra_kind", "host_traceback", "window", "compactions", "prompt_index", "conversation",
     ]);
     expect(r.turns).toHaveLength(2);
     expect(r.subcalls).toHaveLength(3);
     expect(Math.round((r.usage.root.cost_usd + r.usage.sub.cost_usd) * 1e6) / 1e6).toBe(r.cost_usd);
     expect(runRecord({ format: 99 }).format).toBe(99);
+  });
+});
+
+describe("conversation (v1 step 4)", () => {
+  const code = async (p: Promise<unknown>) => p.then(() => "ok", (e: { code?: number }) => e.code);
+
+  test("open after each answer, run.say's errors, then run.close sends run.closed", async () => {
+    const { app, log } = await open({ scenario: "conversation" });
+    const { run_id } = await app.session.start({ mode: "read", question: "Q", inputs: [join(app.deps.cwd, "a.txt")], interactive: true, conversation: true });
+    await waitFor(() => events(log, "run.finished").length === 1);
+    expect(events(log, "run.started")[0]?.conversation).toBe(true);
+    expect(events(log, "run.finished")[0]).toMatchObject({ prompt_index: 0, open: true, answer: "first answer" });
+    expect(await code(app.session.say(run_id, ""))).toBe(-32602);
+    expect(await app.session.say(run_id, "Q2")).toEqual({ prompt_index: 1 });
+    expect(await code(app.session.say(run_id, "Q3"))).toBe(-32013); // prompt 1 is running
+    expect(await code(app.session.closeRun(run_id))).toBe(-32013);
+    await waitFor(() => events(log, "run.finished").length === 2, 10_000);
+    expect(events(log, "run.finished")[1]).toMatchObject({ prompt_index: 1, open: true, answer: "second answer", turns: 1 });
+    // the follow-up's request: the earlier list, the note as the tool result, then the follow-up
+    const last = app.session.gateway.lastRootRequest(run_id)!;
+    expect(last.messages.slice(-2).map((m) => m.role)).toEqual(["tool", "user"]);
+    expect(last.messages.at(-2)!.content).toBe("Your answer was submitted, and the user has seen it.");
+    expect(last.messages.at(-1)!.content).toContain("\n\nQ2\n\n(20 turns left, 80 sub-calls left)");
+    await app.session.closeRun(run_id);
+    expect(events(log, "run.closed")).toEqual([{ run_id, prompts: 2 }]);
+    expect(await code(app.session.say(run_id, "Q4"))).toBe(-32010);
+    await app.session.closeRun(run_id); // swallowed
+  });
+
+  test("a one-shot run never opens: open false, no run.closed, and run.say is -32010", async () => {
+    const { app, log } = await open({ scenario: "conversation" });
+    const runId = await startRead(app, log);
+    const fin = await finished(log, runId);
+    expect([fin.prompt_index, fin.open]).toEqual([0, false]);
+    expect(events(log, "run.started")[0]?.conversation).toBe(false);
+    expect(await code(app.session.say(runId, "Q2"))).toBe(-32010);
+    expect(events(log, "run.closed")).toEqual([]);
+  });
+
+  test("run.cancel while waiting: run.closed and no new run.finished", async () => {
+    const { app, log } = await open({ scenario: "conversation" });
+    const { run_id } = await app.session.start({ mode: "read", question: "Q", inputs: [join(app.deps.cwd, "a.txt")], interactive: true, conversation: true });
+    await waitFor(() => events(log, "run.finished").length === 1);
+    await app.session.cancel(run_id);
+    expect(events(log, "run.finished").length).toBe(1);
+    expect(events(log, "run.closed")).toEqual([{ run_id, prompts: 1 }]);
   });
 });

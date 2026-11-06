@@ -66,7 +66,7 @@ rlm-harness/
     bun.lock, tsconfig.json          2
     src/
       main.ts                        2 +6 +7 +10  argv dispatch (§10)
-      version.ts                     2 ◆     APP_VERSION, PROTOCOL_VERSION = 1
+      version.ts                     2 ◆     APP_VERSION, PROTOCOL_VERSION = 1 (2 since v1 step 3)
       paths.ts                       2 ◆     home(), runsDir(), profilesDir(), … (§9)
       protocol.ts                    2 ◆     TS types for §4-§6, error codes
       link.ts                        2       JSON-RPC peer over a pair of streams
@@ -93,6 +93,7 @@ rlm-harness/
       gateway/cache.ts               5
       gateway/usage.ts               5
       gateway/stream.ts              5 ◆     what openai.ts and anthropic.ts share with gateway.ts: hooks, results, AttemptError
+      gateway/thinking.ts            D-250   the thinking levels each model takes, and the level sent for one it lacks
     catalog/models.json              5
     catalog/ATTRIBUTION.md           5 ◆
     scripts/build-catalog.ts         5 ◆     builds models.json from OMP's catalog
@@ -133,7 +134,7 @@ rlm-harness/
 - **Framing.** JSON-RPC 2.0, one UTF-8 JSON object per line terminated by `\n`, no batches. Lines may be long: a `run.start` result is small, but `model.complete` params carry the whole conversation.
 - **Ids.** The app numbers its requests with integers from 1, and the engine with strings `"e1"`, `"e2"`, …. A message with `result` or `error` and no `method` answers one of the receiver's own requests.
 - **Notifications** have no `id` and get no answer. All engine events are notifications, and so is `model.cancel`.
-- **Version.** `PROTOCOL_VERSION = 1` in `version.ts` and `rlm_engine/__init__.py`. `engine.info` returns it, and the app refuses to run against a different one.
+- **Version.** `PROTOCOL_VERSION = 1` in `version.ts` and `rlm_engine/__init__.py`. `engine.info` returns it, and the app refuses to run against a different one. v1 step 3 made it 2 (D-177): `run.start.window`, `model.complete.purpose`, `run.started.window` and `.compaction`, and `run.compacted`, pinned in [../v1/architecture.md](../v1/architecture.md) §3.
 - **Concurrency.** Both sides handle requests concurrently. A slow `model.complete` never blocks a `run.cancel`.
 - **Engine stdin** is read on a thread that hands each line to the asyncio loop, because asyncio pipe reading isn't reliable on Windows (D-30).
 
@@ -146,9 +147,10 @@ rlm-harness/
 |---|---|---|
 | -32700, -32600, -32601, -32602, -32603 | `PARSE_ERROR`, `INVALID_REQUEST`, `METHOD_NOT_FOUND`, `INVALID_PARAMS`, `INTERNAL_ERROR` | parse error, invalid request, unknown method, bad params, internal |
 | -32001 | `MODEL_ERROR` | `model.complete` failed; `data` is a ModelErrorData |
-| -32010 | `UNKNOWN_RUN` | `run.cancel` or `run.vars` for a run that doesn't exist or has finished |
+| -32010 | `UNKNOWN_RUN` | `run.cancel` or `run.vars` for a run that doesn't exist or has finished; `run.say` or `run.close` for a run that isn't an open conversation (v1 step 4) |
 | -32011 | `UNKNOWN_PROFILE` | `run.start` names no known profile |
 | -32012 | `BAD_INPUT` | missing input file, a repo path that isn't a folder, or a missing field |
+| -32013 | `RUN_BUSY` | `run.say` or `run.close` while a conversation's prompt is still running (protocol 2, v1 step 4) |
 | -32800 | `CANCELLED` | the request was cancelled (a run was cancelled, or the app is closing) |
 
 ## 4. Shared types
@@ -157,12 +159,12 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 
 | Type | Shape |
 |---|---|
-| **ModelRef** | `{provider: string, model: string, thinking: "off"\|"low"\|"medium"\|"high"\|null}`. `null` means the profile's default (D-08). The engine never looks inside it, except to record it |
+| **ModelRef** | `{provider: string, model: string, thinking: "off"\|"minimal"\|"low"\|"medium"\|"high"\|"xhigh"\|"max"\|null}` (D-250). `null` means the profile's default (D-08). The engine never looks inside it, except to record it |
 | **Message** | `{role:"system", content}` · `{role:"user", content}` · `{role:"assistant", content, tool_call?: ToolCall}` · `{role:"tool", tool_call_id, content}`. `content` is always a string, and an assistant message carries at most one tool call (D-04) |
 | **ToolCall** | `{id: string, name: string, arguments: object}`. For the `python` tool, `arguments` is `{code: string}` |
 | **ToolDef** | `{name, description, parameters}`, where `parameters` is a JSON Schema. v0 has exactly one: `PYTHON_TOOL` (§6.2) |
 | **Usage** | `{input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost_usd}`. `input_tokens` counts all prompt tokens, cached ones included; cache reads and writes are subsets of it (D-22) |
-| **ModelErrorData** | `{kind, provider, model, status: int\|null, message}`, where `kind` is one of `auth`, `no_key`, `bad_request`, `rate_limit`, `server`, `timeout`, `network`, `context_window`, `unknown_model`, `cancelled`, `other` |
+| **ModelErrorData** | `{kind, provider, model, status: int\|null, message}`, where `kind` is one of `auth`, `no_key`, `bad_request`, `rate_limit`, `no_credit` (HTTP 402, or a quota 429; D-257), `server`, `timeout`, `network`, `context_window`, `unknown_model`, `cancelled`, `other` |
 | **Origin** | `{turn: int, line: int\|null}`: the root turn and the line in that turn's cell |
 | **Batch** | `{id: string, index: int, size: int}`. A single `llm()` call is a batch of one (D-24) |
 
@@ -172,10 +174,12 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 
 | Method | Params | Result | Errors |
 |---|---|---|---|
-| `engine.info` | `{}` | `{version, protocol, python, contract, contract_hash, training_hash, profiles: [{name, source: "builtin"\|"user", prompt_hash, profile_hash}]}`. `contract*` and `profiles` were `null` and `[]` in step 2; since step 3 `contract` is `"v4"` and `profiles` lists the built-ins, then user profiles, each sorted by name | |
+| `engine.info` | `{}` | `{version, protocol, python, contract, contract_hash, training_hash, profiles: [{name, source: "builtin"\|"user", contract: "v4"\|"rlmh-1" (D-256), prompt_hash, profile_hash, agent_api, limits: {read, repo}, path}]}`. `contract*` and `profiles` were `null` and `[]` in step 2; since step 3 `contract` is `"v4"` and `profiles` lists the built-ins, then user profiles, each sorted by name. Since v1 step 2 each entry also has `agent_api` (bool) and `limits`, each mode's `contract.Limits.as_dict()`, which `rlmh eval`'s estimate caps its reference tokens with (D-198); added fields, so the protocol number stays | |
 | `run.start` | the run.start table below | `{run_id, log_path}`, returned once the worker is ready and before the first root call. `run_id` is `"r_"` plus 12 lowercase hex characters (D-38) | -32011, -32012 |
 | `run.cancel` | `{run_id}` | `{}`. The run finishes with `infra_error = "cancelled"` and `infra_kind = "cancelled"` | -32010 |
-| `run.vars` | `{run_id}` | `{vars: [{name, type, len: int\|null, chars: int}]}`: user-made globals only, with `chars = len(repr(v))` capped at 10⁶, measured only for exact built-in types without calling any of the model's code; anything else is `len: null, chars: 0` (D-140) | -32010 |
+| `run.vars` | `{run_id}` | `{vars: [{name, type, len: int\|null, chars: int}]}`: user-made globals only, with `chars = len(repr(v))` capped at 10⁶, measured only for exact built-in types without calling any of the model's code; anything else is `len: null, chars: 0` (D-140). It also answers while a conversation waits between prompts | -32010 |
+| `run.say` | `{run_id, text}` (protocol 2, v1 step 4) | `{prompt_index}`: the open conversation's next prompt starts, and the result is written before that prompt's first root `model.complete`, as `run.start`'s is (§5.4) | -32010 (no such open conversation), -32602 (`text` not a non-empty string), -32013 (a prompt is running) |
+| `run.close` | `{run_id}` (protocol 2, v1 step 4) | `{}`, after `run.closed` was sent (it waits up to 10 s) | -32010, -32013 (a prompt is running: use `run.cancel`) |
 | `debug.roundtrip` | `{count}` | `{texts: string[]}`. The engine sends `count` concurrent `model.complete` requests (`run_id: "debug"`, `role: "root"`, messages `[{role: "user", content: "ping <i>"}]`) and returns the answers in order. Registered only when `RLMH_DEBUG=1`; it exists for the link tests (step 2) | |
 
 **`run.start` params:**
@@ -196,12 +200,14 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 | `tag` | string | optional | echoed in `run.started`, `run.finished` and the run log; `rlmh batch` puts the task id here |
 | `batch` | string | optional, default `"interactive"` | the run-log folder name (§9) |
 | `log_dir` | string | optional | absolute folder for `runs.jsonl`; wins over `batch` |
+| `window` | `{context_window: int, max_output: int}` | optional (protocol 2, v1 step 3), default zeros | the root model's catalog numbers, 0 when unknown; exactly these two keys, each a whole number of at least 0, or -32602. Compaction plans from it (v1 architecture §4.1) |
+| `conversation` | bool | optional (protocol 2, v1 step 4), default `false` | `true` keeps the run open after each prompt for `run.say` (v1 architecture §5); only the interactive app sends it. Any other type is -32602 |
 
 ### 5.2 Engine → app
 
 | Method | Params | Result |
 |---|---|---|
-| `model.complete` | `{run_id, role: "root"\|"sub", model: ModelRef, messages: Message[], tools: ToolDef[], max_tokens, temperature, thinking: "off"\|"low"\|"medium"\|"high", turn}`, and for sub-calls also `{subcall_id: int, origin: Origin, batch: Batch}` | `{text, tool_call: ToolCall\|null, reasoning: string\|null, usage: Usage, finish_reason: "stop"\|"length"\|"tool_call"\|"content_filter"\|"other", served_model: string, seconds}`, or error -32001 |
+| `model.complete` | `{run_id, role: "root"\|"sub", model: ModelRef, messages: Message[], tools: ToolDef[], max_tokens, temperature, thinking: "off"\|"minimal"\|"low"\|"medium"\|"high"\|"xhigh"\|"max", turn}`, and for sub-calls also `{subcall_id: int, origin: Origin, batch: Batch}`; a compaction's summary call adds `purpose: "compact"` (protocol 2, v1 step 3) | `{text, tool_call: ToolCall\|null, reasoning: string\|null, usage: Usage, finish_reason: "stop"\|"length"\|"tool_call"\|"content_filter"\|"other", served_model: string, seconds}`, or error -32001 |
 | `approval.request` | `{run_id, kind: "write"\|"shell"\|"network", detail, turn, inside_workspace}` | `{allow: bool, remember_for_run: bool}` |
 
 - **`thinking` is resolved by the engine:** the ref's value, else the profile's `subcall_thinking` for sub-calls, else `"off"` (D-08).
@@ -210,18 +216,19 @@ These are JSON shapes. `protocol.ts` holds them as TypeScript types, and the eng
 
 ### 5.3 Events: engine → app notifications
 
-Every event carries `run_id`. Turns are numbered from 1. `tag` is `null` when `run.start` had none, and `run.subcall.seconds` is `null` at `sent` (D-55).
+Every event carries `run_id`. Turns are numbered from 1, in each prompt of a conversation (D-199). `tag` is `null` when `run.start` had none, and `run.subcall.seconds` is `null` at `sent` (D-55).
 
 | Method | Params besides `run_id` | Sent |
 |---|---|---|
-| `run.started` | `tag, mode, profile, prompt_hash, profile_hash, contract_hash, call_format, root, sub, permission_mode, workspace, input: {chars, lines, sha256, files}, limits: {max_turns, max_subcalls, root_max_tokens, output_max_chars, cell_timeout_s, subcall_max_chars, subcall_max_tokens}, log_path` | once, before the first root call. `input` is defined as training defined it: `chars = len(context)`, `lines = len(context.splitlines())`, `sha256` = hex of `sha256(context.encode("utf-8", "replace"))`. `files` is the list of input paths as given, with `/` separators, in read mode, and `[]` in repo mode |
+| `run.started` | `tag, mode, profile, prompt_hash, profile_hash, contract_hash, call_format, root, sub, permission_mode, workspace, input: {chars, lines, sha256, files}, limits: {max_turns, max_subcalls, root_max_tokens, output_max_chars, cell_timeout_s, subcall_max_chars, subcall_max_tokens}, log_path`, and since protocol 2 `window` (as sent), `compaction: {window, trigger, keep} \| null` (v1 architecture §3.3) and `conversation` (bool, v1 step 4) | once, before the first root call. `input` is defined as training defined it: `chars = len(context)`, `lines = len(context.splitlines())`, `sha256` = hex of `sha256(context.encode("utf-8", "replace"))`. `files` is the list of input paths as given, with `/` separators, in read mode, and `[]` in repo mode |
 | `run.reply` | `turn, text, tool_call, reasoning, finish_reason, usage, seconds` | after each root reply |
 | `run.cell` | `turn, code (null when the reply had none), output (stdout as the model sees it, truncation note included), error, observation (the next message's text, or null after a submit or the last turn), seconds (compute), restarted, crash, repo_changed` | after each cell, or after the no-code error |
 | `run.subcall` | `subcall_id, origin, batch, prompt_chars, status: "sent"\|"done"\|"error"\|"rejected", error, seconds` | sent by the bridge at `sent` and again at the end. A budget or oversize refusal is one `rejected` event, with `subcall_id: null` and `prompt_chars` set to the longest prompt |
 | `run.permission` | `turn, kind, detail, allowed, asked, remembered` | sent by `Permissions` for each decision on a guarded action, except writes inside the scratch folder; at most 200 per run |
 | `run.budget` | `turns_left, subcalls_left` | sent by the loop after each turn and by the bridge after each batch |
-| `run.finished` | `tag, answer, submitted, answer_valid, turns, subcalls, usage: {root: Usage, sub: Usage}, cost_usd, infra_error, infra_kind, wall_s, log_path` | once, after the run-log line is written; when that write fails it is still sent, with `infra_kind` `runlog` (D-137) |
-| `model.cancel` | (only `run_id`) | at the end of every run, before `run.finished` (D-84); the gateway aborts any calls still in flight |
+| `run.finished` | `tag, answer, submitted, answer_valid, turns, subcalls, usage: {root: Usage, sub: Usage}, cost_usd, infra_error, infra_kind, wall_s, log_path`, and since protocol 2 `prompt_index` and `open` (v1 step 4) | once per prompt, after that prompt's run-log line is written; when that write fails it is still sent, with `infra_kind` `runlog` (D-137). `turns`, `subcalls`, `usage` and `cost_usd` cover the prompt. `open: true` means a conversation waits for `run.say`; a one-shot run sends `prompt_index: 0, open: false` |
+| `run.closed` | `prompts` (protocol 2, v1 step 4) | once, when a conversation ends (`run.close`, `run.cancel`, an infra error, stdin closing), after its last `run.finished` if a prompt was running. Never for a run started with `conversation: false` |
+| `model.cancel` | (only `run_id`) | at the end of every run, before its last `run.finished` (D-84) and `run.closed`; the gateway aborts any calls still in flight. Not sent between a conversation's prompts (D-203) |
 
 ### 5.4 One run, in order
 
@@ -453,7 +460,8 @@ export const KEY_HOOKS: { restrict(file: string): Promise<void> };   // makes th
 // app/src/gateway/catalog.ts
 export interface ModelInfo { provider: string; id: string; name: string; context_window: number; max_output: number;
   price: { input: number; output: number; cache_read: number; cache_write: number };  // USD per 1M tokens
-  tool_call: boolean; reasoning: boolean; cache_min_tokens: number | null }
+  tool_call: boolean; reasoning: boolean; cache_min_tokens: number | null;
+  thinking_levels?: ("minimal" | "low" | "medium" | "high" | "xhigh" | "max")[] }  // OpenRouter's own list, kept by a refresh (D-250)
 export class Catalog { constructor(home: string); models(provider?: string): ModelInfo[]; get(provider: string, id: string): ModelInfo | undefined; merge(provider: string, fetched: ModelInfo[]): void }
 // app/src/gateway/providers.ts
 export interface ProviderDef { id: string; name: string; client: "openai" | "anthropic" | "fake"; baseUrl: string | null; envVar: string | null;
@@ -536,10 +544,11 @@ def assistant_message(fmt: str, result: dict) -> dict              # Message; co
                                                                    # gateway's D-33 replay is keyed on it); never reasoning
 def observation_message(assistant: dict, text: str) -> dict        # tool message if assistant has tool_call, else user
 # engine/rlm_engine/profiles.py
-@dataclass(frozen=True) class ModeSettings: limits: contract.Limits; pace_nudge: bool
+@dataclass(frozen=True) class ModeSettings: limits: contract.Limits; pace_nudge: bool; submit_check: float = 0.0  # D-251
 @dataclass(frozen=True) class Profile:
     name: str; source: str; path: Path; guidance: str; root_temperature: float; sub_temperature: float
     read: ModeSettings; repo: ModeSettings
+    compaction: CompactionSettings | None   # v1 step 3: the [compaction] table {window, keep_ratio, reserve, summary_max_tokens}; None in training-v4
     def system_prompt(self, shell_name: str = "sh") -> str   # v4 + ("\n\n" + guidance) if guidance; {shell} filled in
     def prompt_hash(self) -> str      # the training method over this profile's texts and limits, {shell} left unfilled
     def profile_hash(self) -> str     # sha256(toml bytes + b"\x00" + guidance bytes), CRLF normalised to LF first
@@ -550,7 +559,7 @@ def list_profiles(home: Path) -> list[Profile]
 def load_profile(name: str, home: Path) -> Profile   # built-ins win over <home>/profiles of the same name
 ```
 
-- **profile.toml keys.** It takes the keys in [../legacy/v0-design.md § Profiles](../legacy/v0-design.md#profiles), plus optional `subcall_thinking` in either mode table and `pace_nudge` in `[repo]`. Each mode table starts from `READ_LIMITS_V4` or `EDIT_LIMITS_V4` and replaces only the keys it lists, so the hash still covers `cpus`, `memory_mb`, `pids` and `grader_timeout_s` (D-09). An unknown key is an error.
+- **profile.toml keys.** It takes the keys in [../legacy/v0-design.md § Profiles](../legacy/v0-design.md#profiles), plus optional `subcall_thinking` in either mode table, `pace_nudge` in `[repo]` and `submit_check` in `[read]` (a share from 0, off, to 1; D-251). Each mode table starts from `READ_LIMITS_V4` or `EDIT_LIMITS_V4` and replaces only the keys it lists, so the hash still covers `cpus`, `memory_mb`, `pids` and `grader_timeout_s` (D-09). An unknown key is an error.
 - **training-v4.** `[repo]` has `subcall_thinking = "low"` and `pace_nudge = true`.
 - **`prompt_hash()`** for `training-v4` equals `TRAINING_HASH`. It leaves `{shell}` unfilled, so it is the same on every machine. `profile_hash()` covers the LF-normalised `profile.toml`, a NUL byte and the guidance file.
 - **`engine.info`.** `service.contract_info(home)` gives its four contract fields and `Engine.info()` merges them in. A user profile that fails to load is left out with a warning on stderr (D-61).
@@ -620,11 +629,25 @@ Built at step 4 (2026-10-31). What step 6 can rely on, beyond the signatures:
 class RunSpec: run_id: str; mode: str; profile: Profile; root: dict; sub: dict; permission_mode: str; call_format: str
                interactive: bool; question: str | None; inputs: list[Path]; task: str | None; repo_path: Path | None
                test_hint: str | None; language: str | None; n_files: int | None; context: str | None
-               tag: str | None; batch: str; log_path: Path
-async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker) -> dict
-    # emits every §5.3 event, appends one run-log record and returns it; never raises except CancelledError
+               tag: str | None; batch: str; log_path: Path; input_spans: list[dict] | None = None
+               window: dict = {context_window: 0, max_output: 0}   # v1 step 3: run.start's window
+               conversation: bool = False                         # v1 step 4: run.start's conversation
+class Inbox:                                   # v1 step 4: a conversation's questions; service.py makes one per conversation
+    prompt_index: int = 0; waiting: bool = False   # waiting: between prompts, so run.say may put
+    def put(self, text: str) -> int           # waiting = False, prompt_index += 1, returns it
+    def close(self) -> None                   # puts None: the conversation ends
+    async def next(self) -> str | None
+async def run(spec: RunSpec, app: AppPort, *, home: Path, worker_factory=Worker, inbox: Inbox | None = None) -> dict
+    # emits every §5.3 event, appends one run-log record per prompt and returns the last; never raises except CancelledError
+# engine/rlm_engine/followup.py (v1 step 4): SUBMITTED_NOTE, UNANSWERED_NOTE, FOLLOW_UP, WHERE, KEPT_FOLLOW_UP (pinned texts)
+def kept_message(text: str) -> dict   # D-248: a follow-up's question again, after a compaction dropped it
+def follow_up_messages(last: dict, *, submitted: bool, text: str, mode: str, turns_left: int, subcalls_left: int) -> list[dict]
+# engine/rlm_engine/submitcheck.py (D-251): MIN_CONTEXT_CHARS = 20_000, HELD (the pinned note)
+def should_hold(threshold: float, *, total: int, seen: int, sent: int, turns_left: int, subcalls_left: int, segment_chars: int) -> bool
+def share(*, total: int, seen: int, sent: int) -> float   # (printed + sent to sub-calls) / len(context), at most 1
+def note(*, total: int, seen: int, sent: int, segment_chars: int) -> str
 # engine/rlm_engine/runlog.py
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2                             # v1 step 3 (v1 architecture §3.4); /runs reads 1 and 2
 RECORD_KEYS: tuple[str, ...]                  # the top-level keys of the record below, in order
 def log_path(home: Path, batch: str, log_dir: Path | None) -> Path
 class RunLog:
@@ -646,14 +669,21 @@ subcalls: [{subcall_id, origin, batch, prompt, output, error, seconds, usage}],
 children: [{child_id, subcall_id, parent_child, depth, task, tools, max_turns, turns, submitted, answer, error, usage, seconds}],   # rlm() runs (D-160); [] without agent_api
 fetches: [{url, status, chars, error, seconds}], permissions: [Permissions.log entries],
 submitted, answer, answer_valid, usage: {root, sub}, cost_usd, cache: {read_tokens, write_tokens, hit_rate},
-timeouts, crashes, restarts, diff, infra_error, infra_kind, host_traceback
+timeouts, crashes, restarts, diff, infra_error, infra_kind, host_traceback,
+window: {context_window, max_output},       # format 2 (v1 step 3): run.start's window
+compactions: [run.compacted bodies without run_id], prompt_index, conversation   # step 4: one record per prompt
 ```
+
+Since v1 step 4 a conversation writes one record per prompt, with the same `run_id`; `question | task` is that
+prompt's text, `messages` is the whole list as the prompt left it, `diff` accumulates against `base_tree`, and
+`turns`, `subcalls`, `children`, `fetches`, `permissions`, `compactions`, `usage`, `cost_usd`, `cache`, `timeouts`,
+`crashes` and `restarts` cover the prompt (v1 architecture §3.4, D-199, D-246).
 
 ```ts
 // app/src/session.ts
 export interface StartRun { mode: "read" | "repo"; question?: string; inputs?: string[]; task?: string; repoPath?: string;
   testHint?: string; profile?: string; root?: ModelRef; sub?: ModelRef; permissionMode?: string; callFormat?: string;
-  interactive: boolean; tag?: string; batch?: string; logDir?: string }
+  interactive: boolean; tag?: string; batch?: string; logDir?: string; conversation?: boolean }   // conversation: v1 step 4, default false
 export class Session {
   static open(opts: { home: string; verbose?: boolean; approvals: (p: ApprovalParams) => Promise<ApprovalResult> }): Promise<Session>;
   readonly bus: Bus<AppEvents>; readonly gateway: Gateway;
@@ -663,6 +693,8 @@ export class Session {
   start(r: StartRun): Promise<{ run_id: string; log_path: string }>;   // fills defaults from settings, resolves call_format
   cancel(runId: string): Promise<void>;
   vars(runId: string): Promise<VarInfo[]>;
+  say(runId: string, text: string): Promise<RunSayResult>;           // v1 step 4: RPC errors pass through
+  closeRun(runId: string): Promise<void>;                             // v1 step 4: -32010 (already closed) resolves
   close(): Promise<void>;
 }
 ```
@@ -670,9 +702,9 @@ export class Session {
 Built at step 6 (2026-10-31). What steps 7, 8 and 9 can rely on, beyond the signatures:
 
 - **Order on the wire (§5.4).** The `run.start` result comes first, then `run.started`, then the first root `model.complete`. A gate in `service.py` holds the run's notifications and delays its model calls and approvals until the handler has returned, which works because `Link` writes the result in the same step (no post-reply hook was needed). A run whose worker never starts sends its result, then `model.cancel`, then `run.finished` (D-84).
-- **`run.cancel`** returns `{}` only after `run.finished` was sent (it waits up to 10 s). Closing the engine's stdin cancels every run and waits for each record.
+- **`run.cancel`** returns `{}` only after `run.finished` was sent (it waits up to 10 s); for a conversation waiting between prompts, only `run.closed` is sent. Closing the engine's stdin cancels every run, open conversations included, and waits for each record.
 - **`infra_kind`** is a ModelErrorData `kind` (root call or sub-call), `worker`, `internal` (a request handler failed), `workspace` (a git failure in snapshot or diff, D-85), `runlog` (the run-log line could not be written, D-137), `cancelled` or `host_bug`. `infra_error` is `"<kind>: <message>"`, the kind written once.
-- **The record.** `RECORD_KEYS` has `question` in the `question | task` slot: a repo-mode record has `task` there instead. A turn whose cell raised has its reply and `null` cell fields, and no `run.cell` was sent for it (D-86). `subcalls` are sorted by `subcall_id`; `run.finished.subcalls` is `bridge.subcalls_used`. `run.finished.answer` is the submitted JSON value, not always a string (D-89).
+- **The record.** `RECORD_KEYS` has `question` in the `question | task` slot: a repo-mode record has `task` there instead. A turn whose cell raised has its reply and `null` cell fields, and no `run.cell` was sent for it (D-86). `subcalls` are sorted by `subcall_id`; `run.finished.subcalls` is `bridge.prompt_used()`, the prompt's sub-call ids (`bridge.subcalls_used` for a one-shot run, D-246). `run.finished.answer` is the submitted JSON value, not always a string (D-89).
 - **`inputs.prepare`** runs once in `run.start` (in a thread) and again, as a no-op, in `loop.run`; a parity script that sends all four repo overrides makes no git call for them.
 - **`Session`** also exports `EngineStartError` (an engine that exits or doesn't answer `engine.info`, with its stderr tail). `open` throws `SettingsError`, `EngineNotFound`, `ProtocolMismatch` (the engine is killed) or `EngineStartError`. `start` throws `UsageError` before sending anything, or the engine's `RpcError`. `close` ends the engine's stdin and kills its tree after 2 s (D-93).
 - **`cli/run.ts`** also exports what `batch.ts` shares and step 7 may reuse: `RunWatcher` (keeps every `run.finished` by `run_id` from the moment it is made, and resolves `null` when the engine exits first), `onInterrupt`, `modelFlags`, `openFailed`. `createTtyApprover` returns an `Approver`: the approval function plus `interrupt()` (Ctrl-C denies the prompt on screen) and `close()`.
@@ -753,7 +785,7 @@ export async function ensureEngine(o: Omit<SetupOptions, "yes">): Promise<void>;
 | Key | Type | Default | |
 |---|---|---|---|
 | `root.model` | string `provider/model` | `""` | `""` means none picked yet; `run` then needs `--root` |
-| `root.thinking` | `default\|off\|low\|medium\|high` | `default` | `default` sends `thinking: null` |
+| `root.thinking` | `default\|off\|minimal\|low\|medium\|high\|xhigh\|max` | `default` | `default` sends `thinking: null`; the gateway sends the nearest level the model takes, and `/model` offers only those (D-250) |
 | `sub.model`, `sub.thinking` | as above | `""`, `default` | an empty `sub.model` uses `root.model` |
 | `profile` | string | `default` | |
 | `permissions.mode` | `default\|accept-edits\|bypass` | `accept-edits` (4b, S-27) | |
@@ -761,6 +793,7 @@ export async function ensureEngine(o: Omit<SetupOptions, "yes">): Promise<void>;
 | `providers.<id>.base_url` | string | the provider's own; `local`: `http://localhost:8000/v1` | for `local` and `custom` |
 | `providers.<id>.max_in_flight` | int | 16 | |
 | `display.verbose` | bool | false | shows engine stderr |
+| `conversation.follow_ups` | bool | true | v1 step 4 (D-178): a question in the interactive app continues the open conversation (same REPL and workspace); `false` gives a fresh run for every question. The v1 keys follow v0's in `SCHEMA` (v1 architecture §8) |
 
 ## 9. Folders at run time (`paths.ts`, decision 2b)
 

@@ -1,7 +1,7 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
 // /context: the last root request as a 40-cell bar over the window (system, first message, turns,
 // tool def, output reserve, free), each with ~tokens (chars ÷ 4) and the provider's figure from
-// the last reply; then the REPL's variables from run.vars, refreshed with r.
+// the last reply; then the REPL's variables from run.vars (while a run or a conversation is open), refreshed with r.
 
 import { useInput } from "ink";
 import { useEffect, useState } from "react";
@@ -19,7 +19,8 @@ export function ContextScreen(props: ScreenProps) {
   const theme = useTheme();
   const { deps, view } = props;
   const runId = view.runId;
-  const active = isActive(view.phase) && runId !== null;
+  // the REPL lives while a run is active, and between the prompts of an open conversation (v1 step 4)
+  const active = (isActive(view.phase) || view.conversation?.open === true) && runId !== null;
   const [vars, setVars] = useState<{ list: VarInfo[] } | { error: string } | null>(null);
   const [seq, setSeq] = useState(0);
   useEffect(() => {
@@ -72,7 +73,7 @@ export function ContextScreen(props: ScreenProps) {
     body.push([span(fit(`estimate ~${formatTokens(Math.round(estimate))} tokens; the provider reported ${reported === null ? "nothing yet" : `${formatTokens(reported)} (input + output of the last reply)`}`, w, theme), { dim: true })]);
   }
   body.push([], [span("Variables", { bold: true })]);
-  if (!active) body.push([span("Variables exist only while a run is active.", { dim: true })]);
+  if (!active) body.push([span("Variables exist only while a run or a conversation is open.", { dim: true })]);
   else if (vars === null) body.push([span("Reading...", { dim: true })]);
   else if ("error" in vars) body.push([span(fit(vars.error, w, theme), { color: paint(theme, "red") })]);
   else if (vars.list.length === 0) body.push([span("No variables yet.", { dim: true })]);

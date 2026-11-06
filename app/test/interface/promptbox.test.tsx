@@ -435,11 +435,12 @@ describe("listFiles", () => {
     expect(listFiles(join(cwd, "nope"))).toEqual([]);
   });
 
+  // writing 20,050 files took from 6 s to 26 s on CI's Windows runners, so it gets a minute
   test("a folder with more files than the cap stops at the cap", () => {
     const big = folder("big");
     for (let i = 0; i < 20_050; i++) writeFileSync(join(big, `f${i}`), "");
     expect(listFiles(cwd).length).toBeLessThanOrEqual(20_000);
-  });
+  }, 60_000);
 });
 
 describe("grapheme cursor helpers", () => {

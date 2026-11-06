@@ -1,7 +1,8 @@
 """The REPL worker, one process per run: rlm_rl/repl_worker.py at RLM commit 0b9af69, run natively.
 
 KV cache: what a cell prints, its traceback and the sub-call errors become the model's next observation; that text
-is frozen to training's (_Capped, _format_error, _truncate, submit), so the same cell gives the same bytes.
+is frozen to training's (_Capped, _format_error, _truncate, submit), so the same cell gives the same bytes. Under
+agent_api, a profile's scripts are imported from `scripts_dir` and never enter the prompt (v1 step 6, D-233).
 
 Launched as `python -I -B -X utf8 <dir>/rlm_engine/worker/worker.py` (D-01, D-42). Standard library only, and it
 imports only its sibling files `hooks`, `tools`, `cacheapi` (D-119), `agentapi` and `codeapi` (D-157 to D-162), by
@@ -180,17 +181,21 @@ def _remote_fetch(url: str) -> str:
 
 
 _sub_thinking = threading.local()  # agentapi's thinking= for the sub-calls this thread sends (D-164)
+_sub_agent = threading.local()  # agentapi's agent= for the sub-call this thread sends (D-234, gated)
 
 
 def _bridge(op: str, prompts: list, prefixes: list | None = None) -> list:
-    """One sub-call request to the engine, which enforces the budget. `prefixes` (cacheapi, D-119) and `thinking`
-    (agentapi, D-164) ride along only when set, so training's requests are unchanged."""
+    """One sub-call request to the engine, which enforces the budget. `prefixes` (cacheapi, D-119), `thinking`
+    (agentapi, D-164) and `agent` (agentapi, D-234) ride along only when set, so training's requests are unchanged."""
     fields = {"prompts": prompts}
     if prefixes is not None and any(p is not None for p in prefixes):
         fields["prefixes"] = prefixes
     thinking = getattr(_sub_thinking, "value", None)
     if thinking is not None:
         fields["thinking"] = thinking
+    agent = getattr(_sub_agent, "value", None)
+    if agent is not None:
+        fields["agent"] = agent
     return _request(op, **fields)["outputs"]
 
 
@@ -570,13 +575,16 @@ def _start(message: dict) -> dict:
         names = message.get("tool_names")  # a read-only rlm() child gets only the reading tools (D-160)
         namespace.update({k: v for k, v in tools.namespace().items() if names is None or k in names})
     if message.get("agent_api"):  # the default profile's delegation helpers (D-157 to D-162); never under training-v4
+        if message.get("scripts_dir"):  # the run's copy of the profile's scripts/, importable in a cell (D-233)
+            sys.path.append(message["scripts_dir"])
         namespace.update(agentapi.namespace(
             namespace, request=_request, limits=_SUBCALLS, async_line=_async_line, repl_line=_repl_line,
             cell_id=lambda: _cell["id"], repo=repo,
-            tools=tools, sub_thinking=_sub_thinking, input_files=message.get("input_files") or []))
+            tools=tools, sub_thinking=_sub_thinking, input_files=message.get("input_files") or [],
+            skills=message.get("skills"), agents=message.get("agents"), sub_agent=_sub_agent))
         namespace.update(codeapi.namespace(llm_batch=namespace["llm_batch"], tools=tools, task=message.get("task"),
                                            test_hint=message.get("test_hint"), repo=repo))
-        _hidden.update(agentapi.NAMES + codeapi.NAMES)
+        _hidden.update(agentapi.NAMES + codeapi.NAMES + (("skill",) if message.get("skills") else ()))
     hooks.install(approve=_approve, workspace=workspace, scratch=scratch, tools=tools)
     _namespace.update(namespace)
     return _namespace

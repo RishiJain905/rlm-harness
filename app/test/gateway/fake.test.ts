@@ -255,7 +255,7 @@ describe("errors[]", () => {
   });
 
   test("every kind comes through unchanged, raised at once with no retries", async () => {
-    const kinds: ModelErrorKind[] = ["auth", "no_key", "bad_request", "rate_limit", "server", "timeout", "network", "context_window", "unknown_model", "cancelled", "other"];
+    const kinds: ModelErrorKind[] = ["auth", "no_key", "bad_request", "rate_limit", "no_credit", "server", "timeout", "network", "context_window", "unknown_model", "cancelled", "other"];
     const sleeps = recordSleeps();
     try {
       for (const kind of kinds) {
@@ -562,5 +562,51 @@ describe("results, usage and the gateway around the fake", () => {
     expect(one.secondFirstDelta).toBeGreaterThan(one.firstLastDelta); // the second call waited for the first to finish
     const many = await order(16);
     expect(many.secondFirstDelta).toBeLessThan(many.firstLastDelta); // both ran at once
+  });
+});
+
+describe("compact (v1 step 3)", () => {
+  const compact = (run = RUN_A) => params(FAKE, { run_id: run, purpose: "compact", messages: [{ role: "user", content: "Write the summary." }] });
+
+  test("summary calls take the compact list in order, never a root entry, and leave the root and error counts alone", async () => {
+    const r = await fakeRig({
+      root: [{ tool_call: { code: "a" } }, { tool_call: { code: "b" } }],
+      compact: [{ text: "first summary" }, { text: "second summary" }],
+      errors: [{ role: "root", at: 2, kind: "server", status: 500 }],
+    });
+    expect((await r.gateway.complete(root())).tool_call?.id).toBe("call_1");
+    expect((await r.gateway.complete(compact())).text).toBe("first summary");
+    // root call 2 is still the second root call: the summary call didn't count
+    expect((await caught(r.gateway.complete(root()))).data.kind).toBe("server");
+    expect((await r.gateway.complete(compact())).text).toBe("second summary");
+    expect((await r.gateway.complete(root())).tool_call).toEqual({ id: "call_2", name: "python", arguments: { code: "b" } });
+  });
+
+  test("past the end, or with no list, the answer is `summary` with ceil(chars / 4) tokens; a child's takes the list too", async () => {
+    const r = await fakeRig({ root: [{ text: "x" }], compact: [{ text: "only" }] });
+    const child = { id: 1, turn: 4, max_turns: 30, depth: 1 };
+    expect((await r.gateway.complete({ ...compact(), role: "sub", child, subcall_id: 3 })).text).toBe("only"); // no `children` entry taken
+    const past = await r.gateway.complete(compact());
+    expect(past.text).toBe("summary");
+    expect(past.tool_call).toBeNull();
+    expect(past.finish_reason).toBe("stop");
+    expect(past.usage.input_tokens).toBe(Math.ceil(("Write the summary.".length + 2) / 4));
+    expect(past.usage.output_tokens).toBe(Math.ceil("summary".length / 4));
+    expect((await r.gateway.complete(root())).text).toBe("x"); // the root entry is still there
+    const none = await fakeRig({ root: [{ text: "x" }] });
+    expect((await none.gateway.complete(compact())).text).toBe("summary");
+    expect((await none.gateway.complete(compact(RUN_B))).text).toBe("summary");
+  });
+
+  test("an entry `{error: kind}` fails that call with the kind, and still uses up the entry", async () => {
+    const r = await fakeRig({ compact: [{ error: "context_window" }, { error: "server" }, { text: "third" }] });
+    const one = await caught(r.gateway.complete(compact()));
+    expect(one).toBeInstanceOf(ModelError);
+    expect(one.data).toMatchObject({ kind: "context_window", provider: "fake", model: "scripted", status: null });
+    expect((await caught(r.gateway.complete(compact()))).data.kind).toBe("server");
+    expect((await r.gateway.complete(compact())).text).toBe("third");
+    expect((await r.gateway.complete(compact())).text).toBe("summary");
+    // each run starts at the top of the list
+    expect((await caught(r.gateway.complete(compact(RUN_B)))).data.kind).toBe("context_window");
   });
 });

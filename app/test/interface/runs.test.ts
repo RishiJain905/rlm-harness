@@ -1,12 +1,17 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
 // runs.ts against temp run folders: the summaries, the byte ranges (the records hold non-ASCII text,
-// so offsets are bytes), the torn last line, unknown formats, the newest-200 cut and `readRun`.
+// so offsets are bytes), the torn last line, unknown formats, the newest-200 cut and `readRun`; and a
+// conversation's records (v1 step 4) in /runs.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RUN_LOG_FORMAT, listRuns, readRun, type RunSummary } from "../../src/interface/runs.ts";
+import { runRow } from "../../src/interface/commands/runs.tsx";
+import { READABLE_FORMATS, RUN_LOG_FORMAT, listRuns, readRun, upgradeRecord, type RunSummary } from "../../src/interface/runs.ts";
+import { viewFromRecord } from "../../src/interface/store.ts";
+import { createFakeApp } from "../fakes/engine.ts";
+import { KEYS, mount, type Mounted } from "./helpers.ts";
 
 let runsDir: string;
 
@@ -23,7 +28,7 @@ type Rec = Record<string, unknown>;
 /** A minimal run-log record with the fields the summary reads (architecture §7.8). */
 function rec(over: Rec = {}): Rec {
   return {
-    format: 1,
+    format: RUN_LOG_FORMAT,
     run_id: "r_000000000001",
     tag: null,
     batch: "interactive",
@@ -82,7 +87,7 @@ describe("listRuns", () => {
       file: interactive,
       runId: "r2",
       batch: "interactive",
-      format: 1,
+      format: RUN_LOG_FORMAT,
       startedAt: 300,
       mode: "read",
       root: "deepseek/deepseek-chat",
@@ -144,6 +149,19 @@ describe("listRuns", () => {
   test("an empty log file gives nothing", async () => {
     log("interactive", []);
     expect(await listRuns(runsDir)).toEqual([]);
+  });
+
+  test("format 1 and format 2 are both readable; a format 1 record gets format 2's four keys (v1 step 3)", async () => {
+    expect(READABLE_FORMATS).toEqual([1, 2]);
+    expect(RUN_LOG_FORMAT).toBe(2);
+    const v2 = { window: { context_window: 1_000_000, max_output: 0 }, compactions: [{ turn: 3 }], prompt_index: 0, conversation: false };
+    log("interactive", [rec({ run_id: "one", format: 1, started_at: 5 }), rec({ run_id: "two", format: 2, started_at: 6, ...v2 })]);
+    const runs = await listRuns(runsDir);
+    expect(runs.map((r) => [r.runId, r.format])).toEqual([["two", 2], ["one", 1]]);
+    expect(await readRun(runs[1]!)).toEqual({ ...JSON.parse(line(rec({ run_id: "one", format: 1, started_at: 5 }))), window: null, compactions: [], prompt_index: 0, conversation: false });
+    expect(await readRun(runs[0]!)).toEqual(JSON.parse(line(rec({ run_id: "two", format: 2, started_at: 6, ...v2 }))));
+    // only format 1 is filled in; another number comes back as written
+    expect(upgradeRecord({ format: 99, run_id: "x" })).toEqual({ format: 99, run_id: "x" });
   });
 
   test("a record with another format version is listed with that version", async () => {
@@ -284,5 +302,67 @@ describe("readRun", () => {
     const got = (await readRun(runs[1] as RunSummary)) as Rec;
     expect(got.run_id).toBe("a");
     expect(got.question).toBe("é".repeat(100));
+  });
+});
+
+describe("a conversation's records (v1 step 4)", () => {
+  /** Prompt 0 and follow-up 1 of one conversation: the same run_id, each with its own question and turns. */
+  function conversation(): { first: Rec; second: Rec } {
+    const first = rec({ run_id: "r_conv", started_at: 10, question: "What is in a.txt?", prompt_index: 0, conversation: true, turns: [{ turn: 1, reply: "first reply", code: "submit('hello')", stdout: "", error: null }] });
+    const second = rec({
+      run_id: "r_conv",
+      started_at: 20,
+      question: "And how long is it?",
+      prompt_index: 1,
+      conversation: true,
+      answer: "6",
+      turns: [{ turn: 1, reply: "second reply", code: "submit(len(context))", stdout: "", error: null }],
+    });
+    return { first, second };
+  }
+
+  test("/runs lists both records, the second with follow-up 1: before its question", async () => {
+    const { first, second } = conversation();
+    log("interactive", [first, second]);
+    const runs = await listRuns(runsDir);
+    expect(runs.map((r) => [r.runId, r.promptIndex])).toEqual([["r_conv", 1], ["r_conv", 0]]);
+    expect(runRow(runs[0]!, "…")).toContain("  follow-up 1: And how long is it?");
+    expect(runRow(runs[1]!, "…")).toContain("  What is in a.txt?");
+    expect(runRow(runs[1]!, "…")).not.toContain("follow-up");
+  });
+
+  test("on the /runs screen", { timeout: 20_000 }, async () => {
+    const app = await createFakeApp({ scenario: "simpleRead" });
+    let m: Mounted | undefined;
+    try {
+      const { first, second } = conversation();
+      const dir = join(app.deps.home, "runs", "interactive");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "runs.jsonl"), `${line(first)}\n${line(second)}\n`);
+      m = mount(app.deps);
+      await m.waitForText("idle");
+      await m.type("/runs");
+      await m.press(KEYS.enter);
+      const s = await m.waitForText("follow-up 1: And how long"); // the 40-column question cell cuts the rest
+      expect(s).toContain("What is in a.txt?");
+      // Enter replays the follow-up's own prompt: its question and its turns only
+      await m.press(KEYS.enter);
+      const replay = await m.waitForText("(read-only)");
+      expect(replay).toContain("And how long is it?");
+      expect(replay).toContain("(follow-up 1)");
+      expect(replay).toContain("second reply");
+      expect(replay).not.toContain("first reply");
+    } finally {
+      m?.unmount();
+      await app.dispose();
+    }
+  });
+
+  test("viewFromRecord shows the record's prompt only", () => {
+    const { second } = conversation();
+    const view = viewFromRecord(second);
+    expect(view.prompt).toBe(1);
+    expect(view.entries[0]).toEqual({ kind: "question", text: "And how long is it?", detail: "follow-up 1" });
+    expect(view.entries.filter((e) => e.kind === "reply").map((e) => (e.kind === "reply" ? e.text : ""))).toEqual(["second reply"]);
   });
 });

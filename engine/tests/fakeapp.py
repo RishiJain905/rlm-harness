@@ -42,7 +42,9 @@ class FakeApp(AppPort):
     without `match`, and `errors` entries as ModelError. Tokens are ceil(chars / 4) at zero cost,
     unless an entry carries its own `usage`. `delay_ms` waits that long before each answer. An rlm()
     child's turn (params with `child`, D-160) is served `children[<child id>]`, else `children["*"]`,
-    at the child's turn number, and leaves the root and sub counters alone.
+    at the child's turn number, and leaves the root and sub counters alone. A compaction's summary call
+    (`purpose: "compact"`, v1 step 3) takes the next `compact` entry, else `{"text": "summary"}`, and never
+    touches the root, sub or child entries.
     `requests` holds a deep copy of every `complete` params, in order.
     """
 
@@ -102,7 +104,18 @@ class FakeApp(AppPort):
     async def _scripted(self, params: dict) -> dict:
         script = self.script or {}
         role = params["role"]
-        state = self._runs.setdefault(params["run_id"], {"served": 0, "root": 0, "sub": 0})
+        state = self._runs.setdefault(params["run_id"], {"served": 0, "root": 0, "sub": 0, "compact": 0})
+        if params.get("purpose") == "compact":  # a compaction's summary call (v1 step 3)
+            if script.get("delay_ms"):
+                await asyncio.sleep(script["delay_ms"] / 1000)
+            entries = script.get("compact") or []
+            state["compact"] += 1
+            entry = entries[state["compact"] - 1] if state["compact"] <= len(entries) else {"text": "summary"}
+            if entry.get("error"):
+                kind = entry["error"]
+                raise ModelError(f"fake script error: {kind} at compact call {state['compact']}", kind=kind,
+                                 provider=params["model"].get("provider", ""), model=params["model"].get("model", ""))
+            return self._reply(params, entry, None)
         child = params.get("child")
         if child is not None:  # an rlm() child's turn (D-160): `children[id]` or `children["*"]`, by the child's turn
             if script.get("delay_ms"):

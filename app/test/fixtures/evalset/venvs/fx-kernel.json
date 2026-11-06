@@ -1,0 +1,1 @@
+{"python": "3.12", "requirements": ["numpy==2.5.4", "pytest==9.1.1", "nvidia-cuda-nvrtc-cu12==12.9.86; sys_platform != \"darwin\""], "import_root": "."}

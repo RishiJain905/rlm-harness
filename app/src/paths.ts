@@ -48,3 +48,18 @@ export function engineDir(version: string, h = home()): string {
 export function binDir(h = home()): string {
   return join(h, "bin");
 }
+
+/** `rlmh eval`'s folder (v1 architecture §9): ledger.jsonl, out/, work/, venvs/, the pnpm store and Playwright's browsers. */
+export function evalDir(h = home()): string {
+  return join(h, "eval");
+}
+
+/** `rlmh tune`'s default output root (v1 architecture §9, step 6). */
+export function tuneDir(h = home()): string {
+  return join(h, "tune");
+}
+
+/** `/tune`'s experience library (v1 architecture §7.7, §9, step 9): one folder per domain. */
+export function libraryDir(h = home()): string {
+  return join(h, "library");
+}

@@ -29,6 +29,7 @@ const ERROR_CODES: Record<string, number> = {
   UNKNOWN_RUN: -32010,
   UNKNOWN_PROFILE: -32011,
   BAD_INPUT: -32012,
+  RUN_BUSY: -32013,
   CANCELLED: -32800,
 };
 
@@ -37,8 +38,15 @@ const REQUIRED = [
   "engine.info:result",
   "run.cancel:request",
   "run.cancel:result",
+  "run.say:request",
+  "run.say:result",
+  "run.say:error:RUN_BUSY",
+  "run.close:request",
+  "run.close:result",
   "run.vars:request",
   "run.vars:result",
+  "profile.check:request",
+  "profile.check:result",
   "debug.roundtrip:request",
   "debug.roundtrip:result",
   "run.start:request:read",
@@ -48,6 +56,7 @@ const REQUIRED = [
   "model.complete:request:sub",
   "model.complete:request:sub-prefix",
   "model.complete:request:child",
+  "model.complete:request:compact",
   "model.complete:result",
   "approval.request:request",
   "approval.request:result",
@@ -62,6 +71,7 @@ const REQUIRED = [
   "rpc:error:INTERNAL_ERROR",
   "rpc:error:CANCELLED",
   "run.started:notification",
+  "run.compacted:notification",
   "run.reply:notification",
   "run.cell:notification",
   "run.subcall:notification",
@@ -69,6 +79,7 @@ const REQUIRED = [
   "run.permission:notification",
   "run.budget:notification",
   "run.finished:notification",
+  "run.closed:notification",
   "model.cancel:notification",
 ];
 
@@ -77,11 +88,15 @@ const METHODS: Record<string, string> = {
   "engine.info": "app->engine",
   "run.start": "app->engine",
   "run.cancel": "app->engine",
+  "run.say": "app->engine",
+  "run.close": "app->engine",
   "run.vars": "app->engine",
+  "profile.check": "app->engine",
   "debug.roundtrip": "app->engine",
   "model.complete": "engine->app",
   "approval.request": "engine->app",
   "run.started": "engine->app",
+  "run.compacted": "engine->app",
   "run.reply": "engine->app",
   "run.cell": "engine->app",
   "run.subcall": "engine->app",
@@ -89,6 +104,7 @@ const METHODS: Record<string, string> = {
   "run.permission": "engine->app",
   "run.budget": "engine->app",
   "run.finished": "engine->app",
+  "run.closed": "engine->app",
   "model.cancel": "engine->app",
 };
 
@@ -125,7 +141,7 @@ const nullable = (spec: Spec): Spec => ({ nullable: spec });
 const listOf = (spec: Spec): Spec => ({ list: spec });
 const oneOf = (...values: string[]): Spec => ({ oneOf: values });
 
-const THINKING = oneOf("off", "low", "medium", "high");
+const THINKING = oneOf("off", "minimal", "low", "medium", "high", "xhigh", "max");
 const FINISH_REASON = oneOf("stop", "length", "tool_call", "content_filter", "other");
 const PERMISSION_MODE = oneOf("default", "accept-edits", "bypass");
 const CALL_FORMAT = oneOf("fenced", "native");
@@ -142,7 +158,7 @@ const USAGE = obj({
   cost_usd: "num",
 });
 const MODEL_ERROR_DATA = obj({
-  kind: oneOf("auth", "no_key", "bad_request", "rate_limit", "server", "timeout", "network", "context_window", "unknown_model", "cancelled", "other"),
+  kind: oneOf("auth", "no_key", "bad_request", "rate_limit", "no_credit", "server", "timeout", "network", "context_window", "unknown_model", "cancelled", "other"),
   provider: "str",
   model: "str",
   status: nullable("int"),
@@ -150,12 +166,31 @@ const MODEL_ERROR_DATA = obj({
 });
 const ORIGIN = obj({ turn: "int", line: nullable("int") }, { child: "int" });
 const BATCH = obj({ id: "str", index: "int", size: "int" });
+/** The root model's catalog numbers, 0 when unknown (v1 step 3). */
+const WINDOW = obj({ context_window: "int", max_output: "int" });
 const MESSAGES: Record<string, Spec> = {
   system: obj({ role: oneOf("system"), content: "str" }),
   user: obj({ role: oneOf("user"), content: "str" }),
   assistant: obj({ role: oneOf("assistant"), content: "str" }, { tool_call: TOOL_CALL }),
   tool: obj({ role: oneOf("tool"), tool_call_id: "str", content: "str" }),
 };
+
+/** engine.info's per-mode limits: contract.Limits.as_dict() (v1 step 2, D-198). */
+const PROFILE_LIMITS = obj({
+  max_turns: "int",
+  max_subcalls: "int",
+  root_max_tokens: "int",
+  output_max_chars: "int",
+  cell_timeout_s: "num",
+  cpus: "num",
+  memory_mb: "int",
+  pids: "int",
+  grader_timeout_s: nullable("int"),
+  subcall_max_chars: "int",
+  subcall_max_tokens: "int",
+  subcall_thinking: nullable("str"),
+  subcall_oversize: "str",
+});
 
 /** params (requests, notifications) or result, per "<method>:<kind>". */
 const FIELDS: Record<string, Spec> = {
@@ -167,7 +202,18 @@ const FIELDS: Record<string, Spec> = {
     contract: nullable("str"),
     contract_hash: nullable("str"),
     training_hash: nullable("str"),
-    profiles: listOf(obj({ name: "str", source: oneOf("builtin", "user"), prompt_hash: "str", profile_hash: "str" })),
+    profiles: listOf(
+      obj({
+        name: "str",
+        source: oneOf("builtin", "user"),
+        contract: oneOf("v4", "rlmh-1"),
+        prompt_hash: "str",
+        profile_hash: "str",
+        agent_api: "bool",
+        limits: obj({ read: PROFILE_LIMITS, repo: PROFILE_LIMITS }),
+        path: "str",
+      }),
+    ),
   }),
   "run.start:request": obj(
     { mode: oneOf("read", "repo"), profile: "str", root: MODEL_REF, sub: MODEL_REF, permission_mode: PERMISSION_MODE, call_format: CALL_FORMAT },
@@ -184,11 +230,19 @@ const FIELDS: Record<string, Spec> = {
       tag: "str",
       batch: "str",
       log_dir: "str",
+      window: WINDOW,
+      conversation: "bool",
     },
   ),
   "run.start:result": obj({ run_id: "str", log_path: "str" }),
   "run.cancel:request": obj({ run_id: "str" }),
   "run.cancel:result": obj({}),
+  "run.say:request": obj({ run_id: "str", text: "str" }),
+  "run.say:result": obj({ prompt_index: "int" }),
+  "run.close:request": obj({ run_id: "str" }),
+  "run.close:result": obj({}),
+  "profile.check:request": obj({ path: "str", base: nullable("str") }, { gated: "bool" }),
+  "profile.check:result": obj({ ok: "bool", errors: listOf("str"), prompt_hash: nullable("str"), profile_hash: nullable("str"), changed: listOf("str") }),
   "run.vars:request": obj({ run_id: "str" }),
   "run.vars:result": obj({ vars: listOf(obj({ name: "str", type: "str", len: nullable("int"), chars: "int" })) }),
   "debug.roundtrip:request": obj({ count: "int" }),
@@ -211,6 +265,7 @@ const FIELDS: Record<string, Spec> = {
       batch: BATCH,
       prefix: obj({ chars: "int", key: "str" }),
       child: obj({ id: "int", turn: "int", max_turns: "int", depth: "int" }),
+      purpose: oneOf("compact"),
     },
   ),
   "model.complete:result": obj({
@@ -248,6 +303,21 @@ const FIELDS: Record<string, Spec> = {
       subcall_max_tokens: "int",
     }),
     log_path: "str",
+    window: WINDOW,
+    compaction: nullable(obj({ window: "int", trigger: "int", keep: "int" })),
+    conversation: "bool",
+  }),
+  "run.compacted:notification": obj({
+    run_id: "str",
+    turn: "int",
+    prompt_index: "int",
+    child_id: nullable("int"),
+    before_tokens: "int",
+    after_tokens: "int",
+    dropped_messages: "int",
+    kept_messages: "int",
+    summary_chars: "int",
+    seconds: "num",
   }),
   "run.reply:notification": obj({
     run_id: "str",
@@ -321,7 +391,10 @@ const FIELDS: Record<string, Spec> = {
     infra_kind: nullable("str"),
     wall_s: "num",
     log_path: "str",
+    prompt_index: "int",
+    open: "bool",
   }),
+  "run.closed:notification": obj({ run_id: "str", prompts: "int" }),
   "model.cancel:notification": obj({ run_id: "str" }),
 };
 
@@ -366,7 +439,7 @@ const methodOf = (ex: Example) => ex.name.split(":")[0]!;
 
 describe("protocol examples", () => {
   test("file_shape", () => {
-    expect(FILE.protocol).toBe(1);
+    expect(FILE.protocol).toBe(2);
     expect(FILE.protocol).toBe(PROTOCOL_VERSION);
     expect(Object.keys(FILE).sort()).toEqual(["examples", "protocol"]);
     expect(byName.size).toBe(EXAMPLES.length); // unique names
@@ -460,6 +533,11 @@ describe("protocol examples", () => {
     expect(sub.tools).toEqual([]);
     expect(sub.messages.map((m: { role: string }) => m.role)).toEqual(["user"]);
     expect("child" in sub).toBe(false);
+    // the summary call of a compaction (v1 step 3): a root call with purpose "compact", ending with the request
+    const compact = byName.get("model.complete:request:compact")!.message.params;
+    expect(compact.purpose).toBe("compact");
+    expect(compact.role).toBe("root");
+    expect(compact.messages.at(-1).role).toBe("user");
     // an rlm() child's root turn (D-160): role sub, a growing conversation with the python tool, its own batch of one
     const child = byName.get("model.complete:request:child")!.message.params;
     expect(child.role).toBe("sub");
@@ -475,7 +553,7 @@ describe("protocol examples", () => {
     // guards the checker itself: a missing key, an extra key and a bad enum all fail
     expect(() => check({ provider: "p", model: "m" }, MODEL_REF, "ref")).toThrow(/missing thinking/);
     expect(() => check({ provider: "p", model: "m", thinking: null, x: 1 }, MODEL_REF, "ref")).toThrow(/unexpected x/);
-    expect(() => check({ provider: "p", model: "m", thinking: "max" }, MODEL_REF, "ref")).toThrow(/not one of/);
+    expect(() => check({ provider: "p", model: "m", thinking: "huge" }, MODEL_REF, "ref")).toThrow(/not one of/);
     expect(() => check({ role: "robot", content: "" }, "message", "m")).toThrow(/not a Message/);
   });
 

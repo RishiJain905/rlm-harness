@@ -396,7 +396,7 @@ test(
     const engine = realEngine();
     const info = await fetchInfo(engine.link);
     expect(info.version).toBe(APP_VERSION);
-    expect(info.protocol).toBe(1);
+    expect(info.protocol).toBe(2);
     expect(info.python).toMatch(/^3\.12\./);
     expect(info.contract).toBe("v4");
     expect(info.contract_hash).toBe(TRAINING_HASH);
@@ -440,7 +440,7 @@ describe("real engine with RLMH_DEBUG=1", () => {
       };
       const roundtrip = engine.link.request<{ texts: string[] }>("debug.roundtrip", { count: 20 });
       await first;
-      expect((await fetchInfo(engine.link)).protocol).toBe(1); // answered while 20 calls are held
+      expect((await fetchInfo(engine.link)).protocol).toBe(2); // answered while 20 calls are held
       release();
       expect((await roundtrip).texts).toEqual(Array.from({ length: 20 }, (_, i) => `pong ${i}`));
     },
@@ -502,7 +502,7 @@ test(
 test(
   "protocol_mismatch",
   async () => {
-    const engine = startEngine({ cmd: [process.execPath, "-e", fakeEngine(2, false)], cwd: process.cwd(), env: {} });
+    const engine = startEngine({ cmd: [process.execPath, "-e", fakeEngine(3, false)], cwd: process.cwd(), env: {} });
     let caught: unknown;
     try {
       await fetchInfo(engine.link);
@@ -510,7 +510,7 @@ test(
       caught = err;
     }
     expect(caught).toBeInstanceOf(ProtocolMismatch);
-    expect((caught as Error).message).toBe("engine speaks protocol 2, this rlmh speaks 1");
+    expect((caught as Error).message).toBe("engine speaks protocol 3, this rlmh speaks 2");
     engine.kill();
     await within(engine.exited, 10_000);
   },
@@ -522,8 +522,8 @@ test(
   async () => {
     // an engine that answers and exits at once: its last answer must still arrive
     for (let i = 0; i < 5; i++) {
-      const engine = startEngine({ cmd: [process.execPath, "-e", fakeEngine(1, true)], cwd: process.cwd(), env: {} });
-      expect((await fetchInfo(engine.link)).protocol).toBe(1);
+      const engine = startEngine({ cmd: [process.execPath, "-e", fakeEngine(2, true)], cwd: process.cwd(), env: {} });
+      expect((await fetchInfo(engine.link)).protocol).toBe(2);
       expect(await within(engine.exited, 10_000)).toBe(0);
     }
   },

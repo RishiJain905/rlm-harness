@@ -3,6 +3,7 @@
 // process with piped stdio, so it is never a TTY. Also createTtyApprover with piped streams.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createTtyApprover, type CliIO } from "../../src/cli/run.ts";
@@ -56,14 +57,22 @@ describe("--json", () => {
       const started = events[0];
       expect(started.call_format).toBe("native");
       expect(started.log_path).toBe(join(t.home, "runs", "cli", "runs.jsonl"));
+      // the root model's catalog window (v1 step 3): fake/scripted has 1,000,000 and an unknown maximum output
+      expect(started.window).toEqual({ context_window: 1_000_000, max_output: 0 });
+      expect(started.compaction).toEqual({ window: 262_144, trigger: 180_224, keep: 39_321 });
       const finished = events[events.length - 1];
       expect(finished.answer).toBe("42");
       expect(finished.infra_error).toBeNull();
       expect(finished.subcalls).toBe(1);
+      // scripts stay one-shot (v1 step 4, D-178): no conversation, and no run.closed
+      expect(started.conversation).toBe(false);
+      expect([finished.prompt_index, finished.open]).toEqual([0, false]);
+      expect(types).not.toContain("run.closed");
 
       const rec = await lastRecord(finished.log_path);
       expect(sorted(Object.keys(rec))).toEqual(sorted(RECORD_KEYS));
-      expect(rec.format).toBe(1);
+      expect(rec.format).toBe(2);
+      expect([rec.window, rec.compactions, rec.prompt_index, rec.conversation]).toEqual([{ context_window: 1_000_000, max_output: 0 }, [], 0, false]);
       expect(rec.run_id).toBe(finished.run_id);
       expect(rec.batch).toBe("cli");
       expect(rec.usage.root.input_tokens).toBeGreaterThan(0);
@@ -109,6 +118,50 @@ test(
     expect(r.stdout).toBe("42\n");
     expect(r.stderr).toContain("run finished");
     expect(r.stderr).toContain("started: read mode");
+  },
+  REAL,
+);
+
+test(
+  "plain mode: a run that outgrows the profile's compaction window prints a compacted line (v1 step 3)",
+  async () => {
+    // v1 step 3's test profile: default with [read] root_max_tokens = 256, max_turns = 12 and a 4,096-token window
+    const builtin = join(APP, "..", "engine", "rlm_engine", "profiles", "default");
+    const changes: Record<string, Record<string, string>> = {
+      read: { root_max_tokens: "256", max_turns: "12" },
+      repo: { root_max_tokens: "256" },
+      compaction: { window: "4096", keep_ratio: "0.16", reserve: "0", summary_max_tokens: "512" },
+    };
+    let section = "";
+    const toml = (await Bun.file(join(builtin, "profile.toml")).text())
+      .split("\n")
+      .map((line) => {
+        if (line.startsWith("[")) section = line.slice(1, line.indexOf("]"));
+        const key = line.split("=")[0]!.trim();
+        const value = changes[section]?.[key];
+        if (value === undefined) return line;
+        delete changes[section]![key];
+        return `${key} = ${value}`;
+      })
+      .join("\n");
+    expect(Object.values(changes).flatMap(Object.keys)).toEqual([]);
+    const home = join(t.dir, "compact-home");
+    const folder = join(home, "profiles", "compact-test");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "profile.toml"), toml);
+    copyFileSync(join(builtin, "guidance.md"), join(folder, "guidance.md"));
+    copyFileSync(join(builtin, "system.md"), join(folder, "system.md")); // D-256: default's contract is rlmh-1
+    const cells = Array.from({ length: 10 }, (_, i) => ({ text: "", tool_call: { code: `print('${String.fromCharCode(97 + i)}' * 3000)` } }));
+    const script = t.script({ root: [...cells, { text: "", tool_call: { code: "submit('42')" } }], compact: [{ text: "SUMMARY of the work so far." }] });
+    const r = await rlmh(read("--profile", "compact-test"), { home, script });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("42\n");
+    expect(r.stderr).toMatch(/^turn \d+: compacted \d+ messages, ~[\d.]+k to ~[\d.]+k tokens, [\d.]+ s$/m);
+    const rec = await lastRecord(join(home, "runs", "cli", "runs.jsonl"));
+    expect(rec.format).toBe(2);
+    expect(rec.compactions.length).toBeGreaterThanOrEqual(1);
+    expect(rec.compactions[0]).toMatchObject({ prompt_index: 0, child_id: null });
+    expect("run_id" in rec.compactions[0]).toBe(false);
   },
   REAL,
 );

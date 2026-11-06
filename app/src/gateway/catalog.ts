@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { dirname } from "node:path";
 import { refreshedModelsPath } from "../paths.ts";
 import { openRouterEndpoint } from "./providers.ts";
+import { levelsFromEfforts, type ThinkingOn } from "./thinking.ts";
 import bundled from "../../catalog/models.json" with { type: "json" };
 
 export interface ModelInfo {
@@ -23,6 +24,9 @@ export interface ModelInfo {
   reasoning: boolean;
   /** Shortest prompt the provider caches, or null when unknown (the batch rule then assumes 1024). */
   cache_min_tokens: number | null;
+  /** The thinking levels besides "off" the model takes, least first, when its provider lists them (OpenRouter's
+   *  `reasoning.supported_efforts`, kept by a refresh); otherwise thinking.ts goes by the model id (D-250). */
+  thinking_levels?: ThinkingOn[];
 }
 
 export interface CatalogSource {
@@ -93,6 +97,7 @@ function parseModelInfo(v: unknown, provider: string): ModelInfo | null {
   }
   if (typeof v.tool_call !== "boolean" || typeof v.reasoning !== "boolean") return null;
   if (v.cache_min_tokens !== null && !isCount(v.cache_min_tokens)) return null;
+  const levels = levelsFromEfforts(v.thinking_levels);
   return {
     provider,
     id: v.id,
@@ -103,6 +108,7 @@ function parseModelInfo(v: unknown, provider: string): ModelInfo | null {
     tool_call: v.tool_call,
     reasoning: v.reasoning,
     cache_min_tokens: v.cache_min_tokens,
+    ...(levels ? { thinking_levels: levels } : {}),
   };
 }
 

@@ -15,6 +15,8 @@ import type {
   RunBudgetParams,
   RunCellParams,
   RunChildParams,
+  RunClosedParams,
+  RunCompactedParams,
   RunFinishedParams,
   RunLimits,
   RunPermissionParams,
@@ -26,7 +28,8 @@ import type {
 import type { Session } from "../session.ts";
 import { saveSettings, setSetting, type Settings } from "../settings.ts";
 import type { ApprovalQueue } from "./approvals.ts";
-import { cacheTone, contextTone, formatClock, formatCost, formatTokens, unicodeSupported, type StatusSegment } from "./format.ts";
+import { refKey, type Conversation } from "./conversation.ts";
+import { cacheTone, contextTone, formatClock, formatCost, formatTokens, thousands, unicodeSupported, type StatusSegment } from "./format.ts";
 
 /** Store changes reach React at most this often, so 20 streams don't repaint per chunk. */
 export const FLUSH_MS = 50;
@@ -39,7 +42,7 @@ const STDERR_LINES = 12;
 const EARLY_MAX = 256;
 
 /** What the interface needs of a Session; the fake engine in the tests builds one over in-memory links. */
-export type SessionLike = Pick<Session, "bus" | "gateway" | "settings" | "info" | "start" | "cancel" | "vars" | "close">;
+export type SessionLike = Pick<Session, "bus" | "gateway" | "settings" | "info" | "start" | "cancel" | "vars" | "say" | "closeRun" | "close" | "checkProfile">;
 
 export interface AppDeps {
   session: SessionLike;
@@ -79,6 +82,20 @@ export interface SubcallRow {
   /** Set when the row is an rlm() child run (D-160): its text is every turn's reply after a `── turn k ──` line, and its
    *  usage the sum of its turns. */
   child: ChildInfo | null;
+  /** A root row of an earlier prompt of the conversation: its "Issued by" line, frozen when the next prompt began,
+   *  because turns count from 1 again in every prompt (D-199) and `cellCode` then holds the new prompt's cells. */
+  issued?: string;
+}
+
+/** "Issued by turn T, line L: <that line of the cell>", once the cell's code is known; `rlm<n> turn T` for a call an
+ *  rlm() child made, whose cells `cellCode` then holds. */
+export function issuedBy(row: SubcallRow, cellCode: Record<number, string>): string {
+  if (row.issued !== undefined) return row.issued;
+  const { turn, line } = row.origin;
+  const by = row.origin.child === undefined ? `turn ${turn}` : `rlm${row.origin.child} turn ${turn}`;
+  if (line === null) return `Issued by ${by}, line unknown`;
+  const text = cellCode[turn]?.split("\n")[line - 1]?.trim();
+  return `Issued by ${by}, line ${line}${text ? `: ${text}` : ""}`;
 }
 
 /** One cell of an rlm() child, from run.child "turn". */
@@ -121,7 +138,9 @@ export type Entry =
   | { kind: "permission"; text: string; allowed: boolean }
   | { kind: "answer"; text: string }
   | { kind: "error"; text: string; lines: string[] }
-  | { kind: "note"; text: string; tone: "info" | "warn" | "error" };
+  | { kind: "note"; text: string; tone: "info" | "warn" | "error" }
+  /** The live tail while a compaction's summary call runs (v1 step 3), in place of a reply. */
+  | { kind: "compacting" };
 
 export interface Totals {
   root: Usage;
@@ -158,6 +177,10 @@ export interface RunView {
   totals: Totals | null;
   finished: RunFinishedParams | null;
   engineExit: { code: number; stderr: string[] } | null;
+  /** The run's conversation (v1 step 4), from run.started with `conversation: true`; null for a one-shot run. */
+  conversation: Conversation | null;
+  /** The prompt the view shows last: 0 for the run's first question, k for follow-up k. */
+  prompt: number;
   /** Date.now() at the flush that built this view; screens draw timers from it. */
   now: number;
 }
@@ -191,6 +214,8 @@ export function emptyView(): RunView {
     totals: null,
     finished: null,
     engineExit: null,
+    conversation: null,
+    prompt: 0,
     now: Date.now(),
   };
 }
@@ -215,13 +240,17 @@ export class RunStore {
   private readonly listeners = new Set<() => void>();
   private readonly off: (() => void)[] = [];
   /** Gateway call ids of this run: the root's live tail, or a sub-call row's key. */
-  private readonly calls = new Map<string, { role: "root" } | { role: "sub"; key: string; child?: ChildCall }>();
+  private readonly calls = new Map<string, { role: "root"; compact?: true } | { role: "sub"; key: string; child?: ChildCall; compact?: true }>();
   /** `── turn k ──` with box-drawing, or `-- turn k --` in ASCII mode, as the theme draws its rules. */
   private readonly unicode: boolean;
   private lastReply: Usage | null = null;
+  /** after_tokens of the root's latest compaction, the context until the next reply says otherwise (v1 step 3). */
+  private compactedTo: number | null = null;
   private rejected = 0;
   /** Engine events that came while starting with no run id yet, for startResolved() to replay. */
   private early: { method: string; params: any }[] = [];
+  /** What beginFollowUp changed, for followUpFailed to put back. */
+  private beforeFollowUp: Pick<RunView, "phase" | "startedAt" | "endedAt" | "finished" | "failKind" | "prompt" | "turns" | "budget"> | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private lastFlush = 0;
   private tick: { timer: ReturnType<typeof setInterval>; ms: number } | undefined;
@@ -247,6 +276,7 @@ export class RunStore {
     this.calls.clear();
     this.early = [];
     this.lastReply = null;
+    this.compactedTo = null;
     this.rejected = 0;
     this.changed();
   }
@@ -262,7 +292,58 @@ export class RunStore {
     this.calls.clear();
     this.early = [];
     this.lastReply = null;
+    this.compactedTo = null;
     this.rejected = 0;
+    this.changed();
+  }
+
+  /**
+   * The next question of the open conversation (v1 step 4), before run.say is sent: the run id, the transcript and the
+   * panel's rows stay; the question is added with detail `follow-up <k>`, and the prompt's turns and budgets start over.
+   */
+  beginFollowUp(question: string): void {
+    const v = this.v;
+    const conv = v.conversation;
+    if (!conv) return;
+    const k = conv.promptIndex + 1;
+    this.beforeFollowUp = { phase: v.phase, startedAt: v.startedAt, endedAt: v.endedAt, finished: v.finished, failKind: v.failKind, prompt: v.prompt, turns: v.turns, budget: v.budget };
+    v.phase = "starting";
+    v.prompt = k;
+    v.startedAt = Date.now();
+    v.endedAt = null;
+    v.finished = null;
+    v.failKind = null;
+    v.turns = 0; // turns count from 1 in every prompt (D-199)
+    for (const b of v.blocks) {
+      for (const r of b.rows) if (r.origin.child === undefined && r.issued === undefined) r.issued = issuedBy(r, v.cellCode);
+    }
+    v.cellCode = {};
+    v.rootOpen = false;
+    if (v.limits) v.budget = { turnsLeft: v.limits.max_turns, subcallsLeft: v.limits.max_subcalls };
+    v.entries.push({ kind: "question", text: question, detail: `follow-up ${k}` });
+    this.changed();
+  }
+
+  /** run.say answered with the prompt's index. */
+  followUpResolved(promptIndex: number): void {
+    this.beforeFollowUp = null;
+    this.v.prompt = promptIndex;
+    if (this.v.phase === "starting") this.v.phase = "running";
+    this.changed();
+  }
+
+  /** run.say failed: back to how the conversation stood, with `message` as an error when given. */
+  followUpFailed(message?: string): void {
+    const before = this.beforeFollowUp;
+    this.beforeFollowUp = null;
+    if (before && this.v.phase === "starting") Object.assign(this.v, before);
+    if (message !== undefined) this.v.entries.push({ kind: "error", text: message, lines: [] });
+    this.changed();
+  }
+
+  /** The engine no longer has the conversation (run.say answered -32010): no question continues it. */
+  conversationEnded(): void {
+    if (this.v.conversation) this.v.conversation.open = false;
     this.changed();
   }
 
@@ -311,6 +392,12 @@ export class RunStore {
     return { phase: this.v.phase, runId: this.v.runId };
   }
 
+  /** The run's conversation now, ahead of the next flush (a copy), or null. */
+  conversation(): Conversation | null {
+    const c = this.v.conversation;
+    return c ? { ...c, files: [...c.files] } : null;
+  }
+
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => {
@@ -331,7 +418,8 @@ export class RunStore {
   private onEngine(method: string, params: any): void {
     if (typeof params?.run_id !== "string") return;
     if (this.v.runId === null && this.awaitingId()) {
-      if (method !== "run.started") {
+      // a tagged run.started is /tune's own background run (v1 step 9): the app never tags the user's runs
+      if (method !== "run.started" || (typeof params.tag === "string" && params.tag !== "")) {
         if (this.early.length < EARLY_MAX) this.early.push({ method, params });
         return;
       }
@@ -344,6 +432,8 @@ export class RunStore {
   /** One engine event of this run; another run's, or any before a run id is known, is dropped. */
   private dispatch(method: string, params: any): void {
     if (params.run_id !== this.v.runId || this.v.runId === null) return;
+    // a follow-up's first events can come before run.say's result is handled
+    if (method !== "run.finished" && method !== "run.closed") this.promptBegan();
     switch (method) {
       case "run.started":
         this.started(params as RunStartedParams);
@@ -360,6 +450,9 @@ export class RunStore {
       case "run.child":
         this.child(params as RunChildParams);
         break;
+      case "run.compacted":
+        this.compacted(params as RunCompactedParams);
+        break;
       case "run.permission":
         this.permission(params as RunPermissionParams);
         break;
@@ -370,6 +463,9 @@ export class RunStore {
       }
       case "run.finished":
         this.finished(params as RunFinishedParams);
+        break;
+      case "run.closed":
+        this.closed(params as RunClosedParams);
         break;
       default:
         return;
@@ -386,12 +482,40 @@ export class RunStore {
     v.limits = p.limits;
     v.budget ??= { turnsLeft: p.limits.max_turns, subcallsLeft: p.limits.max_subcalls };
     v.entries.push({ kind: "started", text: startedLine(p) });
+    if (p.conversation === true) {
+      v.conversation = {
+        runId: p.run_id,
+        mode: p.mode,
+        files: Array.isArray(p.input?.files) ? [...p.input.files] : [],
+        folder: this.deps.cwd,
+        root: refKey(p.root),
+        sub: refKey(p.sub),
+        profile: p.profile,
+        permissionMode: p.permission_mode,
+        promptIndex: 0,
+        open: true,
+      };
+    }
+  }
+
+  /** A follow-up that is still `starting` is running once any of its events arrives. */
+  private promptBegan(): void {
+    if (this.v.phase === "starting" && this.v.prompt > 0 && this.v.conversation) {
+      this.beforeFollowUp = null;
+      this.v.phase = "running";
+    }
+  }
+
+  /** run.closed (v1 step 4): the conversation is over, and nothing continues it. */
+  private closed(_p: RunClosedParams): void {
+    if (this.v.conversation) this.v.conversation.open = false;
   }
 
   private reply(p: RunReplyParams): void {
     const v = this.v;
     v.turns = Math.max(v.turns, p.turn);
     this.lastReply = p.usage;
+    this.compactedTo = null;
     v.rootOpen = false;
     for (const [id, c] of this.calls) if (c.role === "root") this.calls.delete(id);
     const entry: Entry = { kind: "reply", turn: p.turn, text: p.text, reasoning: p.reasoning ?? "", live: false };
@@ -463,6 +587,21 @@ export class RunStore {
     }
   }
 
+  /** run.compacted (v1 step 3): a note where it happened; the root's also resets the context estimate. */
+  private compacted(p: RunCompactedParams): void {
+    const v = this.v;
+    v.entries = v.entries.filter((e) => e.kind !== "compacting");
+    v.entries.push(compactedNote(p));
+    if (p.child_id === null) {
+      this.lastReply = null;
+      this.compactedTo = p.after_tokens;
+      return;
+    }
+    // a child's: also in its row, before the turn it preceded, as viewFromRecord puts it
+    const row = this.v.blocks.find((b) => b.id === `rlm${p.child_id}`)?.rows[0];
+    if (row) row.text = withLine(row.text, childCompactedLine(p));
+  }
+
   private permission(p: RunPermissionParams): void {
     this.v.permissions.push(p);
     if (p.asked || !p.allowed) this.v.entries.push({ kind: "permission", text: permissionLine(p), allowed: p.allowed });
@@ -470,13 +609,20 @@ export class RunStore {
 
   private finished(p: RunFinishedParams): void {
     const v = this.v;
+    const open = p.open === true;
+    if (v.conversation) {
+      v.conversation.promptIndex = typeof p.prompt_index === "number" ? p.prompt_index : v.prompt;
+      v.conversation.open = open;
+    }
+    this.beforeFollowUp = null;
     v.finished = p;
     v.phase = p.infra_kind === "cancelled" ? "cancelled" : p.infra_error ? "failed" : "finished";
     v.failKind = v.phase === "failed" ? (p.infra_kind ?? "other") : null;
     v.endedAt = Date.now();
     v.rootOpen = false;
-    v.entries = v.entries.filter((e) => !(e.kind === "reply" && e.live));
-    for (const b of v.blocks) {
+    v.entries = v.entries.filter((e) => !(e.kind === "reply" && e.live) && e.kind !== "compacting");
+    // an open conversation cancels nothing between prompts (D-203): an llm_async call may still be going
+    for (const b of open ? [] : v.blocks) {
       for (const r of b.rows) {
         if (r.status === "queued" || r.status === "streaming") {
           r.status = "error";
@@ -490,11 +636,24 @@ export class RunStore {
 
   private onCallStart(e: AppEvents["call.start"]): void {
     if (this.v.runId === null || e.run_id !== this.v.runId || this.v.readOnly) return;
-    if (e.role === "root") {
+    if (e.role === "root" && e.purpose === "compact") {
+      // a compaction's summary call: "compacting…" as the live tail; its text is the summary, not a reply
+      this.calls.set(e.call_id, { role: "root", compact: true });
+      this.v.rootOpen = true;
+      this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live) && x.kind !== "compacting");
+      this.v.entries.push({ kind: "compacting" });
+    } else if (e.role === "root") {
+      this.promptBegan();
       this.calls.set(e.call_id, { role: "root" });
       this.v.rootOpen = true;
-      this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live));
+      this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live) && x.kind !== "compacting");
       this.v.entries.push({ kind: "reply", turn: this.v.turns + 1, text: "", reasoning: "", live: true });
+    } else if (e.subcall_id !== undefined && e.child && e.purpose === "compact") {
+      // a child's summary call: no turn line and no text in its row, only its usage (the row's sums the child's calls)
+      const batch = e.batch ?? { id: `rlm${e.child.id}`, index: 0, size: 1 };
+      const row = this.row(e.subcall_id, batch.id, batch.index, batch.size, e.origin ?? { turn: this.v.turns, line: null });
+      this.calls.set(e.call_id, { role: "sub", key: row.key, compact: true });
+      return;
     } else if (e.subcall_id !== undefined && e.child) {
       // a child's turn adds to its row: a turn line, then this turn's reply; the row ends with run.child, not here
       const batch = e.batch ?? { id: `rlm${e.child.id}`, index: 0, size: 1 };
@@ -527,10 +686,13 @@ export class RunStore {
     const c = this.calls.get(e.call_id);
     if (!c) return;
     let target: { text: string; reasoning: string } | undefined;
-    if (c.role === "root") {
+    if (c.role === "root" && c.compact) {
+      return;
+    } else if (c.role === "root") {
       const live = this.v.entries.find((x) => x.kind === "reply" && x.live);
       target = live?.kind === "reply" ? live : undefined;
     } else {
+      if (c.compact) return;
       const row = this.findRow(c.key);
       target = row;
       if (row && c.child) {
@@ -568,12 +730,13 @@ export class RunStore {
     if (c.role === "root") {
       this.v.rootOpen = false;
       this.calls.delete(e.call_id);
-      if (e.error) this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live));
+      if (c.compact) this.v.entries = this.v.entries.filter((x) => x.kind !== "compacting");
+      else if (e.error) this.v.entries = this.v.entries.filter((x) => !(x.kind === "reply" && x.live));
     } else {
       const row = this.findRow(c.key);
       if (!row) return;
-      if (c.child) {
-        // one turn of the child ended: its usage adds up; the row's status and time wait for run.child
+      if (c.child || c.compact) {
+        // one turn (or a summary call) of the child ended: its usage adds up; the row's status and time wait for run.child
         this.calls.delete(e.call_id);
         if (e.error) row.error ??= e.error.message;
         else row.usage = sumUsage(row.usage, e.usage);
@@ -595,6 +758,7 @@ export class RunStore {
   private onEngineExit(code: number, stderr: string[]): void {
     const v = this.v;
     v.engineExit = { code, stderr: stderr.slice(-STDERR_LINES) };
+    if (v.conversation) v.conversation.open = false; // the engine took the conversation with it
     if (isActive(v.phase)) {
       v.phase = "failed";
       v.failKind = "engine";
@@ -650,6 +814,8 @@ export class RunStore {
       v.totals = this.deps.session.gateway.totals(v.runId);
       if (this.lastReply) {
         v.ctx = { tokens: this.lastReply.input_tokens + this.lastReply.output_tokens, estimated: false };
+      } else if (this.compactedTo !== null) {
+        v.ctx = { tokens: this.compactedTo, estimated: true };
       } else {
         const req = this.deps.session.gateway.lastRootRequest(v.runId);
         if (req) v.ctx = { tokens: Math.ceil(requestChars(req) / 4), estimated: true };
@@ -674,6 +840,7 @@ function copyView(v: RunView): RunView {
   return {
     ...v,
     entries: v.entries.map((e) => ({ ...e })),
+    conversation: v.conversation ? { ...v.conversation, files: [...v.conversation.files] } : null,
     blocks: v.blocks.map((b) => ({ ...b, rows: b.rows.map((r) => ({ ...r, child: r.child ? { ...r.child, cells: [...r.child.cells] } : null })) })),
     permissions: [...v.permissions],
     cellCode: { ...v.cellCode },
@@ -773,6 +940,26 @@ function cellNotes(p: { restarted: boolean; crash: string | null; repo_changed: 
   return notes;
 }
 
+/** `text` with `line` and a newline after it, on a line of its own. */
+function withLine(text: string, line: string): string {
+  return `${text}${text === "" || text.endsWith("\n") ? "" : "\n"}${line}\n`;
+}
+
+/** A compaction inside an rlm() child, as a line of its row's text. */
+function childCompactedLine(p: { dropped_messages: number; before_tokens: number; after_tokens: number }): string {
+  return `(${compactedText(p)})`;
+}
+
+function compactedText(p: { dropped_messages: number; before_tokens: number; after_tokens: number }): string {
+  return `Compacted ${p.dropped_messages} messages to save context: ~${thousands(p.before_tokens)}k to ~${thousands(p.after_tokens)}k tokens.`;
+}
+
+/** The transcript's note for a compaction, live or from a record's `compactions`; a child's names the child. */
+export function compactedNote(p: { dropped_messages: number; before_tokens: number; after_tokens: number; child_id?: number | null }): Entry {
+  const text = compactedText(p);
+  return { kind: "note", text: typeof p.child_id === "number" ? `rlm${p.child_id}: ${text}` : text, tone: "info" };
+}
+
 export function permissionLine(p: { turn: number; kind: string; detail: string; allowed: boolean; asked: boolean; remembered: boolean }): string {
   const how = p.asked ? "asked" : p.remembered ? "remembered" : "automatic";
   return `turn ${p.turn}  ${p.kind} ${p.detail} ${p.allowed ? "allowed" : "denied"} (${how})`;
@@ -795,8 +982,9 @@ function finishEntries(p: { answer: unknown; submitted: boolean; infra_error: st
  * The status line's segments, before layoutStatus drops what doesn't fit. With no run the models
  * come from settings, and the mode is the one the next run would use.
  */
-/** `runChoice` is the next question's mode choice (D-156); it shows only when it is not `auto`. */
-export function statusModel(view: RunView, deps: AppDeps, nextMode?: string, runChoice?: string): StatusSegment[] {
+/** `runChoice` is the next question's mode choice (D-156); it shows only when it is not `auto`. `tune` is /tune's state
+ *  while tuning is on (v1 step 9): `tune on $0.12/$1.00`, then ` · tuning` and ` · 1 waiting`. */
+export function statusModel(view: RunView, deps: AppDeps, nextMode?: string, runChoice?: string, tune?: TuneStatus | null): StatusSegment[] {
   const settings = deps.session.settings;
   const segs: StatusSegment[] = [{ id: "state", ...stateText(view, deps) }];
   const root = view.root ?? settingsRef(settings.root.model);
@@ -825,11 +1013,26 @@ export function statusModel(view: RunView, deps: AppDeps, nextMode?: string, run
   }
   const mode = isActive(view.phase) && view.permissionMode ? view.permissionMode : (nextMode ?? settings.permissions.mode);
   segs.push({ id: "mode", text: mode, tone: mode === "bypass" ? "high" : undefined });
+  if (tune) segs.push({ id: "tune", text: tuneSegment(tune) });
   if (runChoice && runChoice !== "auto") segs.push({ id: "run", text: `${runChoice} mode`, tone: "warn" });
   return segs;
 }
 
+/** /tune's figures (v1 step 9): the spend since `/tune on` against the cap, and the queue. */
+export interface TuneStatus {
+  spent_usd: number;
+  cap_usd: number;
+  running: { id: string; mode: "read" | "repo"; stage: string | null } | null;
+  waiting: { id: string; mode: "read" | "repo" } | null;
+}
+
+/** `tune on $0.12/$1.00`, with ` · tuning` while a task is tuned and ` · 1 waiting` while one waits. */
+export function tuneSegment(t: TuneStatus): string {
+  return `tune on $${t.spent_usd.toFixed(2)}/$${t.cap_usd.toFixed(2)}${t.running ? " · tuning" : ""}${t.waiting ? " · 1 waiting" : ""}`;
+}
+
 function stateText(view: RunView, deps: AppDeps): { text: string; tone?: StatusSegment["tone"] } {
+  if (view.conversation?.open && !view.readOnly && view.phase === "finished") return { text: "ready for a follow-up", tone: "ok" };
   switch (view.phase) {
     case "idle":
       return { text: "idle" };
@@ -837,7 +1040,7 @@ function stateText(view: RunView, deps: AppDeps): { text: string; tone?: StatusS
       return { text: "starting" };
     case "running":
       if (deps.approvals.size > 0) return { text: "waiting for approval", tone: "warn" };
-      return { text: `running ${formatClock(((view.now ?? Date.now()) - (view.startedAt ?? view.now)) / 1000)}` };
+      return { text: `running ${formatClock(((view.now ?? Date.now()) - (view.startedAt ?? view.now)) / 1000)}${view.prompt > 0 ? ` · follow-up ${view.prompt}` : ""}` };
     case "cancelling":
       return { text: "cancelling", tone: "warn" };
     case "finished":
@@ -907,7 +1110,15 @@ export function viewFromRecord(record: Record<string, any>, opts: { unicode?: bo
 
   const files: string[] = Array.isArray(record.input?.files) ? record.input.files : [];
   const text = str(record.mode === "repo" ? record.task : record.question) ?? "";
-  const detail = record.mode === "repo" ? `repo: ${str(record.workspace) ?? "?"}` : `read: ${files.length} file${files.length === 1 ? "" : "s"}`;
+  // a conversation's record holds one prompt (v1 step 4): a follow-up's shows its own question and turns only
+  const promptIndex = typeof record.prompt_index === "number" ? record.prompt_index : 0;
+  v.prompt = promptIndex;
+  const detail =
+    promptIndex > 0
+      ? `follow-up ${promptIndex}`
+      : record.mode === "repo"
+        ? `repo: ${str(record.workspace) ?? "?"}`
+        : `read: ${files.length} file${files.length === 1 ? "" : "s"}`;
   v.entries.push({ kind: "question", text, detail });
   if (v.root && v.sub) {
     v.entries.push({
@@ -926,9 +1137,21 @@ export function viewFromRecord(record: Record<string, any>, opts: { unicode?: bo
   const turns: any[] = Array.isArray(record.turns) ? record.turns : [];
   const perms: RunPermissionParams[] = Array.isArray(record.permissions) ? record.permissions : [];
   v.permissions = perms;
+  // format 2 (v1 step 3): each compaction before the turn it preceded; the root's in the transcript, a child's in its row
+  const compactions: any[] = (Array.isArray(record.compactions) ? record.compactions : []).filter(
+    (c: any) => isObj(c) && typeof c.turn === "number" && typeof c.dropped_messages === "number",
+  );
+  const rootCompactions = compactions.filter((c) => typeof c.child_id !== "number");
+  const shown = new Set<unknown>();
   for (const t of turns) {
     const turn = typeof t.turn === "number" ? t.turn : v.turns + 1;
     v.turns = Math.max(v.turns, turn);
+    for (const c of rootCompactions) {
+      if (c.turn === turn && !shown.has(c)) {
+        shown.add(c);
+        v.entries.push(compactedNote({ ...c, child_id: null }));
+      }
+    }
     v.entries.push({ kind: "reply", turn, text: str(t.reply) ?? "", reasoning: str(t.reasoning) ?? "", live: false });
     if (typeof t.code === "string") v.cellCode[turn] = t.code;
     if (t.code !== null || t.error !== null) {
@@ -945,6 +1168,9 @@ export function viewFromRecord(record: Record<string, any>, opts: { unicode?: bo
       if (p.turn === turn && (p.asked || !p.allowed)) v.entries.push({ kind: "permission", text: permissionLine(p), allowed: p.allowed });
     }
   }
+
+  // a compaction whose turn never came (the run ended first) still shows, after the last turn
+  for (const c of rootCompactions) if (!shown.has(c)) v.entries.push(compactedNote({ ...c, child_id: null }));
 
   const subcalls: any[] = Array.isArray(record.subcalls) ? record.subcalls : [];
   for (const s of subcalls) {
@@ -989,9 +1215,11 @@ export function viewFromRecord(record: Record<string, any>, opts: { unicode?: bo
     const cells: ChildCell[] = [];
     let text = "";
     let reasoning = "";
+    const own = compactions.filter((c) => c.child_id === id);
     for (const t of turns) {
       const turn = typeof t.turn === "number" ? t.turn : cells.length + 1;
       const sep = turnLine(turn, opts.unicode ?? true);
+      for (const c of own) if (c.turn === turn) text = withLine(text, childCompactedLine(c)).slice(0, -1);
       text += `${text === "" ? "" : "\n"}${sep}\n${str(t.reply) ?? ""}`;
       if (str(t.reasoning)) reasoning += `${reasoning === "" ? "" : "\n"}${sep}\n${t.reasoning}`;
       if (t.code !== null || t.error !== null) cells.push({ turn, code: str(t.code), output: str(t.stdout), error: str(t.error) });

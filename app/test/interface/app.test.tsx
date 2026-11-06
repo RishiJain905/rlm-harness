@@ -13,6 +13,7 @@ import { runsDir } from "../../src/paths.ts";
 import { APP_VERSION } from "../../src/version.ts";
 import { createFakeApp, FAKE_LIMITS, runRecord, scriptedBus, scriptedUsage, type FakeApp, type FakeAppOptions } from "../fakes/engine.ts";
 import { KEYS, mount, type Mounted } from "./helpers.ts";
+import { followUpLine } from "../../src/interface/Transcript.tsx";
 
 setDefaultTimeout(20_000);
 
@@ -45,7 +46,8 @@ describe("app", () => {
     expect(s).toContain(`rlmh ${APP_VERSION}`);
     expect(s).toContain(`folder ${app.deps.cwd}`);
     expect(s).toContain("root fake/scripted");
-    expect(s).toContain("Each question is a new run.");
+    expect(s).toContain(followUpLine(true));
+    expect(followUpLine(false)).toBe("Each question is a new run.");
     expect(s).toContain("Ask a question");
     expect(s.trimEnd().split("\n").at(-1)).toStartWith("idle");
   });
