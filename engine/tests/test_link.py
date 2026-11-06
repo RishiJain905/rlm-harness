@@ -553,7 +553,7 @@ def test_process_info(tmp_path) -> None:
         engine.send({"jsonrpc": "2.0", "id": 1, "method": "engine.info", "params": {}})
         info = engine.recv()["result"]
         assert set(info) == INFO_KEYS
-        assert (info["version"], info["protocol"], info["contract"]) == ("0.2.0", 2, "v4")
+        assert (info["version"], info["protocol"], info["contract"]) == ("1.0.0", 2, "v4")
         assert info["contract_hash"] == info["training_hash"] == TRAINING_HASH
         assert [(x["name"], x["source"]) for x in info["profiles"]] == [("default", "builtin"), ("training-v4", "builtin")]
         assert info["profiles"][1]["prompt_hash"] == TRAINING_HASH

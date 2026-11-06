@@ -4,7 +4,7 @@
 // leftovers, and runTest. Needs git on PATH.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tuneDir } from "../../src/paths.ts";
 import { pruneStale, runTest, snapshot, SNAPSHOT_MESSAGE, workCopy, type Snapshot } from "../../src/tune/worktree.ts";
@@ -128,7 +128,8 @@ describe("snapshot in git", () => {
     const dir = repo(t);
     const snap = asSnap(await snapshot(join(dir, "pkg"), join(t.dir, "snap"), { home: t.home }));
     expect(snap.sub).toBe("pkg");
-    expect(snap.top).toBe(dir);
+    // git prints the long path; a Windows tmpdir() can be an 8.3 short one (C:\Users\RUNNER~1\...).
+    expect(snap.top).toBe(realpathSync.native(dir));
     const work = await workCopy(snap, join(t.dir, "work"));
     expect(work.cwd).toBe(join(work.path, "pkg"));
     expect(readFileSync(join(work.cwd, "b.txt"), "utf8")).toBe("bee\n");
@@ -297,7 +298,9 @@ describe("pruneStale", () => {
     const workA = await workCopy(snapA, join(tune, "work", "t_1", "probe-inv"));
     const workB = await workCopy(snapB, join(tune, "work", "t_1", "probe-dom"));
     expect(g(dir, "worktree", "list", "--porcelain")).not.toBe(list);
-    write(join(tune, "work", "index-1-abcdef"), "stale index");
+    // A pid that has exited: pid 1 is alive on macOS and Linux (EPERM counts as alive).
+    const gone = Bun.spawnSync({ cmd: [process.execPath, "-e", "0"] }).pid;
+    write(join(tune, "work", `index-${gone}-abcdef`), "stale index");
 
     const sleeper = Bun.spawn({ cmd: [process.execPath, "-e", "setTimeout(() => {}, 60000)"], stdout: "ignore", stderr: "ignore" });
     try {
@@ -309,7 +312,7 @@ describe("pruneStale", () => {
       expect(g(dir, "worktree", "list", "--porcelain")).toBe(list);
       expect(existsSync(workA.path)).toBe(false);
       expect(existsSync(join(tune, "work", "t_1"))).toBe(false);
-      expect(existsSync(join(tune, "work", "index-1-abcdef"))).toBe(false);
+      expect(existsSync(join(tune, "work", `index-${gone}-abcdef`))).toBe(false);
       expect(existsSync(join(live, "work.json"))).toBe(true);
       expect(readFileSync(join(plain, "f.txt"), "utf8")).toBe("f\n");
     } finally {

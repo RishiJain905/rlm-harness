@@ -113,7 +113,13 @@ jobs:
           cat SHA256SUMS
       - name: Release
         run: |
-          cat > notes.md <<'EOF'
+          # D-195: the tag's own release notes, when documentation/releases/<tag>.md exists, go above the install text.
+          : > notes.md
+          if [ -f "documentation/releases/$GITHUB_REF_NAME.md" ]; then
+            cat "documentation/releases/$GITHUB_REF_NAME.md" >> notes.md
+            echo >> notes.md
+          fi
+          cat >> notes.md <<'EOF'
           Install on macOS or Linux:
 
               curl -fsSL https://github.com/RishiJain905/rlm-harness/releases/latest/download/install.sh | sh

@@ -5,7 +5,7 @@
 // composer sessions read it through their evidence; ordinary runs never do.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { GRADE_MARKERS } from "./evidence.ts";
 import type { EditRow, LibraryEntry } from "./sessions.ts";
 
@@ -98,7 +98,8 @@ export function addEntry(root: string, domain: string, id: string, entry: Librar
  */
 export function userDomain(task: { mode: "read" | "repo"; folder?: string }): string {
   if (task.mode === "read") return "read";
-  const name = basename((task.folder ?? "").replace(/[\\/]+$/, ""));
+  // Split on both separators, not the platform's basename: a Windows path has no "/" for posix basename to find.
+  const name = (task.folder ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")

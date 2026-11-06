@@ -197,9 +197,10 @@ Both open-source harnesses below are MIT-licensed, so we can reuse code as well 
 | Version | Adds | Done when |
 |---|---|---|
 | **v0** | The engine, the gateway and the interactive `rlmh` app, natively on three OSes, with read mode and repo mode, the sub-call panel and a one-command install | The parity script passes and a smoke run works on two models from `rlmh` |
-| **v1** | Harness² and the experiment: the base model on the default profile vs a Harness²-tuned profile vs the trained LoRA, on about 20 held-out context-search tasks. Harness² reaches users three ways: a pre-tuned default profile, a cheap experience memory, and an opt-in `/tune` that shows a cost estimate before it starts (about 4 runs per task). Also `rlm()` recursion with a depth limit (off for the LoRA, which never saw it), which turns a sub-call into a nested run with its own turns: a true sub-agent view | One A/B round on the held-out tasks |
+| **v1** | Shipped as 1.0.0 (2026-11-05). Harness² and the experiment: `rlmh eval` and the 48-task set `harness-eval-v1`, the offline tuner `rlmh tune`, and for users `/tune` (opt-in, estimate first, a hard cost cap), `/tuned` and the experience library; follow-ups, compaction, and rlmh's own contract (rlmh-1) for `default`. The tuner accepted no change, and the shipped `default` tied 0.2.0's on held-out passes at 1.86 times the cost ([results](../v1/results.md)). `rlm()` recursion with a depth limit, off for the LoRA. The LoRA arm moved to a row after v3 (S-41) | v1 step 10: the write-up, CI green on three OSes and the 1.0.0 release |
 | **v2** | Full TUI polish and a local web UI in the style of DeepSeek Harness | A run can be started, watched and reopened from the web UI |
-| **v3** | The Windows desktop app and the public release. For users this is version 1 | A fresh Windows PC installs it and completes a run |
+| **v3** | The Windows desktop app | A fresh Windows PC installs it and completes a run |
+| **After v3** | The LoRA experiment: the trained LoRA against the base model on the harness, left out of v1 (S-41) | |
 | **Later** | An MCP server, if a real use appears | |
 
-Only v0 has build steps so far. Each later version gets its steps once the one before it is done.
+Only v0 and v1 have build steps so far. Each later version gets its steps once the one before it is done.

@@ -1,6 +1,6 @@
 [project]
 name = "rlm-engine"
-version = "0.2.0"
+version = "1.0.0"
 description = "The rlm-harness engine: the agent loop, the trained contract and the REPL, behind a JSON-RPC link"
 requires-python = "==3.12.*"
 dependencies = []
