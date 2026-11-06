@@ -36,7 +36,8 @@ test("set, get and list round trip; settings.toml is written", async () => {
 
   const list = await config(home, "list");
   expect(list.code).toBe(0);
-  const keys = list.stdout.trimEnd().split("\n").map((l) => l.split(" = ")[0]);
+  // drop only the final newline: the last key (tune.test) is empty, so its line ends in " = "
+  const keys = list.stdout.replace(/\n$/, "").split("\n").map((l) => l.split(" = ")[0]);
   // every §8 key, in schema order; provider keys for each provider that has settings
   const expected = SCHEMA.flatMap((d) => (d.key === "providers.<id>.base_url" ? ["providers.local.base_url", "providers.local.max_in_flight"] : d.key.startsWith("providers.") ? [] : [d.key]));
   expect(keys).toEqual(expected);
@@ -49,6 +50,38 @@ test("a fresh home lists every non-provider key with its default", async () => {
   expect(code).toBe(0);
   for (const def of SCHEMA.filter((d) => !d.key.startsWith("providers."))) expect(stdout).toContain(`${def.key} = ${def.default}\n`);
   expect(existsSync(join(t.dir, "fresh"))).toBe(false); // list writes nothing
+});
+
+test("the five tune keys: listed with their defaults, max_usd takes a decimal, enabled true is refused with the hint", async () => {
+  const home = join(t.dir, "tune");
+  const fresh = await config(home, "list");
+  for (const line of ["tune.enabled = false", "tune.model = ", "tune.max_usd = 1", "tune.library = true", "tune.test = "]) expect(fresh.stdout).toContain(`${line}\n`);
+
+  expect(await config(home, "set", "tune.max_usd", "2.5")).toEqual({ code: 0, stdout: "tune.max_usd = 2.5\n", stderr: "" });
+  expect(readFileSync(join(home, "settings.toml"), "utf8")).toContain("max_usd = 2.5\n");
+  expect((await config(home, "get", "tune.max_usd")).stdout).toBe("2.5\n");
+  for (const bad of ["0", "-1", "abc"]) {
+    const r = await config(home, "set", "tune.max_usd", bad);
+    expect([bad, r.code]).toEqual([bad, 2]);
+    expect(r.stderr).toContain("tune.max_usd must be a number above 0");
+  }
+  expect((await config(home, "get", "tune.max_usd")).stdout).toBe("2.5\n");
+  expect((await config(home, "set", "tune.model", "fake/scripted")).code).toBe(0);
+  expect((await config(home, "set", "tune.model", "no-slash")).code).toBe(2);
+  expect((await config(home, "set", "tune.test", "bun test")).stdout).toBe("tune.test = bun test\n");
+
+  // only /tune on, after its estimate, turns tuning on (D-231)
+  const before = readFileSync(join(home, "settings.toml"), "utf8");
+  const on = await config(home, "set", "tune.enabled", "true");
+  expect(on.code).toBe(2);
+  expect(on.stdout).toBe("");
+  expect(on.stderr).toContain("Use /tune on, which shows the cost first");
+  expect(readFileSync(join(home, "settings.toml"), "utf8")).toBe(before);
+  expect(await config(home, "set", "tune.enabled", "false")).toEqual({ code: 0, stdout: "tune.enabled = false\n", stderr: "" });
+  // and through main.ts too
+  const viaMain = await rlmh(["config", "set", "tune.enabled", "true"], { home, env: { RLMH_ENGINE: "rlmh-no-such-engine-FAKE" } });
+  expect(viaMain.code).toBe(2);
+  expect(viaMain.stderr).toContain("Use /tune on, which shows the cost first");
 });
 
 test("unknown keys, bad values and bad usage exit 2", async () => {

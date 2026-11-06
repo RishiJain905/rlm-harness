@@ -58,3 +58,8 @@ export function evalDir(h = home()): string {
 export function tuneDir(h = home()): string {
   return join(h, "tune");
 }
+
+/** `/tune`'s experience library (v1 architecture §7.7, §9, step 9): one folder per domain. */
+export function libraryDir(h = home()): string {
+  return join(h, "library");
+}

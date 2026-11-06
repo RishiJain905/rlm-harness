@@ -62,8 +62,12 @@ export interface EvidenceSpec {
   candidates?: { label: string; diff: string; notes: string[] }[];
   /** Earlier rounds' composer notes. */
   history?: string;
-  /** The tune's library root, copied whole (both domains). */
+  /** The tune's library root, copied whole (both domains), or only `libraryDomain` when that is given. */
   libraryDir?: string;
+  /** `/tune` (v1 step 9): copy only `<libraryDir>/<libraryDomain>/` to `library/<libraryDomain>/`. */
+  libraryDomain?: string;
+  /** `/tune` (v1 step 9): task.md text by task id, for tasks that aren't in an eval set (`tasks` and `setDir` are then not read for them). */
+  taskMd?: Record<string, string>;
   /** The reflector's: the composed profile's diff against the incumbent. */
   composedDiff?: string;
 }
@@ -294,6 +298,11 @@ export function writeEvidence(dir: string, spec: EvidenceSpec): EvidenceResult {
   const withheld: EvidenceResult["withheld"] = [];
   let shown = 0;
   for (const id of [...new Set(spec.runs.map((r) => r.taskId))].sort()) {
+    const md = spec.taskMd?.[id];
+    if (md !== undefined) {
+      write(`tasks/${id}/task.md`, md);
+      continue;
+    }
     const t = tasks.get(id);
     if (t === undefined) throw new Error(`no task ${id} for the evidence`);
     write(`tasks/${id}/task.md`, taskText(t, spec.setDir));
@@ -323,7 +332,8 @@ export function writeEvidence(dir: string, spec: EvidenceSpec): EvidenceResult {
   }
   if (spec.composedDiff !== undefined) write("candidates/composed/diff.md", spec.composedDiff === "" ? "(no change from the incumbent)\n" : spec.composedDiff);
   write("history.md", spec.history && spec.history.trim() !== "" ? spec.history : "(no earlier rounds)\n");
-  if (spec.libraryDir !== undefined) copyLibrary(spec.libraryDir, join(dir, "library"));
+  if (spec.libraryDir !== undefined && spec.libraryDomain !== undefined) copyLibrary(join(spec.libraryDir, spec.libraryDomain), join(dir, "library", spec.libraryDomain));
+  else if (spec.libraryDir !== undefined) copyLibrary(spec.libraryDir, join(dir, "library"));
   scanTree(dir);
   return { dir, files: walk(dir).map((rel) => join(dir, ...rel.split("/"))), withheld };
 }

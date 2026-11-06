@@ -114,6 +114,39 @@ function roleCost(tokensIn: number, tokensOut: number, cacheRead: number, price:
   return ((tokensIn - reads) * price.input + reads * price.cache_read + tokensOut * price.output) / 1e6;
 }
 
+/** One run's tokens: `base` capped at the profile's ceiling for the mode; measured cache reads scale with a capped input, and the reference assumes CACHE_SHARE of root input. */
+function rowTokens(base: Tokens, measured: boolean, lim: Parameters<typeof ceilingFor>[0] | null, agentApi: boolean): Tokens {
+  const ceil = lim === null ? { root_in: null, root_out: null, sub_in: null, sub_out: null } : ceilingFor(lim, agentApi);
+  const capped = (x: number, c: number | null) => (c === null ? x : Math.min(x, c));
+  const rootIn = capped(base.root_in, ceil.root_in);
+  const subIn = capped(base.sub_in, ceil.sub_in);
+  return {
+    root_in: rootIn,
+    root_out: capped(base.root_out, ceil.root_out),
+    root_cache: measured ? (base.root_in > 0 ? (base.root_cache * rootIn) / base.root_in : 0) : CACHE_SHARE * rootIn,
+    sub_in: subIn,
+    sub_out: capped(base.sub_out, ceil.sub_out),
+    sub_cache: measured ? (base.sub_in > 0 ? (base.sub_cache * subIn) / base.sub_in : 0) : 0,
+  };
+}
+
+function tokensUsd(t: Tokens, rootPrice: ModelInfo["price"], subPrice: ModelInfo["price"]): number {
+  return roleCost(t.root_in, t.root_out, t.root_cache, rootPrice) + roleCost(t.sub_in, t.sub_out, t.sub_cache, subPrice);
+}
+
+/**
+ * One run of §6.6's row `size` in `kind` mode, priced as estimate() prices a reference row (root tokens at `root`,
+ * sub tokens at `sub`), capped at `profile`'s ceiling when it is given; null when a model is unpriced. `/tune`'s
+ * estimate falls back to it (v1 step 9, D-221).
+ */
+export function referenceRunUsd(size: Size, kind: "read" | "repo", o: { root: ModelRef; sub: ModelRef; catalog: Pick<Catalog, "get">; profile?: Pick<ProfileInfo, "agent_api" | "limits"> }): number | null {
+  const rootPrice = priceOf(o.catalog, o.root);
+  const subPrice = priceOf(o.catalog, o.sub);
+  if (rootPrice === null || subPrice === null) return null;
+  const lim = o.profile ? (kind === "read" ? o.profile.limits.read : o.profile.limits.repo) : null;
+  return tokensUsd(rowTokens(REFERENCE[size], false, lim, o.profile?.agent_api ?? false), rootPrice, subPrice);
+}
+
 export interface EstimateRow {
   stratum: string;
   runs: number;
@@ -165,25 +198,8 @@ export function estimate(tasks: EvalTask[], o: EstimateOpts): Estimate {
   for (const key of [...groups.keys()].sort()) {
     const first = groups.get(key)![0]!;
     const measured = o.refs.get(key);
-    const base = measured ?? REFERENCE[first.size];
-    const lim = first.kind === "read" ? o.profile.limits.read : o.profile.limits.repo;
-    const ceil = ceilingFor(lim, o.profile.agent_api);
-    const capped = (x: number, c: number | null) => (c === null ? x : Math.min(x, c));
-    const rootIn = capped(base.root_in, ceil.root_in);
-    const subIn = capped(base.sub_in, ceil.sub_in);
-    const tokens: Tokens = {
-      root_in: rootIn,
-      root_out: capped(base.root_out, ceil.root_out),
-      // measured cache reads scale with a capped input; the reference assumes CACHE_SHARE of root input
-      root_cache: measured ? (base.root_in > 0 ? (base.root_cache * rootIn) / base.root_in : 0) : CACHE_SHARE * rootIn,
-      sub_in: subIn,
-      sub_out: capped(base.sub_out, ceil.sub_out),
-      sub_cache: measured ? (base.sub_in > 0 ? (base.sub_cache * subIn) / base.sub_in : 0) : 0,
-    };
-    const runUsd =
-      rootPrice === null || subPrice === null
-        ? null
-        : roleCost(tokens.root_in, tokens.root_out, tokens.root_cache, rootPrice) + roleCost(tokens.sub_in, tokens.sub_out, tokens.sub_cache, subPrice);
+    const tokens = rowTokens(measured ?? REFERENCE[first.size], measured !== undefined, first.kind === "read" ? o.profile.limits.read : o.profile.limits.repo, o.profile.agent_api);
+    const runUsd = rootPrice === null || subPrice === null ? null : tokensUsd(tokens, rootPrice, subPrice);
     const runs = groups.get(key)!.length;
     rows.push({ stratum: key, runs, source: measured ? "runs" : "reference", tokens, run_usd: runUsd, usd: runUsd === null ? null : runUsd * runs });
   }

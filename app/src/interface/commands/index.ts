@@ -1,9 +1,10 @@
 // KV cache: none; the interface never touches the bytes sent to the model.
 // The slash commands. Each has one screen that replaces the transcript and panel area; /clear and
-// /quit have none and are handled in App.tsx.
+// /quit have none and are handled in App.tsx. /tune and /tuned (v1 step 9) come last; `/tune off` has no screen either.
 
 import type { ReactElement } from "react";
 import type { AppDeps, RunStore, RunView } from "../store.ts";
+import type { TuneControl } from "../tuning.ts";
 import { ContextScreen } from "./context.tsx";
 import { HelpScreen } from "./help.tsx";
 import { ModelScreen } from "./model.tsx";
@@ -11,6 +12,8 @@ import { PermissionsScreen } from "./permissions.tsx";
 import { ProvidersScreen } from "./providers.tsx";
 import { RunsScreen } from "./runs.tsx";
 import { SettingsScreen } from "./settings.tsx";
+import { TuneScreen } from "./tune.tsx";
+import { TunedScreen } from "./tuned.tsx";
 
 export interface ScreenProps {
   deps: AppDeps;
@@ -25,6 +28,12 @@ export interface ScreenProps {
   active: boolean;
   width: number;
   height: number;
+  /** The word after the command's name (`/tune on` gives "on"), lower-cased, or ""; screens other than /tune ignore it. */
+  arg: string;
+  /** /tune's controller: the queue, on and off, and the deferred switch (v1 step 9). */
+  tune: TuneControl;
+  /** Closes the open conversation, if any (a profile switch in /tuned, D-202). */
+  closeConversation(): Promise<void>;
 }
 
 export interface SlashCommand {
@@ -41,6 +50,8 @@ export const COMMANDS: readonly SlashCommand[] = [
   { name: "context", summary: "The root prompt against its window, and the REPL's variables", Screen: ContextScreen },
   { name: "runs", summary: "Past runs from the run log, replayed read-only", Screen: RunsScreen },
   { name: "help", summary: "Commands and keys", Screen: HelpScreen },
+  { name: "tune", summary: "Turn Harness² tuning on or off; the cost comes first", Screen: TuneScreen },
+  { name: "tuned", summary: "Pick the active harness: default or a tuned one", Screen: TunedScreen },
 ];
 
 export const CLEAR = { name: "clear", summary: "Start a new session: clear the transcript, history and mode override" };

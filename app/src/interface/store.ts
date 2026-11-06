@@ -42,7 +42,7 @@ const STDERR_LINES = 12;
 const EARLY_MAX = 256;
 
 /** What the interface needs of a Session; the fake engine in the tests builds one over in-memory links. */
-export type SessionLike = Pick<Session, "bus" | "gateway" | "settings" | "info" | "start" | "cancel" | "vars" | "say" | "closeRun" | "close">;
+export type SessionLike = Pick<Session, "bus" | "gateway" | "settings" | "info" | "start" | "cancel" | "vars" | "say" | "closeRun" | "close" | "checkProfile">;
 
 export interface AppDeps {
   session: SessionLike;
@@ -418,7 +418,8 @@ export class RunStore {
   private onEngine(method: string, params: any): void {
     if (typeof params?.run_id !== "string") return;
     if (this.v.runId === null && this.awaitingId()) {
-      if (method !== "run.started") {
+      // a tagged run.started is /tune's own background run (v1 step 9): the app never tags the user's runs
+      if (method !== "run.started" || (typeof params.tag === "string" && params.tag !== "")) {
         if (this.early.length < EARLY_MAX) this.early.push({ method, params });
         return;
       }
@@ -981,8 +982,9 @@ function finishEntries(p: { answer: unknown; submitted: boolean; infra_error: st
  * The status line's segments, before layoutStatus drops what doesn't fit. With no run the models
  * come from settings, and the mode is the one the next run would use.
  */
-/** `runChoice` is the next question's mode choice (D-156); it shows only when it is not `auto`. */
-export function statusModel(view: RunView, deps: AppDeps, nextMode?: string, runChoice?: string): StatusSegment[] {
+/** `runChoice` is the next question's mode choice (D-156); it shows only when it is not `auto`. `tune` is /tune's state
+ *  while tuning is on (v1 step 9): `tune on $0.12/$1.00`, then ` · tuning` and ` · 1 waiting`. */
+export function statusModel(view: RunView, deps: AppDeps, nextMode?: string, runChoice?: string, tune?: TuneStatus | null): StatusSegment[] {
   const settings = deps.session.settings;
   const segs: StatusSegment[] = [{ id: "state", ...stateText(view, deps) }];
   const root = view.root ?? settingsRef(settings.root.model);
@@ -1011,8 +1013,22 @@ export function statusModel(view: RunView, deps: AppDeps, nextMode?: string, run
   }
   const mode = isActive(view.phase) && view.permissionMode ? view.permissionMode : (nextMode ?? settings.permissions.mode);
   segs.push({ id: "mode", text: mode, tone: mode === "bypass" ? "high" : undefined });
+  if (tune) segs.push({ id: "tune", text: tuneSegment(tune) });
   if (runChoice && runChoice !== "auto") segs.push({ id: "run", text: `${runChoice} mode`, tone: "warn" });
   return segs;
+}
+
+/** /tune's figures (v1 step 9): the spend since `/tune on` against the cap, and the queue. */
+export interface TuneStatus {
+  spent_usd: number;
+  cap_usd: number;
+  running: { id: string; mode: "read" | "repo"; stage: string | null } | null;
+  waiting: { id: string; mode: "read" | "repo" } | null;
+}
+
+/** `tune on $0.12/$1.00`, with ` · tuning` while a task is tuned and ` · 1 waiting` while one waits. */
+export function tuneSegment(t: TuneStatus): string {
+  return `tune on $${t.spent_usd.toFixed(2)}/$${t.cap_usd.toFixed(2)}${t.running ? " · tuning" : ""}${t.waiting ? " · 1 waiting" : ""}`;
 }
 
 function stateText(view: RunView, deps: AppDeps): { text: string; tone?: StatusSegment["tone"] } {

@@ -1,6 +1,7 @@
 // KV cache: none
 // CostCap on a bare Bus (D-193): call.end costs summing past the cap cancel each running run exactly
-// once, runs tracked afterwards are cancelled at once, and the cap stays tripped.
+// once, runs tracked afterwards are cancelled at once, and the cap stays tripped; with trackedOnly (v1 step 9)
+// only the tracked runs count.
 
 import { expect, test } from "bun:test";
 import { Bus } from "../../src/bus.ts";
@@ -50,4 +51,24 @@ test("no cap never cancels", () => {
   cap.track("a");
   end(bus, "a", 1000);
   expect(cap.capped).toBe(false);
+});
+
+test("trackedOnly counts only tracked runs, a call.end before its run's track included, and reports each total", () => {
+  const bus = new Bus<AppEvents>();
+  const cancelled: string[] = [];
+  const totals: number[] = [];
+  const cap = new CostCap(bus, 1.0, (id) => cancelled.push(id), () => {}, { trackedOnly: true, onCost: (t) => totals.push(t) });
+  end(bus, "user", 5); // the user's own run on the same bus: never counted
+  end(bus, "a", 0.3); // before "a" is tracked: held
+  expect(cap.total).toBe(0);
+  cap.track("a");
+  expect(cap.total).toBeCloseTo(0.3, 10);
+  end(bus, "a", 0.5);
+  end(bus, "user", 5);
+  expect(cap.capped).toBe(false);
+  end(bus, "a", 0.3);
+  expect(cap.capped).toBe(true);
+  expect(cancelled).toEqual(["a"]);
+  expect(totals.map((x) => Math.round(x * 10) / 10)).toEqual([0.3, 0.8, 1.1]);
+  cap.dispose();
 });

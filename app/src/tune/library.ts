@@ -5,7 +5,7 @@
 // composer sessions read it through their evidence; ordinary runs never do.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { GRADE_MARKERS } from "./evidence.ts";
 import type { EditRow, LibraryEntry } from "./sessions.ts";
 
@@ -89,6 +89,23 @@ export function addEntry(root: string, domain: string, id: string, entry: Librar
   for (const extra of ["skills", "scripts"]) if (existsSync(join(harness, extra))) cpSync(join(harness, extra), join(dir, "harness", extra), { recursive: true });
   rebuildIndex(root, domain);
   return true;
+}
+
+/**
+ * `/tune`'s library domain for a user's task (architecture §7.7, v1 step 9): `read`, or `repo-<slug>` where the
+ * slug is the repo folder's name in lower case, each run of other characters a `-`, at most 48 characters
+ * (`repo-folder` when nothing is left). Its root is `libraryDir(home)`.
+ */
+export function userDomain(task: { mode: "read" | "repo"; folder?: string }): string {
+  if (task.mode === "read") return "read";
+  const name = basename((task.folder ?? "").replace(/[\\/]+$/, ""));
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/, "");
+  return `repo-${slug === "" ? "folder" : slug}`;
 }
 
 export { copyLibrary } from "./evidence.ts";

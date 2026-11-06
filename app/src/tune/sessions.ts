@@ -183,6 +183,8 @@ export interface SessionOpts {
   sub: ModelRef;
   tag: string;
   logDir: string;
+  /** The session runs' batch (`/tune`'s `tune-<id>`, v1 step 9); default the engine's. */
+  batch?: string;
   gated?: boolean;
   /** Writes the evidence for an attempt (stage.md carries it). */
   evidence: (attempt: number) => EvidenceResult;
@@ -218,6 +220,7 @@ export async function runSession(o: SessionOpts): Promise<StageResult> {
         interactive: false,
         tag: o.tag,
         logDir: o.logDir,
+        ...(o.batch !== undefined ? { batch: o.batch } : {}),
       });
       r.run_ids.push(run_id);
       const untrack = o.track?.(run_id) ?? (() => {});

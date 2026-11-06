@@ -4,6 +4,8 @@
 // the screens, the submit flow (with /clear and /quit, which have no screen) and the Esc order: deny
 // the approval, close the screen or view, cancel the run, clear the prompt. A question that fits the open conversation
 // is a follow-up in it (run.say, v1 step 4); any other starts a new run, after the open conversation is closed.
+// With /tune on (v1 step 9), TuneControl snapshots a new repo question's folder before its run.start, offers each first
+// answer to the background queue, and makes a kept harness active once no conversation is open; /tune off has no screen.
 
 import { Box, render, Text, useApp, useInput, useWindowSize } from "ink";
 import { existsSync } from "node:fs";
@@ -24,6 +26,7 @@ import { Lines } from "./Lines.tsx";
 import { listFiles, mentionPaths, mentionToken, parseQuestion, rankFiles, RUN_CHOICES, type RunChoice } from "./mentions.ts";
 import { HISTORY_MAX, PromptBox } from "./PromptBox.tsx";
 import { StatusLine } from "./StatusLine.tsx";
+import { TuneControl } from "./tuning.ts";
 import { engineStoppedMessage, isActive, RunStore, statusModel, type AppDeps } from "./store.ts";
 import { allRows, blockOfRow, rowCellCode, SubcallPanel, type PanelState } from "./SubcallPanel.tsx";
 import { SubcallView } from "./SubcallView.tsx";
@@ -33,7 +36,7 @@ import { bannerLines, Transcript, transcriptLines } from "./Transcript.tsx";
 export const MIN_COLUMNS = 50;
 export const MIN_ROWS = 12;
 const QUIT_WINDOW_MS = 2000;
-const MENU_MAX = 9; // every command fits: the eight with screens or not, /clear and /quit
+const MENU_MAX = 11; // every command fits: the nine with screens (/tune and /tuned since v1 step 9), /clear and /quit
 const DENY = { allow: false, remember_for_run: false };
 const HINT: Record<RunChoice, string> = {
   auto: "Ask a question. @file reads files; / for commands",
@@ -79,6 +82,15 @@ export function App(props: { deps: AppDeps }) {
   const size = deps.size ?? { columns: win.columns || 80, rows: win.rows || 24 };
   const [store] = useState(() => new RunStore(deps));
   useEffect(() => () => store.dispose(), [store]);
+  const [tune] = useState(() => new TuneControl(deps, store));
+  useEffect(() => {
+    tune.startup();
+    return () => tune.dispose();
+  }, [tune]);
+  useSyncExternalStore(
+    (fn) => tune.subscribe(fn),
+    () => tune.version,
+  );
   const view = useSyncExternalStore(
     (fn) => store.subscribe(fn),
     () => store.snapshot(),
@@ -97,6 +109,7 @@ export function App(props: { deps: AppDeps }) {
   }, [text, filesClosedAt]);
   const history = useRef<string[]>([]);
   const [screen, setScreen] = useState<string | null>(null);
+  const [screenArg, setScreenArg] = useState(""); // the word after the command's name: /tune on
   const [subview, setSubview] = useState<string | null>(null);
   const [focus, setFocus] = useState<"prompt" | "panel">("prompt");
   const [panel, setPanel] = useState<PanelState>({ selected: 0, open: {} });
@@ -190,6 +203,7 @@ export function App(props: { deps: AppDeps }) {
     const { phase, runId } = store.live();
     if (isActive(phase) && runId !== null) deps.session.cancel(runId).catch(() => undefined);
     else await closeConversation();
+    await tune.quit().catch(() => undefined); // the pending switch applies; the tune in flight is cancelled
     await deps.session.close().catch(() => undefined);
     exit();
   };
@@ -201,11 +215,12 @@ export function App(props: { deps: AppDeps }) {
     if (store.conversation()?.open) {
       busy.current = true;
       try {
-        await closeConversation();
+        await tune.holdingSwitch(closeConversation);
       } finally {
         busy.current = false;
       }
     }
+    const switched = tune.conversationEnded(); // a kept harness that waited for that conversation to end
     const detail = run.mode === "read" ? `read: ${run.inputs!.length} file${run.inputs!.length === 1 ? "" : "s"}` : `repo: ${deps.cwd}`;
     setScroll(0);
     setPanel({ selected: 0, open: {} });
@@ -214,13 +229,25 @@ export function App(props: { deps: AppDeps }) {
     store.beginRun({ text: run.mode === "read" ? run.question! : run.task!, detail });
     for (const n of notes) store.note(n, "info");
     for (const w of warnings) store.note(w, "warn");
+    if (switched !== null) store.note(switched, "info");
     cancelWhenStarted.current = false;
+    // with /tune on, a repo question's folder is snapshotted first (the phase is starting, so nothing else submits)
+    let tracked: ReturnType<TuneControl["track"]> | null = null;
+    if (tune.enabled) {
+      const s = await tune.snapshotFor(run);
+      if (s.note !== null) store.note(s.note, "info");
+      if (s.tuned) tracked = tune.track(run, s.snap);
+    }
     deps.session.start({ ...run, permissionMode: nextMode, conversation: deps.session.settings.conversation.follow_ups }).then(
       (r) => {
+        tracked?.resolved(r.run_id);
         store.startResolved(r.run_id);
         if (cancelWhenStarted.current) deps.session.cancel(r.run_id).catch(() => undefined);
       },
-      (err: unknown) => store.startFailed(messageOf(err)),
+      (err: unknown) => {
+        tracked?.failed();
+        store.startFailed(messageOf(err));
+      },
     );
   };
 
@@ -258,7 +285,7 @@ export function App(props: { deps: AppDeps }) {
     if (store.conversation()?.open) {
       busy.current = true;
       try {
-        await closeConversation();
+        await tune.holdingSwitch(closeConversation);
       } finally {
         busy.current = false;
       }
@@ -278,18 +305,31 @@ export function App(props: { deps: AppDeps }) {
     setRunChoice("auto");
     store.clear();
     store.note("New session.", "info");
+    const switched = tune.conversationEnded();
+    if (switched !== null) store.note(switched, "info");
   };
 
   const submit = async (value: string) => {
     const typed = value.trim();
     if (!typed || busy.current) return;
     if (typed.startsWith("/")) {
-      const name = typed.slice(1).split(/\s/)[0]!.toLowerCase();
+      const [word, after] = typed.slice(1).split(/\s+/);
+      const name = (word ?? "").toLowerCase();
+      const arg = (after ?? "").toLowerCase(); // the word after the name: /tune on, /tune off; other commands ignore it
       if (name === "quit") return void quit();
       if (name === "clear") return void clear();
       if (!COMMANDS.some((c) => c.name === name)) return store.note(`Unknown command /${name}. /help lists the commands.`, "warn");
       history.current = [...history.current, typed].slice(-HISTORY_MAX);
       setText("");
+      if (name === "tune" && arg === "off") {
+        // no screen: off at once, and a note of what it cancelled
+        void tune.turnOff().then(
+          (line) => store.note(line, "info"),
+          (err: unknown) => store.note(`Turning tuning off failed: ${messageOf(err)}`, "error"),
+        );
+        return;
+      }
+      setScreenArg(arg);
       setScreen(name);
       return;
     }
@@ -445,6 +485,9 @@ export function App(props: { deps: AppDeps }) {
         active={keyboardFree}
         width={size.columns}
         height={mainHeight}
+        arg={screenArg}
+        tune={tune}
+        closeConversation={closeConversation}
       />
     );
   } else if (row) {
@@ -528,7 +571,7 @@ export function App(props: { deps: AppDeps }) {
           }}
           onCycleRunChoice={() => setRunChoice((c) => RUN_CHOICES[(RUN_CHOICES.indexOf(c) + 1) % RUN_CHOICES.length]!)}
         />
-        <StatusLine segments={statusModel(view, deps, nextMode, runChoice)} width={size.columns} />
+        <StatusLine segments={statusModel(view, deps, nextMode, runChoice, tune.status())} width={size.columns} />
       </Box>
     </ThemeContext.Provider>
   );

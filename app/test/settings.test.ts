@@ -16,6 +16,8 @@ import {
   loadSettings,
   saveSettings,
   setSetting,
+  refuseTuneOn,
+  TUNE_ON_HINT,
 } from "../src/settings.ts";
 
 const DEFAULTS: Record<string, string | number | boolean> = {
@@ -32,6 +34,11 @@ const DEFAULTS: Record<string, string | number | boolean> = {
   "providers.openai.max_in_flight": 16,
   "display.verbose": false,
   "conversation.follow_ups": true,
+  "tune.enabled": false,
+  "tune.model": "",
+  "tune.max_usd": 1,
+  "tune.library": true,
+  "tune.test": "",
 };
 
 let dir: string;
@@ -70,6 +77,8 @@ describe("paths", () => {
     expect(paths.pythonDir(h)).toBe(join(h, "python"));
     expect(paths.engineDir("0.1.0", h)).toBe(join(h, "engine", "0.1.0"));
     expect(paths.binDir(h)).toBe(join(h, "bin"));
+    expect(paths.tuneDir(h)).toBe(join(h, "tune"));
+    expect(paths.libraryDir(h)).toBe(join(h, "library"));
     expect(existsSync(h)).toBe(false); // the helpers create nothing
   });
 });
@@ -88,7 +97,13 @@ describe("settings", () => {
       "providers.<id>.max_in_flight",
       "display.verbose",
       "conversation.follow_ups",
+      "tune.enabled",
+      "tune.model",
+      "tune.max_usd",
+      "tune.library",
+      "tune.test",
     ]);
+    expect(SCHEMA.find((d) => d.key === "tune.max_usd")!.type).toBe("number");
     for (const def of SCHEMA) expect(def.doc.length).toBeGreaterThan(0);
     const s = defaultSettings();
     for (const [key, value] of Object.entries(DEFAULTS)) expect(getSetting(s, key)).toBe(value);
@@ -158,6 +173,48 @@ describe("settings", () => {
     expect(s).toEqual(before); // setSetting is pure
   });
 
+  test("number: finite and above 0, coerced from a decimal string, saved as a TOML float (D-220)", () => {
+    const s = defaultSettings();
+    for (const [given, want] of [["2.5", 2.5], ["3", 3], [".5", 0.5], ["0.01", 0.01], [2.5, 2.5], [7, 7]] as const) {
+      expect(getSetting(setSetting(s, "tune.max_usd", given), "tune.max_usd")).toBe(want);
+    }
+    for (const bad of ["0", "-1", "abc", "", "1e3", "Infinity", "NaN", "1.2.3", 0, -1, Infinity, NaN, true]) {
+      expectSettingsError(() => setSetting(s, "tune.max_usd", bad), "tune.max_usd", "above 0");
+    }
+    // written as a float: the default 1 is `1.0`, and it loads back as the same number
+    saveSettings(dir, s);
+    let text = readFileSync(paths.settingsPath(dir), "utf8");
+    expect(text).toContain('[tune]\nenabled = false\nmodel = ""\nmax_usd = 1.0\nlibrary = true\ntest = ""\n');
+    expect(loadSettings(dir)).toEqual(s);
+    saveSettings(dir, setSetting(s, "tune.max_usd", "2.5"));
+    text = readFileSync(paths.settingsPath(dir), "utf8");
+    expect(text).toContain("max_usd = 2.5\n");
+    expect(getSetting(loadSettings(dir), "tune.max_usd")).toBe(2.5);
+    // an int key is still written as an int
+    saveSettings(dir, setSetting(s, "providers.local.max_in_flight", "8"));
+    expect(readFileSync(paths.settingsPath(dir), "utf8")).toContain("max_in_flight = 8\n");
+    // a TOML integer is a number too
+    writeFileSync(paths.settingsPath(dir), "[tune]\nmax_usd = 3\n");
+    expect(getSetting(loadSettings(dir), "tune.max_usd")).toBe(3);
+  });
+
+  test("tune keys: tune.model is checked like root.model; tune.enabled turns on only through /tune on (D-231, D-232)", () => {
+    const s = defaultSettings();
+    expect(getSetting(setSetting(s, "tune.model", "fake/scripted"), "tune.model")).toBe("fake/scripted");
+    expect(getSetting(setSetting(s, "tune.model", ""), "tune.model")).toBe("");
+    expectSettingsError(() => setSetting(s, "tune.model", "no-slash"), "tune.model", "provider/model");
+    expectSettingsError(() => setSetting(s, "tune.model", "nosuch/model"), "tune.model", "unknown provider");
+    expect(getSetting(setSetting(s, "tune.test", "bun test --bail"), "tune.test")).toBe("bun test --bail");
+    expect(getSetting(setSetting(s, "tune.library", "false"), "tune.library")).toBe(false);
+    // setSetting itself takes true: /tune on writes it through applySetting after its estimate
+    expect(getSetting(setSetting(s, "tune.enabled", true), "tune.enabled")).toBe(true);
+    // the guard /settings and rlmh config use refuses true, with the hint, and lets false through
+    for (const on of [true, "true"]) expectSettingsError(() => refuseTuneOn("tune.enabled", on), "tune.enabled", TUNE_ON_HINT);
+    for (const off of [false, "false"]) expect(() => refuseTuneOn("tune.enabled", off)).not.toThrow();
+    expect(() => refuseTuneOn("tune.library", true)).not.toThrow();
+    expect(TUNE_ON_HINT).toBe("Use /tune on, which shows the cost first");
+  });
+
   test("load_errors", () => {
     const file = paths.settingsPath(dir);
     const cases: [string, string][] = [
@@ -166,6 +223,9 @@ describe("settings", () => {
       ['[display]\nverbose = "yes"\n', "display.verbose"],
       ["[providers.local]\nmax_in_flight = 0\n", "providers.local.max_in_flight"],
       ['root = "x"\n', "root"],
+      ["[tune]\nmax_usd = 0\n", "tune.max_usd"],
+      ['[tune]\nmax_usd = "2.5"\n', "tune.max_usd"],
+      ['[tune]\nmodel = "no-slash"\n', "tune.model"],
     ];
     for (const [text, key] of cases) {
       writeFileSync(file, text);

@@ -1,8 +1,9 @@
 // KV cache: none
 // `rlmh config get KEY | set KEY VALUE | list` (architecture §8, §10). It reads and writes
-// settings.toml only: it never starts the engine and makes no request.
+// settings.toml only: it never starts the engine and makes no request. `set tune.enabled true` is
+// refused: only /tune on, after its estimate, turns tuning on (D-231).
 
-import { getSetting, listSettings, loadSettings, saveSettings, setSetting, SettingsError, type Settings } from "../settings.ts";
+import { getSetting, listSettings, loadSettings, refuseTuneOn, saveSettings, setSetting, SettingsError, type Settings } from "../settings.ts";
 import type { CliIO } from "./run.ts";
 
 export const CONFIG_USAGE = `Usage: rlmh config list
@@ -37,6 +38,7 @@ export async function configCommand(argv: string[], io: Pick<CliIO, "stdout" | "
       io.stdout.write(`${getSetting(settings, rest[0]!)}\n`);
     } else {
       const [key, value] = rest as [string, string];
+      refuseTuneOn(key, value); // tune.enabled turns on only through /tune on (D-231)
       const next = setSetting(settings, key, value); // coerces the string to the key's type
       saveSettings(io.home, next);
       io.stdout.write(`${key} = ${getSetting(next, key)}\n`);

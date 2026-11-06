@@ -3,7 +3,8 @@
 // (step 6) and `/tune` (step 9). It prepares every environment before the first run, probes the GPU
 // only when a selected task needs one (D-223), then runs a pool on one Session as `rlmh batch` does:
 // nobody is asked anything, and every grade line is written as soon as its run is graded. A CostCap
-// stops it at `maxUsd` of billed cost (D-193).
+// stops it at `maxUsd` of billed cost (D-193). Its inline form (v1 step 9) runs in-memory tasks for `/tune`:
+// no set, no grading, no ledger line, each repo run in a work copy the caller makes.
 
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -69,11 +70,24 @@ export class GpuMissing extends Error {
  * Sums the billed cost of every `call.end` on the bus (D-121, D-193). Once the total passes `maxUsd`, every
  * tracked run is cancelled exactly once, and so is any run tracked later; `capped` then stays true.
  */
+export interface CostCapOptions {
+  /**
+   * Count only the call.ends of runs this cap has tracked (v1 step 9): the interactive app's bus also carries the
+   * user's own runs, which `/tune`'s cap must not count. A call.end that comes before its run is tracked is held
+   * and counted when it is.
+   */
+  trackedOnly?: boolean;
+  /** Called with the new total after each counted call.end. */
+  onCost?: (total: number) => void;
+}
+
 export class CostCap {
   total = 0;
   capped = false;
   private readonly running = new Set<string>();
   private readonly cancelled = new Set<string>();
+  private readonly seen = new Set<string>();
+  private readonly held = new Map<string, number>();
   private readonly off: () => void;
 
   constructor(
@@ -82,19 +96,37 @@ export class CostCap {
     private readonly cancel: (runId: string) => void,
     /** Called once when the cap trips, before the cancels: the pool stops starting tasks. */
     private readonly onCap: () => void = () => {},
+    private readonly opts: CostCapOptions = {},
   ) {
     this.off = bus.on("call.end", (c) => {
-      this.total += c.usage.cost_usd;
-      if (!this.capped && this.maxUsd !== null && this.total > this.maxUsd) {
-        this.capped = true;
-        this.onCap();
-        for (const id of this.running) this.cancelOnce(id);
+      if (this.opts.trackedOnly && !this.seen.has(c.run_id)) {
+        this.held.set(c.run_id, (this.held.get(c.run_id) ?? 0) + c.usage.cost_usd);
+        return;
       }
+      this.add(c.usage.cost_usd);
     });
+  }
+
+  private add(usd: number): void {
+    this.total += usd;
+    this.opts.onCost?.(this.total);
+    if (!this.capped && this.maxUsd !== null && this.total > this.maxUsd) {
+      this.capped = true;
+      this.onCap();
+      for (const id of this.running) this.cancelOnce(id);
+    }
   }
 
   track(runId: string): void {
     this.running.add(runId);
+    if (this.opts.trackedOnly && !this.seen.has(runId)) {
+      this.seen.add(runId);
+      const held = this.held.get(runId);
+      if (held !== undefined) {
+        this.held.delete(runId);
+        this.add(held);
+      }
+    }
     if (this.capped) this.cancelOnce(runId);
   }
 
@@ -123,11 +155,12 @@ export function evalEngineEnv(home: string, o: { backend?: Backend | null; brows
 }
 
 const two = (n: number) => String(n).padStart(2, "0");
+/** `YYYYMMDD-HHMMSS` in local time. */
+const stampOf = (d: Date) => `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
 
 /** `<manifest.name>-<split>-<YYYYMMDD-HHMMSS>`, in local time (D-192). It is also the batch name and the work folder. */
 export function evalId(set: EvalSet, split: string, now: Date = new Date()): string {
-  const stamp = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
-  return `${set.manifest.name.replace(/[^A-Za-z0-9._-]/g, "_")}-${split}-${stamp}`;
+  return `${set.manifest.name.replace(/[^A-Za-z0-9._-]/g, "_")}-${split}-${stampOf(now)}`;
 }
 
 export interface EvalOptions {
@@ -242,8 +275,233 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+/**
+ * One task held in memory rather than in an eval set (v1 step 9, `/tune`): a user's own question or repo task,
+ * run as it was asked, with nothing to grade.
+ */
+export interface InlineTask {
+  /** The run's tag (`tune:<id>:<stage>` for `/tune`, D-231); it also names the run in the result. */
+  tag: string;
+  mode: "read" | "repo";
+  question?: string;
+  /** Read mode: absolute input paths. */
+  inputs?: string[];
+  task?: string;
+  testHint?: string;
+  /**
+   * Repo mode: makes the folder the run works in (a `/tune` work copy), just before run.start. `after` runs once
+   * the run has finished (null: it never started, or the engine exited) and before `remove`, which always runs.
+   */
+  workCopy?: () => Promise<InlineCopy>;
+}
+
+export interface InlineCopy {
+  repoPath: string;
+  after?: (f: RunFinishedParams | null) => Promise<void>;
+  remove(): Promise<void>;
+}
+
+/**
+ * runEval over in-memory tasks (v1 step 9): run one after another on the given session, never graded and never in
+ * the ledger. `out` gets eval.json only; each run's record is in `logDir`'s runs.jsonl, so /runs lists it.
+ */
+export interface InlineEvalOptions {
+  home: string;
+  inline: InlineTask[];
+  root: ModelRef;
+  sub?: ModelRef;
+  profile: string;
+  callFormat?: string;
+  out: string;
+  /** Where the runs' runs.jsonl goes; default `out`. */
+  logDir?: string;
+  /** null: no cap of the eval's own. */
+  maxUsd: number | null;
+  /** Default: `inline-<YYYYMMDD-HHMMSS>`. */
+  id?: string;
+  /** The runs' batch; default the id. */
+  batch?: string;
+  /** The permission mode every run gets (the user's next-run mode for `/tune`). */
+  permissionMode: string;
+  /** Default false: nothing asks, and anything that would is denied (D-15). */
+  interactive?: boolean;
+  /** The session's bus also carries other runs (the interactive app's): the cap and the cost count only this eval's runs. */
+  sharedBus?: boolean;
+  /** Called with each run's id as soon as it starts; returns an untrack (an outer cap, such as `/tune`'s). */
+  track?: (runId: string) => () => void;
+  /** Extra eval.json keys. */
+  meta?: Record<string, unknown>;
+  say?: (line: string) => void;
+  /** Each run's result, as it ends. */
+  onRun?: (r: InlineRun) => void;
+}
+
+export interface InlineRun {
+  tag: string;
+  run_id: string | null;
+  /** The run's run.finished; null when it never started or the engine exited first. */
+  finished: RunFinishedParams | null;
+  /** Its run-log record, read from `logDir`; null when missing. */
+  record: Record<string, unknown> | null;
+  /** null, the engine's kind, "capped" (cancelled by the cap), an account kind that stopped an earlier run, or "host_bug". */
+  infra_kind: string | null;
+  submitted: boolean;
+  cost_usd: number;
+  /** Why it failed to prepare or start, or null. */
+  error: string | null;
+}
+
+export interface InlineResult {
+  id: string;
+  out: string;
+  runs: InlineRun[];
+  capped: boolean;
+  /** D-257: the account kind a run ended with, which stopped the rest; null when none did. */
+  account_stop: string | null;
+  cost_usd: number;
+  engineExit: AppEvents["engine.exit"] | undefined;
+}
+
+/** Runs in-memory tasks (InlineEvalOptions), one after another; never graded. */
+export function runEval(o: InlineEvalOptions, deps?: EvalDeps): Promise<InlineResult>;
 /** Runs and grades `tasks`. Throws GpuMissing or ProbeError before anything is spent. */
-export async function runEval(o: EvalOptions, deps: EvalDeps = {}): Promise<EvalResult> {
+export function runEval(o: EvalOptions, deps?: EvalDeps): Promise<EvalResult>;
+export function runEval(o: EvalOptions | InlineEvalOptions, deps: EvalDeps = {}): Promise<EvalResult | InlineResult> {
+  return "inline" in o ? runInline(o, deps) : runSet(o, deps);
+}
+
+async function runInline(o: InlineEvalOptions, deps: EvalDeps): Promise<InlineResult> {
+  const now = deps.now ?? (() => new Date());
+  const started = now();
+  const id = o.id ?? `inline-${stampOf(started)}`;
+  const out = resolve(o.out);
+  const logDir = resolve(o.logDir ?? out);
+  const say = o.say ?? (() => {});
+  mkdirSync(out, { recursive: true });
+  mkdirSync(logDir, { recursive: true });
+  const session: EvalSession = deps.session ?? (await Session.open({ home: o.home, approvals: DENY }));
+  const watcher = new RunWatcher(session.bus);
+  const batch = o.batch ?? id;
+  const evalJson: Record<string, unknown> = {
+    id,
+    inline: true,
+    tags: o.inline.map((t) => t.tag),
+    root: o.root,
+    sub: o.sub ?? null,
+    profile: o.profile,
+    call_format: o.callFormat ?? null,
+    batch,
+    permission_mode: o.permissionMode,
+    interactive: o.interactive ?? false,
+    harness_version: APP_VERSION,
+    cap: o.maxUsd,
+    capped: false,
+    account_stop: null,
+    started: started.toISOString(),
+    finished: null,
+    ...o.meta,
+  };
+  writeJson(join(out, "eval.json"), evalJson);
+  const cancel = (runId: string) => void session.cancel(runId).catch(() => {});
+  const cap = new CostCap(session.bus, o.maxUsd, cancel, () => say(`the cost passed the cap ($${o.maxUsd}): the running run is cancelled`), {
+    trackedOnly: o.sharedBus ?? false,
+  });
+  const runs: InlineRun[] = [];
+  let accountStop: string | null = null;
+  const blank = (t: InlineTask, infra: string | null, error: string | null = null): InlineRun => ({
+    tag: t.tag,
+    run_id: null,
+    finished: null,
+    record: null,
+    infra_kind: infra,
+    submitted: false,
+    cost_usd: 0,
+    error,
+  });
+  const push = (r: InlineRun) => {
+    runs.push(r);
+    o.onRun?.(r);
+  };
+  const runOne = async (t: InlineTask): Promise<void> => {
+    const shared = {
+      root: o.root,
+      ...(o.sub !== undefined ? { sub: o.sub } : {}),
+      profile: o.profile,
+      ...(o.callFormat !== undefined ? { callFormat: o.callFormat } : {}),
+      permissionMode: o.permissionMode,
+      interactive: o.interactive ?? false,
+      conversation: false,
+      batch,
+      logDir,
+      tag: t.tag,
+    };
+    let copy: InlineCopy | undefined;
+    let f: RunFinishedParams | null = null;
+    try {
+      let request: StartRun;
+      if (t.mode === "read") {
+        request = { ...shared, mode: "read", ...(t.question !== undefined ? { question: t.question } : {}), inputs: t.inputs ?? [] };
+      } else {
+        try {
+          copy = await t.workCopy?.();
+        } catch (err) {
+          return push(blank(t, "host_bug", `the work copy could not be made: ${message(err)}`));
+        }
+        request = {
+          ...shared,
+          mode: "repo",
+          ...(t.task !== undefined ? { task: t.task } : {}),
+          ...(copy ? { repoPath: copy.repoPath } : {}),
+          ...(t.testHint !== undefined ? { testHint: t.testHint } : {}),
+        };
+      }
+      let runId: string;
+      try {
+        ({ run_id: runId } = await session.start(request));
+      } catch (err) {
+        return push(blank(t, watcher.exit ? "other" : "host_bug", `run.start failed: ${message(err)}`));
+      }
+      cap.track(runId);
+      const untrack = o.track?.(runId) ?? (() => {});
+      try {
+        f = await watcher.finished(runId);
+      } finally {
+        untrack();
+        cap.untrack(runId);
+      }
+      if (f === null) return push({ ...blank(t, "other", "the engine exited before the run finished"), run_id: runId });
+      let infra = f.infra_error === null ? null : (f.infra_kind ?? "other");
+      if (infra === "cancelled" && cap.capped) infra = "capped";
+      push({ tag: t.tag, run_id: runId, finished: f, record: readRecord(logDir, runId), infra_kind: infra, submitted: f.submitted, cost_usd: f.cost_usd, error: null });
+      if (infra !== null && ACCOUNT.includes(infra) && accountStop === null) {
+        accountStop = infra;
+        say(accountStopMessage(infra, "no later run starts"));
+      }
+    } finally {
+      if (copy !== undefined) {
+        try {
+          await copy.after?.(f);
+        } finally {
+          await copy.remove();
+        }
+      }
+    }
+  };
+  try {
+    for (const t of o.inline) {
+      if (cap.capped || accountStop !== null || watcher.exit) push(blank(t, watcher.exit ? "other" : cap.capped ? "capped" : accountStop));
+      else await runOne(t);
+    }
+  } finally {
+    watcher.dispose();
+    cap.dispose();
+    if (deps.session === undefined) await session.close().catch(() => {});
+    writeJson(join(out, "eval.json"), { ...evalJson, capped: cap.capped, account_stop: accountStop, cost_usd: Math.round(cap.total * 1e6) / 1e6, finished: now().toISOString() });
+  }
+  return { id, out, runs, capped: cap.capped, account_stop: accountStop, cost_usd: Math.round(cap.total * 1e6) / 1e6, engineExit: watcher.exit };
+}
+
+async function runSet(o: EvalOptions, deps: EvalDeps = {}): Promise<EvalResult> {
   const now = deps.now ?? (() => new Date());
   const id = o.id ?? evalId(o.set, o.split, now());
   const out = resolve(o.out);

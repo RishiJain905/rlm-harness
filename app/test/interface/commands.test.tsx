@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { requestChars } from "../../src/gateway/usage.ts";
 import { COMMANDS } from "../../src/interface/commands/index.ts";
 import { settingRows } from "../../src/interface/commands/settings.tsx";
-import { contextBreakdown, viewFromRecord } from "../../src/interface/store.ts";
+import { applySetting, contextBreakdown, viewFromRecord } from "../../src/interface/store.ts";
 import { runsDir, settingsPath } from "../../src/paths.ts";
 import { PROVIDERS } from "../../src/gateway/providers.ts";
 import { followUpLine } from "../../src/interface/Transcript.tsx";
@@ -111,6 +111,70 @@ describe("slash commands", () => {
     await m.waitForText("The sub-call model is now the root model.");
     saved = loadSettings(app.deps.home);
     expect(saved.sub.model).toBe("");
+  });
+
+  test("(2b) /model's tuning row: same as root by default, a picked model writes tune.model, same as root empties it (D-232)", async () => {
+    const { app, m } = await open();
+    const fakeAt = PROVIDERS.findIndex((p) => p.id === "fake");
+    let screen = await command(m, "model");
+    expect(screen).toContain("root   fake/scripted   thinking default");
+    expect(screen).toContain("sub    same as root   thinking default");
+    expect(screen).toMatch(/tuning +same as root/);
+    await downs(m, 2);
+    await m.press(KEYS.enter);
+    screen = await m.waitForText("Provider for tuning");
+    expect(screen.indexOf("same as root")).toBeLessThan(screen.indexOf("anthropic")); // "same as root" is first
+    await downs(m, fakeAt + 1); // past "same as root"
+    await m.press(KEYS.enter);
+    await m.waitForText("Model for tuning from fake");
+    await m.press(KEYS.enter); // no thinking step: tune.model has no thinking setting
+    await m.waitForText("tuning is fake/scripted.");
+    expect(loadSettings(app.deps.home).tune.model).toBe("fake/scripted");
+    expect(app.session.settings.tune.model).toBe("fake/scripted");
+    expect(loadSettings(app.deps.home).root).toEqual({ model: "fake/scripted", thinking: "default" }); // root untouched
+    await m.waitFor(() => /tuning +fake\/scripted/.test(m.screen()));
+
+    // back to "same as root", which writes an empty tune.model
+    await downs(m, 2);
+    await m.press(KEYS.enter);
+    await m.waitForText("Provider for tuning");
+    await m.press(KEYS.enter);
+    await m.waitForText("The tuning model is now the root model.");
+    expect(loadSettings(app.deps.home).tune.model).toBe("");
+    expect(readFileSync(settingsPath(app.deps.home), "utf8")).toContain('[tune]\nenabled = false\nmodel = ""');
+    await m.waitFor(() => /tuning +same as root/.test(m.screen()));
+  });
+
+  test("(3c) /settings: tune.enabled can't be turned on here; tune.max_usd is edited like an int", async () => {
+    const { app, m } = await open({ size: { columns: 120, rows: 40 } });
+    const rows = settingRows();
+    const at = (key: string) => rows.findIndex((r) => r.key === key);
+    await command(m, "settings");
+    await downs(m, at("tune.enabled"));
+    const before = readFileSync(settingsPath(app.deps.home), "utf8");
+    await m.press(" ");
+    await m.waitForText("Use /tune on, which shows the cost first");
+    expect(readFileSync(settingsPath(app.deps.home), "utf8")).toBe(before);
+    expect(app.session.settings.tune.enabled).toBe(false);
+
+    // false is accepted anywhere: on from elsewhere (as /tune on would), then Space turns it off
+    applySetting(app.deps, "tune.enabled", true);
+    await m.press(KEYS.down);
+    await m.press(KEYS.up);
+    await m.press(" ");
+    await m.waitFor(() => loadSettings(app.deps.home).tune.enabled === false);
+
+    await downs(m, at("tune.max_usd") - at("tune.enabled"));
+    await m.press(KEYS.enter);
+    await m.press(KEYS.backspace);
+    await m.type("0");
+    await m.press(KEYS.enter);
+    await m.waitForText("tune.max_usd must be a number above 0");
+    await m.press(KEYS.backspace);
+    await m.type("2.5");
+    await m.press(KEYS.enter);
+    await m.waitFor(() => loadSettings(app.deps.home).tune.max_usd === 2.5);
+    await m.waitForText("2.5");
   });
 
   test("(3) /settings: rows, an enum, a bool, a bad int and a reset", async () => {

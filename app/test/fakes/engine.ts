@@ -7,13 +7,17 @@
 // engine side only runs the code it gets back, through a small reader of the few Python shapes the
 // scenarios use (llm, llm_batch, shell, open(..., "w"), fetch, print, submit).
 //
+// v1 step 9: engine.info also lists every profile under `<home>/profiles/` (the built-ins' folders are real ones in
+// the fake's temp folder), run.start accepts them, profile.check answers (`ok: false` for a guidance with INVALID),
+// and `createFakeApp({tune: {stages}})` plays `/tune`'s stage runs from a script and writes every run's record.
+//
 // `scriptedBus` covers what the fake provider can't produce (reasoning, a chosen error, a flood of deltas,
 // non-zero cost), and `runRecord` is a complete run-log record (§7.8) for /runs and viewFromRecord.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { Bus } from "../../src/bus.ts";
 import { fetchInfo } from "../../src/engine.ts";
 import { Catalog } from "../../src/gateway/catalog.ts";
@@ -32,6 +36,7 @@ import {
   type ModelCompleteParams,
   type ModelCompleteResult,
   type ModelErrorData,
+  type ProfileCheckResult,
   type RunSayResult,
   type RunStartParams,
   type RunStartResult,
@@ -86,6 +91,30 @@ export interface FakeAppOptions {
   /** Extra variables for deps.env, the KeyStore and the Gateway. */
   env?: Record<string, string>;
   size?: { columns: number; rows: number };
+  /**
+   * v1 step 9: `/tune`'s stages. A run whose tag is `tune:<id>:<stage>` with a script here doesn't reach the fake
+   * provider: it runs the stage's `code` cell (if any, so approvals are asked or denied as usual), emits one call.end
+   * on the bus carrying `costUsd`, writes `exit.txt` (`<exit>\n`) into a repo run's folder when `exit` is given (its
+   * record's diff adds that file), and finishes with the stage's answer (a string as it is, anything else as JSON),
+   * or with `infra`. With `tune` given, every run (the user's own too) also writes a run-log record.
+   */
+  tune?: { stages?: Record<string, TuneStageScript> };
+}
+
+export interface TuneStageScript {
+  answer?: unknown;
+  /** One answer per call of this stage, the last repeated (a retried session). */
+  answers?: unknown[];
+  costUsd?: number;
+  /** One cost per call of this stage, the last repeated; in place of costUsd. */
+  costsUsd?: number[];
+  exit?: number;
+  /** One cell to run first, through the fake's cell reader (shell, open, fetch, print, …). */
+  code?: string;
+  /** End with this infra kind instead of an answer (no_credit, …). */
+  infra?: string;
+  /** Before the cost lands; default 5 ms. */
+  delayMs?: number;
 }
 
 // -- the scenarios' fake-provider scripts (§7.5) --
@@ -252,6 +281,73 @@ const PROFILES: EngineInfo["profiles"] = [
   { name: "training-v4", source: "builtin", prompt_hash: CONTRACT_HASH, profile_hash: sha("profile training-v4"), agent_api: false, limits: limitsOf({ read: 20, repo: 30 }, 4096), path: "/fake/profiles/training-v4", contract: "v4" },
 ];
 
+/** The built-ins' folders, which the fake writes into its temp folder so tuner code can read and copy them (v1 step 9). */
+const BUILTIN_FILES: Record<string, Record<string, string>> = {
+  default: {
+    "profile.toml": 'contract = "rlmh-1"\ncache_api = true\nagent_api = true\n\n[read]\nmax_turns = 50\n\n[repo]\nmax_turns = 150\n',
+    "guidance.md": "Read the input with code, and delegate reading to llm().\n",
+    "system.md": "You are the fake rlmh-1 system prompt. {shell}\n",
+  },
+  "training-v4": {
+    "profile.toml": 'contract = "v4"\n\n[read]\nmax_turns = 20\n\n[repo]\nmax_turns = 30\n',
+    "guidance.md": "Training's guidance.\n",
+  },
+};
+
+/** Every file under `dir`, as `/` paths relative to it, sorted; `__pycache__` left out. */
+function filesUnder(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.name === "__pycache__") continue;
+      const full = join(d, e.name);
+      if (e.isDirectory()) walk(full);
+      else out.push(relative(dir, full).split(sep).join("/"));
+    }
+  };
+  if (existsSync(dir)) walk(dir);
+  return out.sort();
+}
+
+/** A profile folder's fake hash: its files in sorted order, each as path, NUL, bytes, NUL. */
+function folderHash(dir: string): string {
+  return sha(filesUnder(dir).map((f) => `${f}\0${readFileSync(join(dir, ...f.split("/")), "utf8")}\0`).join(""));
+}
+
+/** `<table>.<key>` to its value text, for the simple TOML the profiles use. */
+function tomlKeys(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let table = "";
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    const t = /^\[([^\]]+)\]$/.exec(line);
+    if (t) table = t[1]!.trim();
+    const kv = /^([A-Za-z0-9_-]+)\s*=\s*(.*?)\s*(#.*)?$/.exec(line);
+    if (kv) out.set(table === "" ? kv[1]! : `${table}.${kv[1]}`, kv[2]!);
+  }
+  return out;
+}
+
+/** What profile.check's `changed` lists (the dotted keys, then guidance, system and the other files), the fake's way. */
+function changedKeys(base: string, cand: string): string[] {
+  const read = (dir: string, f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : null);
+  const a = tomlKeys(read(base, "profile.toml") ?? "");
+  const b = tomlKeys(read(cand, "profile.toml") ?? "");
+  const keys = [...new Set([...a.keys(), ...b.keys()])].filter((k) => a.get(k) !== b.get(k)).sort();
+  if (read(base, "guidance.md") !== read(cand, "guidance.md")) keys.push("guidance");
+  if (read(base, "system.md") !== read(cand, "system.md")) keys.push("system");
+  const skip = new Set(["profile.toml", "guidance.md", "system.md"]);
+  const files = [...new Set([...filesUnder(base), ...filesUnder(cand)])].filter((f) => !skip.has(f)).sort();
+  for (const f of files) if (read(base, f) !== read(cand, f)) keys.push(f);
+  return keys;
+}
+
+/** A `git diff`-shaped patch that adds one file, as a repo run's record carries it. */
+function newFileDiff(path: string, text: string): string {
+  const lines = text.endsWith("\n") ? text.slice(0, -1).split("\n") : text.split("\n");
+  return [`diff --git a/${path} b/${path}`, "new file mode 100644", "--- /dev/null", `+++ b/${path}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`), ""].join("\n");
+}
+
 /** The fixed run.vars answer while a run is active. */
 export const FAKE_VARS: VarInfo[] = [
   { name: "outs", type: "list", len: 20, chars: 412 },
@@ -356,6 +452,10 @@ interface RunState {
   vars: Map<string, string | string[]>;
   remembered: Set<string>;
   infra: { kind: string; error: string } | null;
+  /** v1 step 9 (`tune` given): what the record says. */
+  diff: string | null;
+  startedEpoch: number;
+  cells: { turn: number; code: string; stdout: string; error: string | null }[];
 }
 
 interface CellResult {
@@ -388,12 +488,21 @@ class EngineSide {
   private readonly runs = new Map<string, RunState>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private nextRun = 0;
+  private readonly stageCalls = new Map<string, number>();
 
   constructor(
     private readonly link: Link,
     private readonly home: string,
     private readonly scenario: Scenario,
+    /** v1 step 9: the built-ins' folders, `/tune`'s stage scripts, and how a stage's cost reaches the bus. */
+    private readonly extra: { builtinDir: string; tune?: { stages?: Record<string, TuneStageScript> }; onCost: (runId: string, usd: number) => void },
   ) {
+    for (const [name, files] of Object.entries(BUILTIN_FILES)) {
+      for (const [f, text] of Object.entries(files)) {
+        mkdirSync(join(extra.builtinDir, name), { recursive: true });
+        writeFileSync(join(extra.builtinDir, name, f), text);
+      }
+    }
     link.handle("engine.info", async (p) => {
       this.calls.push({ method: "engine.info", params: p });
       const info: EngineInfo = {
@@ -403,9 +512,20 @@ class EngineSide {
         contract: "v4",
         contract_hash: CONTRACT_HASH,
         training_hash: CONTRACT_HASH,
-        profiles: PROFILES.map((x) => ({ ...x })),
+        profiles: this.profiles(),
       };
       return info;
+    });
+    link.handle("profile.check", async (p: { path: string; base: string | null; gated?: boolean }) => {
+      this.calls.push({ method: "profile.check", params: p });
+      const guidance = existsSync(join(p.path, "guidance.md")) ? readFileSync(join(p.path, "guidance.md"), "utf8") : "";
+      const fail = (error: string) => ({ ok: false, errors: [error], prompt_hash: null, profile_hash: null, changed: [] });
+      if (!existsSync(join(p.path, "profile.toml"))) return fail(`${p.path}: no profile.toml`);
+      if (guidance.includes("INVALID")) return fail("guidance.md: the fake profile.check refuses a guidance that says INVALID");
+      const base = p.base === null ? null : this.profiles().find((x) => x.name === p.base);
+      if (base === undefined) return fail(`unknown base profile ${JSON.stringify(p.base)}`);
+      const system = existsSync(join(p.path, "system.md")) ? readFileSync(join(p.path, "system.md"), "utf8") : "";
+      return { ok: true, errors: [], prompt_hash: sha(`${system}\0${guidance}`), profile_hash: folderHash(p.path), changed: base === null ? [] : changedKeys(base.path, p.path) };
     });
     link.handle("run.start", async (p: RunStartParams) => {
       this.calls.push({ method: "run.start", params: p });
@@ -474,6 +594,30 @@ class EngineSide {
     return [...this.runs.keys()];
   }
 
+  /** The built-ins (in the fake's own folders), then every folder under `<home>/profiles/` holding a profile.toml. */
+  profiles(): EngineInfo["profiles"] {
+    const out = PROFILES.map((x) => ({ ...x, path: join(this.extra.builtinDir, x.name) }));
+    const dir = join(this.home, "profiles");
+    if (!existsSync(dir)) return out;
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name);
+      if (!existsSync(join(path, "profile.toml")) || out.some((x) => x.name === name)) continue;
+      const toml = readFileSync(join(path, "profile.toml"), "utf8");
+      const rlmh1 = !/contract\s*=\s*"v4"/.test(toml);
+      out.push({
+        name,
+        source: "user",
+        prompt_hash: sha(`prompt ${name}`),
+        profile_hash: folderHash(path),
+        agent_api: rlmh1,
+        limits: limitsOf({ read: 50, repo: 150 }, 16384),
+        path,
+        contract: rlmh1 ? "rlmh-1" : "v4",
+      });
+    }
+    return out;
+  }
+
   private active(runId: unknown): RunState {
     const run = typeof runId === "string" ? this.runs.get(runId) : undefined;
     if (!run || run.finished) throw new RpcError(ErrorCode.UNKNOWN_RUN, `no run ${JSON.stringify(runId)} is going`);
@@ -506,8 +650,8 @@ class EngineSide {
   }
 
   private start(p: RunStartParams): RunStartResult {
-    if (!PROFILES.some((x) => x.name === p.profile)) {
-      throw new RpcError(ErrorCode.UNKNOWN_PROFILE, `unknown profile ${JSON.stringify(p.profile)}: known are default, training-v4`);
+    if (!this.profiles().some((x) => x.name === p.profile)) {
+      throw new RpcError(ErrorCode.UNKNOWN_PROFILE, `unknown profile ${JSON.stringify(p.profile)}: known are ${this.profiles().map((x) => x.name).join(", ")}`);
     }
     const repo = p.mode === "repo";
     const inputs = p.inputs ?? [];
@@ -545,6 +689,9 @@ class EngineSide {
       vars: new Map(),
       remembered: new Set(),
       infra: null,
+      diff: null,
+      startedEpoch: Date.now() / 1000,
+      cells: [],
     };
     this.runs.set(id, run);
     this.runId = id;
@@ -574,7 +721,49 @@ class EngineSide {
     if (!run.conversation || outcome.infra) return this.finish(run, outcome);
     run.lastSubmitted = outcome.submitted ?? false;
     run.waiting = true;
+    this.writeRecord(run, outcome);
     this.link.notify("run.finished", this.finishedParams(run, outcome, true)); // nothing is cancelled between prompts (D-203)
+  }
+
+  /** v1 step 9: with `tune` given, each prompt's record goes to the run's log before its run.finished, as the engine writes it. */
+  private writeRecord(run: RunState, outcome: { answer?: string | number | null; submitted?: boolean; infra?: { kind: string; error: string } | null }): void {
+    if (this.extra.tune === undefined) return;
+    const p = run.params;
+    const { root, sub } = run.usage;
+    const record = runRecord({
+      run_id: run.id,
+      tag: p.tag ?? null,
+      batch: p.batch ?? (p.log_dir ? basename(p.log_dir) : "interactive"),
+      profile: p.profile,
+      profile_hash: this.profiles().find((x) => x.name === p.profile)?.profile_hash ?? sha(p.profile),
+      mode: p.mode,
+      call_format: p.call_format,
+      root: p.root,
+      sub: p.sub,
+      permission_mode: p.permission_mode,
+      started_at: run.startedEpoch,
+      wall_s: Math.round(performance.now() - run.startedAt) / 1000,
+      question: p.mode === "read" ? (p.question ?? null) : null,
+      ...(p.mode === "repo" ? { task: p.task ?? null } : {}),
+      input: { chars: run.context.length, lines: 0, sha256: sha(run.context), files: (p.inputs ?? []).map((f) => f.replace(/\\/g, "/")) },
+      workspace: run.workspace,
+      messages: run.messages.length > 0 ? run.messages : [{ role: "system", content: FAKE_SYSTEM_PROMPT }],
+      turns: run.cells.map((c) => ({ turn: c.turn, reply: "", tool_call: null, reasoning: null, finish_reason: "tool_call", usage: zeroUsage(), code: c.code, stdout: c.stdout, stdout_chars: c.stdout.length, error: c.error, stderr: "", observation: null, restarted: false, crash: null, repo_changed: null })),
+      subcalls: [],
+      permissions: [],
+      submitted: outcome.submitted ?? false,
+      answer: outcome.answer ?? null,
+      usage: { root: { ...root }, sub: { ...sub } },
+      cost_usd: Math.round((root.cost_usd + sub.cost_usd) * 1e6) / 1e6,
+      diff: p.mode === "repo" ? (run.diff ?? "") : null,
+      infra_error: outcome.infra?.error ?? null,
+      infra_kind: outcome.infra?.kind ?? null,
+      window: p.window ?? { context_window: 0, max_output: 0 },
+      prompt_index: run.promptIndex,
+      conversation: p.conversation === true,
+    });
+    mkdirSync(dirname(run.logPath), { recursive: true });
+    appendFileSync(run.logPath, `${JSON.stringify(record)}\n`);
   }
 
   private finish(run: RunState, outcome: { answer?: string | number | null; submitted?: boolean; infra?: { kind: string; error: string } | null }): void {
@@ -582,6 +771,7 @@ class EngineSide {
     run.finished = true;
     run.waiting = false;
     run.ac.abort();
+    this.writeRecord(run, outcome);
     this.link.notify("model.cancel", { run_id: run.id }); // D-84: at the end of every run, before run.finished
     this.link.notify("run.finished", this.finishedParams(run, outcome, false));
     // a run asked to be a conversation that ends here sends run.closed last, as the engine does after an infra error
@@ -638,6 +828,9 @@ class EngineSide {
       compaction: p.profile === "training-v4" ? null : this.scenario === "compacting" ? { ...FAKE_COMPACT_PLAN } : defaultPlan(p.window),
       conversation: p.conversation === true,
     });
+    const stage = /^tune:[^:]+:(.+)$/.exec(p.tag ?? "")?.[1];
+    const script = stage === undefined ? undefined : this.extra.tune?.stages?.[stage];
+    if (stage !== undefined && script !== undefined) return this.playStage(run, stage, script);
     if (this.scenario === "hold") return; // nothing more until run.cancel
 
     const first = repo
@@ -648,6 +841,53 @@ class EngineSide {
       { role: "user", content: first },
     ];
     await this.turns(run);
+  }
+
+  /** v1 step 9: a `/tune` stage's run, as `tune.stages[stage]` scripts it (see FakeAppOptions.tune). */
+  private async playStage(run: RunState, stage: string, s: TuneStageScript): Promise<void> {
+    const p = run.params;
+    const n = this.stageCalls.get(stage) ?? 0;
+    this.stageCalls.set(stage, n + 1);
+    const answer = s.answers !== undefined && s.answers.length > 0 ? s.answers[Math.min(n, s.answers.length - 1)] : s.answer;
+    const wait = (ms: number) =>
+      new Promise<void>((done) => {
+        const timer = setTimeout(() => {
+          this.timers.delete(timer);
+          done();
+        }, ms);
+        this.timers.add(timer);
+      });
+    run.messages = [
+      { role: "system", content: FAKE_SYSTEM_PROMPT },
+      { role: "user", content: p.mode === "repo" ? `Task: ${p.task}` : `Question: ${p.question ?? ""}` },
+    ];
+    try {
+      if (s.code !== undefined) {
+        run.turns = 1;
+        const r = await this.cell(run, 1, s.code);
+        this.check(run);
+        run.cells.push({ turn: 1, code: s.code, stdout: r.output, error: r.error });
+        this.event(run, "run.cell", { turn: 1, code: s.code, output: r.output, error: r.error, observation: null, seconds: 0, restarted: false, crash: null, repo_changed: p.mode === "repo" ? false : null });
+      }
+      await wait(s.delayMs ?? 5);
+      this.check(run);
+      const cost = s.costsUsd !== undefined && s.costsUsd.length > 0 ? s.costsUsd[Math.min(n, s.costsUsd.length - 1)]! : (s.costUsd ?? 0);
+      if (cost > 0) {
+        run.usage.root.cost_usd += cost;
+        this.extra.onCost(run.id, cost);
+      }
+      await wait(10); // a cap's run.cancel lands first
+      this.check(run);
+      if (p.mode === "repo" && s.exit !== undefined) {
+        writeFileSync(join(run.workspace, "exit.txt"), `${s.exit}\n`);
+        run.diff = newFileDiff("exit.txt", `${s.exit}\n`);
+      }
+      if (s.infra !== undefined) return this.finish(run, { infra: { kind: s.infra, error: `${s.infra}: the fake stage script ended the run` } });
+      this.endPrompt(run, { answer: answer === undefined ? null : typeof answer === "string" ? answer : JSON.stringify(answer), submitted: answer !== undefined });
+    } catch (err) {
+      if (run.finished || err instanceof Stopped) return;
+      this.finish(run, { infra: { kind: "host_bug", error: `host error: ${String(err)}` } });
+    }
   }
 
   /** Follow-up `run.promptIndex` (v1 step 4): the previous prompt closed with its note, the question, then the turns. */
@@ -1134,7 +1374,18 @@ export async function createFakeApp(opts: FakeAppOptions = {}): Promise<FakeApp>
   const toApp = pipe();
   const appLink = new Link(toApp.readable, toEngine.writer);
   const engineLink = new Link(toEngine.readable, toApp.writer, { idPrefix: "e" });
-  const engineSide = new EngineSide(engineLink, home, scenario);
+  const engineSide = new EngineSide(engineLink, home, scenario, {
+    builtinDir: join(dir, "builtin"),
+    ...(opts.tune !== undefined ? { tune: opts.tune } : {}),
+    onCost: (runId, usd) =>
+      bus.emit("call.end", {
+        call_id: `${runId}-tune-${Math.random().toString(36).slice(2, 8)}`,
+        run_id: runId,
+        usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: usd },
+        finish_reason: "stop",
+        seconds: 0,
+      }),
+  });
 
   // the app side: exactly what Session.open wires (§7.3)
   appLink.handle("model.complete", async (p: ModelCompleteParams, { signal }) => {
@@ -1206,6 +1457,9 @@ export async function createFakeApp(opts: FakeAppOptions = {}): Promise<FakeApp>
       } catch (err) {
         if (!(err instanceof RpcError && err.code === ErrorCode.UNKNOWN_RUN)) throw err;
       }
+    },
+    checkProfile(path: string, base: string | null, gated = false): Promise<ProfileCheckResult> {
+      return appLink.request<ProfileCheckResult>("profile.check", { path: resolve(path), base, gated });
     },
     async close(): Promise<void> {
       if (closed) return;

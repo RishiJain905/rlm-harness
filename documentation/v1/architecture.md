@@ -86,7 +86,7 @@ rlm-harness/
     cli/eval.ts                      2          rlmh eval, eval report, eval compare, eval ledger
     cli/tune.ts                      6          rlmh tune, with --gated and --gpu (D-254)
     cli/config.ts                    +9         refuses `config set tune.enabled true` (§7.6)
-    eval/runner.ts                   2 +6 +9    runEval(): the one entry point for rlmh eval, rlmh tune and /tune; logDir (2), ledger: false (6), /tune's options (9)
+    eval/runner.ts                   2 +6 +9    runEval(): the one entry point for rlmh eval, rlmh tune and /tune; logDir (2), ledger: false (6), its inline form for /tune (9); CostCap (trackedOnly, 9)
     eval/set.ts                      2          read and check a set folder (§6)
     eval/tar.ts                      2          a small ustar reader, the same on every OS; refuses links and path escapes
     eval/work.ts                     2          throwaway work copies and per-repo venvs
@@ -562,6 +562,7 @@ This is Harness²'s own setting, at k = 1, run over the stream of the user's rea
 - **Cost first.** `/tune on` shows the estimate per task, for read and for repo: up to 3 runs at the median cost of the user's last 20 runs in that mode with the root model, plus 4 sessions (3 with the library off) at the median cost of earlier `/tune` sessions on `tune.model`, each falling back to §6.6's figures (D-221, D-231, D-232). The screen says that the runs, on the root model, are most of the cost. It turns on only after an explicit yes.
 - **The cap.** `tune.max_usd` counts every `/tune` run and session since `/tune on`; the user's own runs don't count. `<home>/tune/online.json` holds `on_since`, and the spend is summed from the `tune-*` run logs since then, so it survives a restart. When the cap trips, the tune in flight is cancelled, `tune.enabled` turns itself off, and the transcript says so. While tuning is on, the status line shows `tune on` and the spend against the cap.
 - **Runs.** Every `/tune` run and session is a normal run with `conversation: false`, `interactive: false` and a `tag` of `tune:<id>:<stage>`, logged under `<home>/runs/tune-<id>/`, so `/runs` shows them. `<id>` is `t_<YYYYMMDD-HHMMSS>`, one per tuned task.
+- **runEval's inline form** (step 9). `runEval({inline: InlineTask[], …})` runs in-memory tasks (`{tag, mode, question, inputs}` or `{tag, mode, task, testHint, workCopy}`) one after another on the given session, with no set, no grading and no ledger line; `out` gets `eval.json` only. Its options are `permissionMode`, `interactive` (default false), `batch`, `logDir`, `sharedBus` (count only its own runs' cost, since the interactive app's bus carries the user's runs too) and `track` (an outer cap sees each run id); `workCopy()` makes a repo run's folder just before `run.start`, and its `after(f)` (the test) and `remove()` run once the run ends. It returns `InlineResult {runs: InlineRun[], capped, account_stop, cost_usd}`. `CostCap` gains `{trackedOnly, onCost}`. `tune/online.ts` drives it (`tuneTask`, `TuneQueue`, `estimateOnline`).
 
 ### 7.7 The experience library
 
@@ -600,7 +601,7 @@ Added to `SCHEMA` in `settings.ts`, in this order after v0's keys. `rlmh config 
   profiles/<name>/                  candidates from rlmh tune; tuned-* profiles from /tune (loaded since v0, D-144)
   tune/<tune id>/                   rlmh tune's default output (step 6); one tuned task's stages, evidence and tune.json (step 9)
   tune/online.json                  /tune's on_since, the start of what tune.max_usd counts (step 9)
-  tune/tuned.jsonl                  one line per tuned-* profile: name, base, task run id, changed (step 9)
+  tune/tuned.jsonl                  one line per tuned-* profile: {name, base, base_hash, profile_hash, run_id (the task's run), changed, at} (step 9)
   tune/snapshots/<id>/              copies of folders outside git, while their task waits or is tuned (step 9)
   tune/work/<id>/                   throwaway worktrees and copies for /tune's runs; leftovers are removed at start-up (step 9)
   library/<domain>/                 /tune's experience library (§7.7)

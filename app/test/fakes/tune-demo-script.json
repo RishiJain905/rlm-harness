@@ -1,0 +1,23 @@
+{
+  "root": [
+    {
+      "text": "Reading the input before answering.",
+      "tool_call": {
+        "code": "import json, os, pathlib, re\nctx = globals().get('context', '') or ''\nm = re.search(r'^stage: (\\w+)$', ctx, re.M)\nstage = m.group(1) if m else None\n\ndef part(name):\n    at = ctx.find(name + ' ===\\n')\n    if at < 0:\n        return ''\n    start = at + len(name) + 5\n    end = ctx.find('\\n\\n=== ', start)\n    return ctx[start:] if end < 0 else ctx[start:end]\n\ndomain = 'repo' if '(repo, the user' in ctx else 'read'\nif stage == 'inv':\n    guidance = part('harness/guidance.md').rstrip('\\n') + '\\nBefore you answer, say in one line what the input or folder holds.\\n'\n    ANSWER = json.dumps({'decision': 'EDIT', 'notes': ['the reference answered without saying what it read'], 'guidance': guidance, 'toml': {}, 'files': {}})\n    submit(ANSWER)\nelif stage == 'dom':\n    ANSWER = json.dumps({'decision': 'KEEP_BASE', 'notes': ['no practitioner gap in one task'], 'guidance': None, 'toml': {}, 'files': {}})\n    submit(ANSWER)\nelif stage == 'compose':\n    ANSWER = json.dumps({'decision': 'ADOPT', 'adopt': 'inv', 'notes': ['kept -> say what was read -> the inv probe did'], 'guidance': None, 'toml': {}, 'files': {}})\n    submit(ANSWER)\nelif stage == 'reflect':\n    ANSWER = json.dumps({'domain': domain, 'entry': {'cue': 'a question about what an input or folder holds', 'lesson': 'guidance.md: say what was read before answering', 'evidence': 'the inv probe', 'confidence': 'low'}, 'edits': [{'component': 'guidance.md', 'candidates': 'inv', 'change': 'one line on what was read', 'observed': 'the probe said it', 'verdict': 'no observed effect'}]})\n    submit(ANSWER)\nelif pathlib.Path('.git').is_file():\n    # a /tune work copy (a git worktree): make the change there, so the probe delivers a diff\n    pathlib.Path('TUNE_DEMO.md').write_text('Written by a /tune run in its throwaway worktree.\\n')\n    ANSWER = 'The folder holds ' + str(len(os.listdir('.'))) + ' entries; TUNE_DEMO.md was added.'\n    print(ANSWER)\nelif pathlib.Path('.git').is_dir():\n    # the user's own repo question: read the folder and change nothing, so git status stays as it was\n    ANSWER = 'The folder holds ' + str(len(os.listdir('.'))) + ' entries.'\n    print(ANSWER)\nelse:\n    ANSWER = 'The input has ' + str(len(ctx.splitlines())) + ' lines.'\n    print(ANSWER)\n"
+      }
+    },
+    {
+      "text": "That answers the question.",
+      "tool_call": {
+        "code": "submit(ANSWER)"
+      }
+    }
+  ],
+  "sub": [
+    {
+      "text": "unused"
+    }
+  ],
+  "chunk_chars": 6,
+  "delay_ms": 20
+}
