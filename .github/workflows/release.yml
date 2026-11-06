@@ -152,4 +152,6 @@ jobs:
     uses: ./.github/workflows/npm.yml # zizmor: ignore[self-repository] resolved from this commit by GitHub; actionlint 1.7.12 rejects $/
     with:
       tag: ${{ github.ref_name }}
-      publish: ${{ vars.NPM_PUBLISH == '1' }}
+      # D-263: a tag run packs and checks only. npm's trusted publisher is npm.yml, so a publish from
+      # here (the caller is release.yml) fails with ENEEDAUTH; publish with a dispatch of npm.yml.
+      publish: false

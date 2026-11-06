@@ -194,3 +194,5 @@ lmh.exe` with no `node`.
    - Add `npm.yml` the same way only when you plan to publish through a dispatch run.
    - Once a CI publish has worked, npm can be set to disallow token publishing.
 5. **Turn it on.** Set the repo variable `NPM_PUBLISH` to `1` (**Settings → Secrets and variables → Actions → Variables**), then push the tag. From then on each tag publishes after the `npm` environment's approval.
+
+**How it actually runs (D-263, since 1.0.0).** The packages' trusted publisher is `npm.yml`, not `release.yml`, so a tag run packs and checks only (`release.yml` passes `publish: false`). After the release is out, publish with a dispatch: `gh workflow run npm.yml --ref main -f tag=vX.Y.Z -f publish=true`, then approve the `npm` environment in that run. To let tag runs publish again, register `release.yml` on all five packages as in step 4 and set `publish:` in `release.yml` back to `${{ vars.NPM_PUBLISH == '1' }}`.
