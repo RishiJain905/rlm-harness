@@ -2,12 +2,12 @@ name: npm
 
 # D-130. Packs the npm packages from a GitHub release's assets (checked against its SHA256SUMS),
 # installs them from a local registry, and publishes them only when asked. release.yml calls it after
-# a tag's release (publishing only when the repo variable NPM_PUBLISH is 1); workflow_dispatch packs
-# an existing release and publishes only with publish: true. Publishing runs in the `npm`
-# environment, whose required reviewer approves each run, with npm trusted publishing (no token).
-# npm checks the calling workflow's name: tag runs need release.yml registered as each package's
-# trusted publisher (environment npm), dispatch runs need npm.yml. A new registration expires unless
-# it publishes within 2 days. Setup steps: documentation/v0/npm-install.md.
+# a tag's release to pack and check only (D-263); workflow_dispatch packs an existing release and
+# publishes only with publish: true, and that is how a release reaches npm. Publishing runs in the
+# `npm` environment, whose required reviewer approves each run, with npm trusted publishing (no token).
+# npm checks the calling workflow's name, and npm.yml is the registered trusted publisher of all five
+# packages (environment npm), so only a dispatch run can publish; a tag run would need release.yml
+# registered too. Setup steps: documentation/v0/npm-install.md.
 # The tag must hold npm/ and scripts/npm-pack.sh, and a binary whose findUv looks beside itself, so
 # v0.1.0 cannot be packed: npm starts at the next release.
 
