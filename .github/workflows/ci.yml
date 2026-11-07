@@ -275,3 +275,12 @@ jobs:
         run: node --test 'test/*.test.mjs'
       - name: Python tests
         run: uv run --locked --project engine python -m unittest discover -s dsh-plugin/test -p 'test_*.py' -v
+      # D-264 step 6: the cache guard runs the real dsh (pinned) against a fake OpenAI-compatible model server and
+      # checks every request is a byte-prefix extension of the last, with sub-calls on their own affinity key.
+      - name: Install DeepSeek Harness (pinned)
+        run: npm install -g @deepseek-ai/dsh@0.2.2-rc.1 --no-audit --no-fund # zizmor: ignore[adhoc-packages] an exact version, for the cache guard
+      - name: Cache guard (real dsh, fake model)
+        working-directory: dsh-plugin
+        env:
+          DSH_CLI: dsh
+        run: node test/e2e/cache-guard.mjs
