@@ -136,4 +136,17 @@ describe("diffProfiles, install and uninstall", () => {
     expect(existsSync(join(home, "profiles", "mine-r1-inv"))).toBe(false);
     expect(existsSync(join(home, "profiles", "users-own"))).toBe(true);
   });
+
+  test("SR-6: a name that is not one plain folder name (from a tune.json) is refused by install and uninstall", () => {
+    const home = join(t.dir, "home6");
+    const base = baseProfile(join(t.dir, "base6"));
+    mkdirSync(join(home, "profiles", "users-own"), { recursive: true });
+    writeFileSync(join(home, "settings.toml"), "profile = \"default\"\n");
+    for (const name of ["..", "../x", "a/b", ".hidden", "", "x".repeat(57)]) {
+      expect(() => installProfile(home, base, name), name).toThrow("not a profile name");
+      expect(() => uninstallProfiles(home, [name]), name).toThrow("not a profile name");
+    }
+    expect(existsSync(join(home, "profiles", "users-own"))).toBe(true);
+    expect(existsSync(join(home, "settings.toml"))).toBe(true);
+  });
 });

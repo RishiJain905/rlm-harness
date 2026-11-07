@@ -207,9 +207,17 @@ export async function diffProfiles(a: string, b: string): Promise<string> {
   throw new CandidateError(`git diff --no-index failed (exit ${code}): ${err.trim()}`);
 }
 
+/** The engine's profile name rule (profiles._NAME_RE): one plain folder name, so `<home>/profiles/<name>` never leaves profiles/ (SR-6). */
+const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,55}$/;
+
+function checkedName(name: string): string {
+  if (!PROFILE_NAME.test(name)) throw new CandidateError(`${JSON.stringify(name)} is not a profile name`);
+  return name;
+}
+
 /** Copies a candidate folder to <home>/profiles/<name>/; refuses an existing folder. Returns the target. */
 export function installProfile(home: string, from: string, name: string): string {
-  const target = join(profilesDir(home), name);
+  const target = join(profilesDir(home), checkedName(name));
   if (existsSync(target)) throw new CandidateError(`${target} already exists`);
   mkdirSync(profilesDir(home), { recursive: true });
   cpSync(from, target, { recursive: true });
@@ -218,5 +226,5 @@ export function installProfile(home: string, from: string, name: string): string
 
 /** Removes the profile folders a tune installed, and nothing else. */
 export function uninstallProfiles(home: string, names: Iterable<string>): void {
-  for (const name of names) rmSync(join(profilesDir(home), name), { recursive: true, force: true });
+  for (const name of names) rmSync(join(profilesDir(home), checkedName(name)), { recursive: true, force: true });
 }
