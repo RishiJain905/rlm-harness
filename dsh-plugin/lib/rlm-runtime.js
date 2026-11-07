@@ -90,9 +90,26 @@ export function pythonCandidates(config = {}, env = process.env) {
       if (typeof python === 'string') list.push(python)
     } catch {}
   }
+  // A Python uv manages (`uv python find` only looks; it never downloads).
+  const uv = uvPython(env)
+  if (uv) list.push(uv)
   list.push(...(win ? ['python', 'py'] : ['python3', 'python']))
   return list
 }
+
+/** The Python 3.12 uv already has, when uv is on PATH; undefined otherwise. Never downloads. */
+export function uvPython(env = process.env) {
+  try {
+    const r = spawnSync('uv', ['python', 'find', '3.12'], { encoding: 'utf8', timeout: 10_000, windowsHide: true, env: replEnv(env) })
+    const path = (r.stdout ?? '').trim().split(/\r?\n/).pop()
+    return r.status === 0 && path ? path : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** What the agent is told when no Python 3.10+ is found, so it can tell the user what to do. */
+export const NO_PYTHON = 'RLM mode needs Python 3.10 or later, and none was found on this computer. DeepSeek Harness desktop includes one, so installing the desktop app is the simplest fix; otherwise install Python 3.12 (python.org, or `uv python install 3.12`), then start a new session.'
 
 /** The first candidate that runs CPython 3.10 or later, with its version; undefined when none does. */
 export function findPython(config = {}, env = process.env) {
@@ -161,7 +178,7 @@ export default class RlmPythonRuntime extends PtcRuntime {
   async run(spec) {
     this.python ??= findPython(this.config) ?? null
     if (!this.python) {
-      return { logs: [], error: { kind: 'worker-exit', message: 'RLM mode needs Python 3.10 or later, and none was found. Install DeepSeek Harness desktop (it includes Python) or Python 3.12, then start a new session.' } }
+      return { logs: [], error: { kind: 'worker-exit', message: NO_PYTHON } }
     }
     const owner = spec.stateOwner
     let repl = owner ? this.procs.get(owner) : undefined

@@ -3,7 +3,7 @@
 // sub-calls go out as separate requests with their own affinity key.
 //
 // Run (needs a dsh CLI; no network, no real key):
-//   node test/e2e/cache-guard.mjs            from dsh-plugin/
+//   node test/e2e/cache-guard.mjs            from dsh-plugin/ (RLMH_DSH_PLUGIN=<.tgz> tests a packed install)
 // dsh is found as $DSH_CLI, else DeepSeek Harness desktop's CLI on Windows, else `dsh` on PATH.
 // It starts a fake OpenAI-compatible model server on 127.0.0.1, makes a throwaway DSH_HOME with a headless profile
 // that has this plugin installed and RLM mode's runtime and sub-call tool switched on, runs one scripted task, and
@@ -15,7 +15,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const PLUGIN = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+// What to install: $RLMH_DSH_PLUGIN (a packed .tgz, as users get it), else this checkout (linked).
+const PLUGIN = process.env.RLMH_DSH_PLUGIN || resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FAKE_KEY = 'sk-FAKE-cache-guard'
 
 function findDsh() {
