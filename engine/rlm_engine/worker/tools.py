@@ -5,7 +5,8 @@ signatures and docstrings, TOOLS_VERSION, ShellResult, namespace(), active() and
 changes, each required by the step 4 spec: configure() takes scratch, shell, alias, approve and remote_fetch;
 _abs maps the /work/repo alias onto the workspace; the paths the tools show and match use `/` on every OS;
 _git runs quietly (quiet(), read by the worker's audit hook) with no prompt, no fsmonitor, no repository hooks
-(D-165) and no console window; configure() also takes objects, the snapshot's object store when it is not the scratch folder's own (an rlm()
+(D-165) and no console window, as the git program and with the environment configure() found, so a cell cannot
+choose what runs quietly by changing PATH or os.environ (SR-1); configure() also takes objects, the snapshot's object store when it is not the scratch folder's own (an rlm()
 child's, D-160); shell() asks approve() first and runs the shell find_shell chose (sh, Git Bash or PowerShell);
 diff() compares against the engine's snapshot tree with a temporary index in the scratch folder; fetch()
 is new; and shell()'s processes stay the engine's to kill: on POSIX its process group is listed in
@@ -73,7 +74,7 @@ else:
     _NEW_GROUP = {"start_new_session": True}
 
 _config = {"root": REPO_DIR, "base": None, "time_left": None, "on_call": None, "scratch": None, "shell": SH,
-           "alias": REPO_DIR, "approve": None, "remote_fetch": None, "objects": None}
+           "alias": REPO_DIR, "approve": None, "remote_fetch": None, "objects": None, "git": None, "env": {}}
 _local = threading.local()
 
 
@@ -92,9 +93,12 @@ def configure(root: str = REPO_DIR, base: str | None = None, time_left=None, on_
     objects: the folder holding the base tree's objects, when it is not <scratch>/git-objects.
     """
     shell = SH if shell is None else {"kind": shell["kind"], "argv": list(shell["argv"])}
+    # The quiet git (_git) never asks, so which program it is and what environment it gets are fixed here, before
+    # any cell runs: a cell that changes PATH, GIT_EXEC_PATH or LD_PRELOAD cannot pick what the tools run (SR-1).
     _config.update(root=os.path.abspath(root), base=base, time_left=time_left, on_call=on_call,
                    scratch=os.path.abspath(scratch) if scratch else None, shell=shell, alias=alias, approve=approve,
-                   remote_fetch=remote_fetch, objects=os.path.abspath(objects) if objects else None)
+                   remote_fetch=remote_fetch, objects=os.path.abspath(objects) if objects else None,
+                   git=shutil.which("git"), env=dict(os.environ))
 
 
 def namespace() -> dict:
@@ -221,11 +225,13 @@ def _cut(line: str) -> str:
 
 
 def _git(args: list, cwd: str, env: dict | None = None, ok: tuple = (0,)) -> str:
-    if shutil.which("git") is None:
+    git = _config["git"]
+    if git is None:
         raise RuntimeError("git is not installed in this environment")
-    env = {**(os.environ if env is None else env), "GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1"}  # D-63
+    # the environment configure() saw, never the live os.environ a cell may have changed (SR-1)
+    env = {**(_config["env"] if env is None else env), "GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1"}  # D-63
     with _quiet():  # read-only git never asks (D-13); diff()'s writes go to the scratch folder
-        done = subprocess.run(["git", "-c", "safe.directory=*", "-c", "core.quotepath=off", "-c",
+        done = subprocess.run([git, "-c", "safe.directory=*", "-c", "core.quotepath=off", "-c",
                                "core.fsmonitor=false", "-c", "core.safecrlf=false", "-c", f"core.hooksPath={os.devnull}",
                                *args], cwd=cwd,
                               capture_output=True, env=env, stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
@@ -694,7 +700,7 @@ def diff() -> str:
                 shutil.copy2(real, index)  # keeps the index's mtime for git's racy-entry check (D-64)
             store = _config["objects"] or os.path.join(scratch or tmp, SNAPSHOT_OBJECTS)
             os.makedirs(store, exist_ok=True)
-            env = {k: v for k, v in os.environ.items() if k not in _GIT_STORE_VARS}
+            env = {k: v for k, v in _config["env"].items() if k not in _GIT_STORE_VARS}
             env.update(GIT_INDEX_FILE=index, GIT_OBJECT_DIRECTORY=store,
                        GIT_ALTERNATE_OBJECT_DIRECTORIES=os.path.normpath(os.path.join(root, objects)))
             env = _no_filters(root, env)
