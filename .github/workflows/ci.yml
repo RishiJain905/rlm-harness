@@ -278,7 +278,8 @@ jobs:
       # D-264 step 6: the cache guard runs the real dsh (pinned) against a fake OpenAI-compatible model server and
       # checks every request is a byte-prefix extension of the last, with sub-calls on their own affinity key.
       - name: Install DeepSeek Harness (pinned)
-        run: npm install -g @deepseek-ai/dsh@0.2.2-rc.1 --no-audit --no-fund # zizmor: ignore[adhoc-packages] an exact version, for the cache guard
+        # dsh's `plugin` command runs pnpm, which desktop bundles and the npm CLI expects on PATH (desktop ships 11.28.5)
+        run: npm install -g @deepseek-ai/dsh@0.2.2-rc.1 pnpm@11.28.5 --no-audit --no-fund # zizmor: ignore[adhoc-packages] exact versions, for the cache guard
       - name: Cache guard (real dsh, fake model)
         working-directory: dsh-plugin
         env:

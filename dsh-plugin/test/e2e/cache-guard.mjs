@@ -122,6 +122,7 @@ async function main() {
     check(existsSync(join(home, 'profiles', 'cacheguard')), 'a throwaway headless profile was created')
     r = await dsh(cli, ['plugin', '--profile', 'cacheguard', 'add', PLUGIN.replace(/\\/g, '/')], { env, cwd: home })
     check(r.code === 0, `the plugin installs into it (${r.code})`)
+    if (r.code !== 0) console.log((r.stderr || r.stdout).split(/\r?\n/).slice(-15).join('\n'))
     writeFileSync(join(home, 'profiles', 'cacheguard', 'cordis.patch.yml'), `
 - id: llm-pi-ai
   name: "@deepseek-ai/dsh-llm-pi-ai"
