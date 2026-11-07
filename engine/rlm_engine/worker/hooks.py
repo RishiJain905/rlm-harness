@@ -112,6 +112,12 @@ def _under(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
+def _in_git_dir(path: str, root: str) -> bool:
+    """Whether a normalised path under `root` has a `.git` segment (the folder itself, or anything below it)."""
+    rel = path[len(root.rstrip(os.sep)) + 1:] if path != root else ""
+    return any(part.lower() == ".git" for part in rel.split(os.sep))
+
+
 def _shown(path: str) -> str:
     return path.replace(os.sep, "/")
 
@@ -168,11 +174,13 @@ class _Guard:
         return None if os.path.normcase(full) in self.devnull else full
 
     def _write(self, paths: list[str]) -> None:
-        """Ask for a write unless every path is under scratch; a rename's scratch side doesn't count for `inside`."""
+        """Ask for a write unless every path is under scratch; a rename's scratch side doesn't count for `inside`.
+        A path under a `.git` folder is never `inside` (SR-2): accept-edits lets inside writes through unasked, and
+        a hook, config or alias written there runs as the user's own git next time, outside every prompt."""
         rest = [r for r in (_norm(p) for p in paths) if not _under(r, self.scratch)]
         if not rest:
             return
-        inside = all(_under(r, self.workspace) for r in rest)
+        inside = all(_under(r, self.workspace) and not _in_git_dir(r, self.workspace) for r in rest)
         self.approve("write", " -> ".join(_shown(p) for p in paths), inside)
 
     def writer(self, index: int, dir_fd_index: int | None = None, skip_existing: bool = False) -> Callable[[tuple], None]:

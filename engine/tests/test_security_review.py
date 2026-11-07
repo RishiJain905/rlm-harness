@@ -73,3 +73,48 @@ def test_sr1_tools_git_runs_with_the_configure_time_environment(tmp_path: Path, 
     for call in seen:
         assert call["argv"][0] == expected_git
         assert "RLMH_SET_LATER" not in call["env"]
+
+
+# ----------------------------------------------------------------------------- SR-2: writes under .git
+
+
+@needs_git
+@pytest.mark.parametrize("code", [
+    "open('.git/hooks/pre-commit', 'w').write('#!/bin/sh\\necho pwned\\n')",
+    "open('.git/config', 'a').write('[core]\\n\\tfsmonitor = echo pwned\\n')",
+    "import os\nos.makedirs('.git/hooks', exist_ok=True)\nos.rename('a.py', '.git/hooks/post-checkout')",
+], ids=["hook", "config", "rename-in"])
+def test_sr2_accept_edits_asks_before_a_write_under_the_git_dir(tmp_path: Path, git_repo: Path, code: str) -> None:
+    """SR-2: accept-edits lets writes inside the workspace through without asking, but a write under `.git/` is
+    not an edit of the repository: it changes what the user's own git runs next (hooks, fsmonitor, aliases).
+    Such a write asks, and a denial leaves `.git` as it was."""
+    before = sorted(p.relative_to(git_repo) for p in (git_repo / ".git").rglob("*"))
+
+    async def main() -> None:
+        async with real_run(tmp_path, "accept-edits", DENY, repo=git_repo) as r:
+            result = await r.worker.run_cell(code)
+            asked = [(a["kind"], a["inside_workspace"]) for a in r.app.approvals]
+            assert asked == [("write", False)], (asked, result.error)
+            assert "Permission denied" in (result.error or "")
+
+    run(main(), 60)
+    after = sorted(p.relative_to(git_repo) for p in (git_repo / ".git").rglob("*"))
+    assert after == before
+    assert (git_repo / "a.py").exists()
+
+
+@needs_git
+def test_sr2_ordinary_inside_writes_still_pass_silently(tmp_path: Path, git_repo: Path) -> None:
+    """The SR-2 rule touches only `.git`: a folder merely named like it elsewhere, and every other inside write,
+    still goes through without a prompt under accept-edits."""
+
+    async def main() -> None:
+        async with real_run(tmp_path, "accept-edits", DENY, repo=git_repo) as r:
+            result = await r.worker.run_cell(
+                "import os\nos.makedirs('src/gitstuff', exist_ok=True)\nopen('src/gitstuff/.gitignore', 'w').write('x')\n"
+                "open('notes.git.txt', 'w').write('y')\nprint(write_file('src/b.py', 'z'))")
+            assert result.error is None, result.error
+            assert r.app.approvals == []
+
+    run(main(), 60)
+    assert (git_repo / "src" / "b.py").read_text() == "z"
