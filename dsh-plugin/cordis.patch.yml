@@ -3,8 +3,10 @@
 # top-level `rlm-runtime`, `rlm-subcall-tool` and `rlm-rlm-tool` rows are off by default and exist for headless tests (an overlay
 # turns them on for the whole deployment); the preset mounts its own copies.
 - insert:
+    # The package root is the settings service (lib/index.js). It must be the only active top-level entry from this
+    # package, because the package has a browser half (the settings page); the rows below are off by default.
     - id: rlmh-settings
-      name: './lib/settings.js'
+      name: 'rlmh-dsh'
     - id: rlm-runtime
       name: './lib/rlm-runtime.js'
       disabled: true

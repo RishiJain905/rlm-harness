@@ -5,7 +5,7 @@
 // dsh's PTC executor dispatches every sub-call: it is logged as a tool/ptc-dispatch (a Trajectory row, with its token
 // usage as presentation metadata), cancelled with the run_code call, and run under dsh's sub-call parallelism cap.
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { SEPARATOR, SUBCALL_DEFAULTS, THINKING, completeSubcall, subcallRoute, withThinking } from './subcalls.js'
+import { SEPARATOR, SUBCALL_DEFAULTS, THINKING, completeSubcall, fitEffort, subcallRoute, withThinking } from './subcalls.js'
 import { LLM_TOOL } from './tool-names.js'
 import { MISSING_PREFIX, getBlob } from './blobs.js'
 import { effective } from './settings.js'
@@ -65,7 +65,7 @@ export function llmTool(llm, config = {}, settings = () => ({})) {
         if (prefix === undefined) throw new Error(`${MISSING_PREFIX}: send the prefix again`)
         prompt = prefix + SEPARATOR + prompt // the shared bytes first, so the provider caches them
       }
-      const route = await withThinking(llm, base, args.thinking)
+      const route = await withThinking(llm, await fitEffort(llm, base), args.thinking)
       return completeSubcall(llm, prompt, route, exec.signal, cfg.subcallMaxTokens)
     },
   })

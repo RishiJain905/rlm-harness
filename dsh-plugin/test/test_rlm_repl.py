@@ -136,6 +136,22 @@ class ReplTest(unittest.TestCase):
         self.assertIn("ZeroDivisionError", done["error"])
         self.assertNotIn("rlm_repl.py", done["error"])
 
+    def test_a_failing_sub_call_shows_the_cell_not_the_plugin(self):
+        def llm(prompt):
+            raise ValueError("unused")
+
+        self.r.send({"t": "run", "program": "x = 1\nllm('q')", "cwd": os.getcwd(), "bindings": []})
+        while True:
+            f = self.r.read()
+            if f["t"] == "llm":
+                self.r.send({"t": "reply", "cid": f["cid"], "error": "model says no"})
+            elif f["t"] == "done":
+                break
+        self.assertIn('File "<run_code>", line 2', f["error"])
+        self.assertIn("model says no", f["error"])
+        self.assertNotIn("rlmapi.py", f["error"])
+        self.assertNotIn("rlm_repl.py", f["error"])
+
     def test_system_exit_does_not_end_the_repl(self):
         self.assertIn("SystemExit", self.r.run("raise SystemExit(3)")["error"])
         self.assertEqual(self.r.run("2 * 3")["value"], 6)

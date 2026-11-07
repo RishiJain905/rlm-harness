@@ -349,10 +349,11 @@ FLAGS = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
 
 
 def _format_error(exc):
-    tb = exc.__traceback__
-    while tb is not None and tb.tb_frame.f_code.co_filename != "<run_code>":
-        tb = tb.tb_next  # drop the REPL's own frames
-    lines = "".join(traceback.format_exception(type(exc), exc, tb)).splitlines()
+    """The cell's own frames and the error. The REPL's and the toolkit's frames (rlm_repl.py, rlmapi.py) are left
+    out, so the model sees where its code failed and why, not this plugin's file paths."""
+    frames = [f for f in traceback.extract_tb(exc.__traceback__) if f.filename == "<run_code>"]
+    head = ["Traceback (most recent call last):\n"] + traceback.format_list(frames) if frames else []
+    lines = "".join(head + traceback.format_exception_only(type(exc), exc)).splitlines()
     return "\n".join(lines[-TRACEBACK_LINES:])
 
 

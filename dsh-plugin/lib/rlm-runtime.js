@@ -12,7 +12,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
-import { SEPARATOR, completeSubcall, subcallRoute, withThinking } from './subcalls.js'
+import { SEPARATOR, completeSubcall, fitEffort, subcallRoute, withThinking } from './subcalls.js'
 import { MISSING_PREFIX, getBlob, putBlob } from './blobs.js'
 import { effective } from './settings.js'
 import { LLM_TOOL } from './tool-names.js'
@@ -323,7 +323,7 @@ class Repl {
             if (prefix === undefined) throw new Error(`${MISSING_PREFIX}: send the prefix again`)
             prompt = prefix + SEPARATOR + prompt
           }
-          const route = await withThinking(this.runtime.ctx.llm, base, item?.thinking)
+          const route = await withThinking(this.runtime.ctx.llm, await fitEffort(this.runtime.ctx.llm, base), item?.thinking)
           await this.gate.take()
           try {
             if (p.signal.aborted) throw new Error('run_code was stopped')

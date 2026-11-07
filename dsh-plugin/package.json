@@ -5,7 +5,14 @@
   "description": "RLM mode for DeepSeek Harness: a persistent Python REPL with recursive sub-calls (llm, llm_batch).",
   "license": "MIT",
   "type": "module",
-  "main": "lib/rlm-runtime.js",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./lib/*": "./lib/*",
+    "./python/*": "./python/*",
+    "./package.json": "./package.json"
+  },
   "files": [
     "lib/",
     "python/rlm_repl.py",
@@ -35,6 +42,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
     }
   }
 }

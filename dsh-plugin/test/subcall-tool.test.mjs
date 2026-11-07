@@ -97,6 +97,18 @@ test('a stored prefix is sent first; an unknown or forged one fails', async () =
   await assert.rejects(tool.execute({ prompt: 'q', prefix_id: blobId('other') }, exec), /unknown prefix_id/)
 })
 
+test('a configured effort is fitted to the model: kept, mapped from an rlmh level, or dropped', async () => {
+  const { fitEffort } = await import('../lib/subcalls.js')
+  const llm = { resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'high' }, { id: 'max' }] } }) }
+  const r = (effort) => ({ provider: 'p4', model: 'm4', reasoningEffort: effort })
+  assert.equal((await fitEffort(llm, r('max'))).reasoningEffort, 'max')
+  assert.equal((await fitEffort(llm, r('low'))).reasoningEffort, 'high')
+  assert.equal('reasoningEffort' in (await fitEffort(llm, r('bogus'))), false)
+  assert.deepEqual(await fitEffort(llm, { provider: 'p4', model: 'm4' }), { provider: 'p4', model: 'm4' })
+  const unknown = { resolveModelInfo: async () => { throw new Error('no info') } }
+  assert.equal((await fitEffort(unknown, { provider: 'p5', model: 'm5', reasoningEffort: 'bogus' })).reasoningEffort, 'bogus')
+})
+
 test('thinking maps onto the model\'s own efforts, least first', async () => {
   const { withThinking } = await import('../lib/subcalls.js')
   const llm = { resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }] } }) }

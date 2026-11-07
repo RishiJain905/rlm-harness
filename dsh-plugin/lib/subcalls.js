@@ -20,6 +20,14 @@ const effortCache = new Map() // `${provider}\0${model}` -> effort ids, least fi
  */
 export async function withThinking(llm, route, thinking) {
   if (!thinking) return route
+  const ids = await effortIds(llm, route)
+  if (ids.length === 0) return route
+  const id = ids.includes(thinking) ? thinking : ids[Math.round((THINKING.indexOf(thinking) / (THINKING.length - 1)) * (ids.length - 1))]
+  return { ...route, reasoningEffort: id }
+}
+
+/** The model's own reasoning-effort ids, least first ([] when it has none or the adapter can't say), cached. */
+async function effortIds(llm, route) {
   const key = `${route.provider}\0${route.model}`
   let ids = effortCache.get(key)
   if (ids === undefined) {
@@ -31,9 +39,22 @@ export async function withThinking(llm, route, thinking) {
     }
     effortCache.set(key, ids)
   }
-  if (ids.length === 0) return route
-  const id = ids.includes(thinking) ? thinking : ids[Math.round((THINKING.indexOf(thinking) / (THINKING.length - 1)) * (ids.length - 1))]
-  return { ...route, reasoningEffort: id }
+  return ids
+}
+
+/**
+ * The route with its reasoning effort made one the model offers, so a mistyped or unsupported setting can't fail
+ * every sub-call: an effort the model has stays; one of rlmh's levels maps to the model's effort at the same
+ * relative position; any other word is dropped (the model's default applies). Unknown effort lists keep the route.
+ */
+export async function fitEffort(llm, route) {
+  const effort = route.reasoningEffort
+  if (!effort) return route
+  const ids = await effortIds(llm, route)
+  if (ids.length === 0 || ids.includes(effort)) return route
+  if (THINKING.includes(effort)) return withThinking(llm, route, effort)
+  const { reasoningEffort: _dropped, ...rest } = route
+  return rest
 }
 
 /**
