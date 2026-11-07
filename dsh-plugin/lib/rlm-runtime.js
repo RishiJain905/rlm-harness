@@ -4,7 +4,9 @@
 // RLM mode's code runtime for DeepSeek Harness: a ctx.ptcRuntime provider whose programs run in a persistent Python
 // REPL (../python/rlm_repl.py), one process per dsh agent (dsh's PTC executor passes the Agent as stateOwner).
 // llm()/llm_batch() in the REPL are answered here through dsh's model service, on the agent's own route by default.
-// Not a sandbox: sandboxMode is undefined, so the REPL runs with the user's file access (see the plan, §7).
+// File policy (step 7): the REPL is launched through dsh's sandbox service (ctx.sandbox.confine) under the session's
+// resolved policy, as dsh's own Node runtime is, so read-only and plan mode reach run_code. danger-full-access, or a
+// deployment without dsh's sandbox services, runs it unconfined.
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -12,6 +14,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
+import { classifyRunnerFailure, isRunnerSpawnFailure } from '@deepseek-ai/dsh-sandbox'
 import { SEPARATOR, completeSubcall, fitEffort, subcallRoute, withThinking } from './subcalls.js'
 import { MISSING_PREFIX, getBlob, putBlob } from './blobs.js'
 import { effective } from './settings.js'
@@ -133,8 +136,20 @@ export default class RlmPythonRuntime extends PtcRuntime {
   get executionInstructions() { return INSTRUCTIONS }
   get timeout() { return { defaultMs: 600_000, maxMs: 1_800_000 } }
 
+  /** The deployment's file-policy mode (dsh then resolves and passes each session's policy); undefined without one. */
+  get sandboxMode() { return this.ctx.get?.('sandboxPolicy')?.defaultMode }
+
   resolve(request) {
-    return { ...request, cwd: request.cwd ?? process.cwd(), timeoutMs: request.timeoutMs === undefined ? 600_000 : request.timeoutMs }
+    let sandboxPolicy = request.sandboxPolicy
+    if (sandboxPolicy === undefined) {
+      try { sandboxPolicy = this.ctx.get?.('sandboxPolicy')?.resolve?.() } catch {}
+    }
+    return {
+      ...request,
+      ...(sandboxPolicy ? { sandboxPolicy } : {}),
+      cwd: request.cwd ?? sandboxPolicy?.workspaceRoot ?? process.cwd(),
+      timeoutMs: request.timeoutMs === undefined ? 600_000 : request.timeoutMs,
+    }
   }
 
   async release(owner) {
@@ -151,14 +166,20 @@ export default class RlmPythonRuntime extends PtcRuntime {
     const owner = spec.stateOwner
     let repl = owner ? this.procs.get(owner) : undefined
     let restarted = false
+    let why = 'variables from earlier run_code calls are gone'
+    if (repl && !repl.dead && !samePolicy(repl.policy, spec.sandboxPolicy)) {
+      // a running process can't change its confinement: start over under the new policy
+      await repl.kill()
+      why = `the file policy changed to ${spec.sandboxPolicy?.mode ?? 'unconfined'}, so variables from earlier run_code calls are gone`
+    }
     if (!repl || repl.dead) {
       restarted = owner !== undefined && this.everRan.has(owner)
-      repl = new Repl(this)
+      repl = new Repl(this, spec.sandboxPolicy)
       if (owner) { this.procs.set(owner, repl); this.everRan.add(owner) }
     }
     try {
       const result = await repl.run(spec)
-      if (restarted) result.logs.unshift('[The REPL restarted: variables from earlier run_code calls are gone.]')
+      if (restarted) result.logs.unshift(`[The REPL restarted: ${why}.]`)
       return result
     } finally {
       if (!owner) await repl.kill()
@@ -194,41 +215,86 @@ class Gate {
   give() { const next = this.queue.shift(); if (next) next(); else this.free++ }
 }
 
+/** Whether two resolved file policies confine a process the same way. */
+export function samePolicy(a, b) {
+  if (!a || !b) return !a && !b
+  const roots = (p) => JSON.stringify([...(p.additionalWritableRoots ?? [])].sort())
+  return a.mode === b.mode && a.workspaceRoot === b.workspaceRoot && a.sessionId === b.sessionId && roots(a) === roots(b)
+}
+
 class Repl {
-  constructor(runtime) {
+  constructor(runtime, policy) {
     this.runtime = runtime
+    this.policy = policy // the file policy this process was launched under (undefined: unconfined)
+    this.confined = undefined // the sandbox's answer for it: wrapped argv, enforcement, denial signatures
     this.dead = false
     this.pending = undefined
+    this.child = undefined
     this.gate = new Gate(runtime.config.maxParallelSubcalls)
-    const { bin, prefix } = runtime.python
-    this.child = spawn(bin, [...prefix, '-I', '-u', '-X', 'utf8', REPL], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      env: replEnv(),
-    })
-    runtime.all.add(this)
     this.stderr = ''
-    this.child.stdin.on('error', () => {}) // a write after the child died: handled through 'exit'
-    this.child.stderr.on('data', (b) => { this.stderr = (this.stderr + b.toString()).slice(-4000) })
-    this.child.on('error', (e) => this.onExit(`could not start Python: ${e.message}`))
-    this.child.on('exit', (code) => this.onExit(`Python exited with code ${code}`))
-    createInterface({ input: this.child.stdout }).on('line', (line) => this.onFrame(line))
+    runtime.all.add(this)
+    this.ready = this.start()
   }
 
-  onExit(why) {
+  /** Launch the REPL, through dsh's sandbox when the policy confines it. Resolves with a failure, or undefined. */
+  async start() {
+    const { bin, prefix } = this.runtime.python
+    const argv = [bin, ...prefix, '-I', '-B', '-u', '-X', 'utf8', REPL] // -B: nothing to write under read-only
+    const policy = this.policy
+    if (policy && policy.mode !== 'danger-full-access') {
+      const sandbox = this.runtime.ctx.get?.('sandbox')
+      if (!sandbox) return this.fail('sandbox-unavailable', `no sandbox service can confine the REPL under ${policy.mode}`)
+      try {
+        this.confined = await sandbox.confine(argv, { ...policy })
+      } catch (e) {
+        return this.fail('sandbox-unavailable', String(e?.message ?? e))
+      }
+    }
+    const [cmd, ...args] = this.confined?.argv ?? argv
+    this.child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: replEnv() })
+    this.child.stdin.on('error', () => {}) // a write after the child died: handled through 'exit'
+    this.child.stderr.on('data', (b) => { this.stderr = (this.stderr + b.toString()).slice(-4000) })
+    this.child.on('error', (e) => {
+      const runner = this.confined && isRunnerSpawnFailure(e, this.confined.argv[0], process.cwd())
+      this.onExit(runner ? 'sandbox-unavailable' : 'worker-exit', `could not start Python: ${e.message}`)
+    })
+    this.child.on('exit', (code) => {
+      const runner = this.confined && classifyRunnerFailure(code, this.stderr, this.confined.runnerFailureRules) !== undefined
+      this.onExit(runner ? 'sandbox-unavailable' : 'worker-exit', `Python exited with code ${code}`)
+    })
+    createInterface({ input: this.child.stdout }).on('line', (line) => this.onFrame(line))
+    return undefined
+  }
+
+  fail(kind, message) {
+    this.dead = true
+    this.runtime.all.delete(this)
+    return { kind, message }
+  }
+
+  onExit(kind, why) {
     if (this.dead) return
     this.dead = true
     this.runtime.all.delete(this)
-    this.pending?.finish({ logs: [], error: { kind: 'worker-exit', message: `${why}. ${this.stderr}`.trim() } })
+    this.pending?.finish({ logs: [], error: { kind, message: `${why}. ${this.stderr}`.trim() } })
+  }
+
+  /** The sandbox facts dsh reports beside a result: the mode, whether a denial shows in the error, and enforcement. */
+  sandboxFacts(error) {
+    if (!this.policy) return undefined
+    const text = (error?.message ?? '').toLowerCase()
+    const denied = Boolean(this.confined && error && error.kind !== 'sandbox-unavailable' &&
+      this.confined.denialSignatures.some((s) => text.includes(String(s).toLowerCase())))
+    return { mode: this.policy.mode, denied, ...(this.confined ? { enforcement: this.confined.enforcement } : {}) }
   }
 
   send(frame) {
-    if (this.dead || this.child.stdin.destroyed || !this.child.stdin.writable) return
+    if (this.dead || !this.child || this.child.stdin.destroyed || !this.child.stdin.writable) return
     this.child.stdin.write(JSON.stringify(frame) + '\n')
   }
 
   kill() {
-    if (this.dead) return Promise.resolve()
+    if (this.dead || !this.child) { this.dead = true; this.runtime.all.delete(this); return Promise.resolve() }
     return new Promise((res) => {
       this.child.once('exit', () => res())
       this.child.stdin.end()
@@ -236,7 +302,10 @@ class Repl {
     })
   }
 
-  run(spec) {
+  async run(spec) {
+    const failed = await this.ready
+    if (failed) return { logs: [], error: failed, ...(this.policy ? { sandbox: { mode: this.policy.mode, denied: false } } : {}) }
+    if (this.dead) return { logs: [], error: { kind: 'worker-exit', message: `the REPL stopped. ${this.stderr}`.trim() } }
     const { graceMs, outputMaxChars } = this.runtime.config
     return new Promise((resolveRun) => {
       const subcalls = new AbortController() // stops this run's sub-calls on timeout, abort or exit
@@ -261,6 +330,8 @@ class Repl {
         spec.signal?.removeEventListener('abort', onAbort)
         subcalls.abort('run_code settled')
         if (stopping && result.error) result.error = { kind: stopping.kind, message: `${stopping.message}. ${result.error.message}` }
+        const facts = this.sandboxFacts(result.error)
+        if (facts) result.sandbox = facts
         resolveRun(result)
       }
       this.pending = { spec, finish, signal: subcalls.signal, subcalls: 0 }
