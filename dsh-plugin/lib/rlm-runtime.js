@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
 import { SEPARATOR, completeSubcall, subcallRoute, withThinking } from './subcalls.js'
 import { MISSING_PREFIX, getBlob, putBlob } from './blobs.js'
+import { effective } from './settings.js'
 import { LLM_TOOL } from './tool-names.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -111,7 +112,7 @@ export default class RlmPythonRuntime extends PtcRuntime {
 
   constructor(ctx, config = {}) {
     super(ctx)
-    this.config = { ...DEFAULTS, ...config }
+    this.baseConfig = { ...DEFAULTS, ...config }
     this.procs = new WeakMap() // state owner -> Repl
     this.everRan = new WeakSet() // owners whose REPL existed once (so a new one is a restart)
     this.all = new Set()
@@ -119,6 +120,9 @@ export default class RlmPythonRuntime extends PtcRuntime {
     this.usage = { subcalls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }
     ctx.effect(() => () => Promise.all([...this.all].map((r) => r.kill())))
   }
+
+  /** The row's config with the user's live settings (lib/settings.js) on top, read on each use. */
+  get config() { return effective(this.ctx, this.baseConfig) }
 
   get language() { return 'python' }
   get isolation() { return 'process' }

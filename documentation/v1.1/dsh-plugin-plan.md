@@ -56,10 +56,11 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 | # | Step | Status |
 |---|---|---|
 | 0 | Spike fixes (protocol fds, waits, abort, budgets, Python lookup, sub-call affinity key) | done, `b5f4de8` |
-| 1 | Plugin tests in the verify gate and CI | done locally (gate stage passes); CI on three OSes waits for a push |
-| 2 | Sub-calls as dsh tools | done (uncommitted) |
-| 3 | rlmh's sub-call toolkit | done (uncommitted), except `rlm()` child runs, moved to step 4b |
-| 4 | A proper RLM mode preset, with settings | todo |
+| 1 | Plugin tests in the verify gate and CI | done, `451f328` (CI run 42356257590 green on three OSes) |
+| 2 | Sub-calls as dsh tools | done, `451f328` |
+| 3 | rlmh's sub-call toolkit | done, `451f328`, except `rlm()` child runs (step 4b) |
+| 4 | A proper RLM mode preset, with settings | done (uncommitted), except a settings page in the GUI (step 4c) |
+| 4c | A settings page in dsh's GUI (a client UI plugin) | todo |
 | 4b | `rlm()` child runs as dsh subagents on the RLM preset | todo |
 | 5 | Works right after install (**needs Rishi**: installing into his dsh desktop) | todo |
 | 6 | Cache guard | todo |
@@ -71,6 +72,8 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 - **Step 2 result.** Each sub-call is an `llm` dsh tool call: the Trajectory view lists it as a `SUBTOOL llm` row with its prompt, answer and a `[sub-call tokens: N in, M of them cached; K out]` line (checked in the web UI). dsh's own usage total (the status bar) still counts only the main conversation: its token meter replays the session's main requests, so tool-internal model calls can't reach it without a dsh change.
 - **Step 3 result.** `python/rlmapi.py` ports `segments`, `llm`/`llm_batch` with `over=`, `shared=`, `schema=` and `thinking=`, `scan` and `ask_files`. Shared prefixes go to the host once, by SHA-256 (checked), and tool calls carry only the id, so dsh's session log doesn't grow by a whole segment per sub-call. Live: a second pass over the same four 20k-character segments read 95-99% of its input from cache on 3 of 4 calls (the miss was a ~470-token tail segment). `thinking="off"` cut a counting answer to 2 output tokens, against about 6k at the inherited high effort.
 - **Deferred:** `rlm()` child runs need dsh's subagent API; they are step 4b.
+- **Step 4 result.** The preset is minimal now (persona, AGENTS.md instructions, time context, file, search, shell, web, ask-user, todo and present tools, compaction, and our isolated runtime group); jobs, scheduling, skills, goals, plan mode and subagents are left out (plan mode until step 7, subagents until 4b). The persona is rlmh `default`'s `system.md` and `guidance.md` adapted to `run_code`. RLM mode sets dsh's tool-result pruner to 12,000 characters, so a capped `run_code` result (8,000 plus a note) is never rewritten, which would miss the cache. Settings: `lib/settings.js` is a top-level `rlmhSettings` service with volatile fields (sub-call provider, model and reasoning effort, output cap, budgets), read live by the runtime and the `llm` tool; dsh's settings service can edit them and they survive in the profile's patch, but no dsh client builds forms from schemas yet (`autoGenerate`), so a GUI page is step 4c. dsh's PTC executor has no setting for its `run_code` SDK instructions (its only option is `maxParallelSubCalls`), so the persona and our runtime's instructions carry the RLM guidance.
+- **Step 4 check (web UI, no hints in the task).** The §2 question: 33 steps (Standard 78), 12 sub-calls, 15/15 found plus 10 judgement-call extras. Main conversation 110k uncached, 682k cached (86%), 22k out; sub-calls 108k in, 86k out. Total uncached input about 218k against Standard's 433k. dsh compacted twice in 33 steps (the misses at steps 24 and 30; step 31 half-cached after), which step 6 should explain. Sub-calls inherited the main model's high effort and spent 86k output tokens: the default sub-call effort is a decision for Rishi.
 
 ### Step 1. Plugin tests in the verify gate and CI
 - A `dsh-plugin` stage in both `scripts/verify.ps1` and `scripts/verify.sh`: `npm ci --offline` in `dsh-plugin/` (from npm's cache, so the gate stays offline), then the Node tests (`node --test`) and the Python tests (`python -m unittest`, on uv's Python 3.12 from the engine project).

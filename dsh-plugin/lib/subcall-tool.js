@@ -8,6 +8,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { SEPARATOR, SUBCALL_DEFAULTS, THINKING, completeSubcall, subcallRoute, withThinking } from './subcalls.js'
 import { LLM_TOOL } from './tool-names.js'
 import { MISSING_PREFIX, getBlob } from './blobs.js'
+import { effective } from './settings.js'
 
 export const name = 'rlmh-subcall-tool'
 export const inject = ['tools', 'llm']
@@ -20,8 +21,7 @@ export function usageLine(usage) {
 }
 
 /** The tool definition, given where its model calls go (ctx.llm, or a fake in tests). */
-export function llmTool(llm, config = {}) {
-  const cfg = { ...SUBCALL_DEFAULTS, ...config }
+export function llmTool(llm, config = {}, settings = () => ({})) {
   return defineTool({
     name: LLM_TOOL,
     description: 'One sub-call to a language model: send a prompt, get the reply text. In run_code, prefer the REPL\'s llm(prompt) and llm_batch(prompts), which call this.',
@@ -56,6 +56,7 @@ export function llmTool(llm, config = {}) {
     },
     isConcurrencySafe: () => true,
     async execute(args, exec) {
+      const cfg = { ...SUBCALL_DEFAULTS, ...config, ...settings() } // the user's live settings win
       const base = subcallRoute(cfg, exec.agent)
       if (!base) throw new Error('no model is selected for sub-calls')
       let prompt = args.prompt
@@ -71,5 +72,5 @@ export function llmTool(llm, config = {}) {
 }
 
 export function apply(ctx, config = {}) {
-  ctx.tools.register(llmTool(ctx.llm, config))
+  ctx.tools.register(llmTool(ctx.llm, config, () => effective(ctx, {})))
 }

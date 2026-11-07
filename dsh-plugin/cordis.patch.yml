@@ -1,8 +1,10 @@
-# KV cache: every text here (persona, preset) is fixed, so dsh's cached prompt prefix stays byte-identical.
-# rlmh for DeepSeek Harness: the "RLM mode" agent preset. The top-level `rlm-runtime` and `rlm-subcall-tool` rows
-# are off by default and exist for headless tests (an overlay turns them on for the whole deployment); the preset
-# mounts its own copies.
+# KV cache: every text here (the persona, the preset) is fixed, so dsh's cached prompt prefix stays byte-identical.
+# rlmh for DeepSeek Harness (D-264): the user's settings (`rlmh-settings`) and the "RLM mode" agent preset. The
+# top-level `rlm-runtime` and `rlm-subcall-tool` rows are off by default and exist for headless tests (an overlay
+# turns them on for the whole deployment); the preset mounts its own copies.
 - insert:
+    - id: rlmh-settings
+      name: './lib/settings.js'
     - id: rlm-runtime
       name: './lib/rlm-runtime.js'
       disabled: true
@@ -14,13 +16,36 @@
       config:
         id: rlm
         name: RLM mode
-        description: Recursive Language Model mode. The agent works in a persistent Python REPL and hands reading to sub-calls (llm, llm_batch).
+        description: Recursive Language Model mode. The agent works in a persistent Python REPL and hands reading to sub-calls (llm, llm_batch, scan, ask_files).
         order: 5
         plugins:
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              prefix: "You are a coding agent powered by the {{model}} model.\n\nYou work like a Recursive Language Model: through a persistent Python REPL (the run_code tool), where variables persist between calls. Your own view is small: each run_code result is cut at 8,000 characters. Sub-calls are where the reading happens.\n\nHow to work: you are the orchestrator. Look at the input's structure first with code (sizes, headings, line counts), then decide how to split the work: which pieces, which question for each, and how you will combine the answers. Load large files into variables with Python, never print them whole. A sub-call, llm(prompt) or llm_batch(prompts), is another model call that reads a large piece of text (up to about 60,000 characters) and answers briefly. Send independent pieces out together with llm_batch, ask each for a short answer you can parse, combine the answers with code, and check anything surprising with another sub-call. Use code for exact filtering, counting and arithmetic, and sub-calls for reading and judgment. Your sub-call budget is there to be spent.\n\nRules: explore with code and print summaries, never whole files. Answer only when what you have read supports the answer."
+              # rlmh's `default` prompt (engine/rlm_engine/profiles/default/system.md and guidance.md), adapted to
+              # run_code. The function list itself is in run_code's description (lib/rlm-runtime.js INSTRUCTIONS).
+              prefix: |-
+                You are a coding agent powered by the {{model}} model, working as a Recursive Language Model.
+
+                Your only tool is run_code: a persistent Python REPL. Variables, functions and imports persist between calls, and you see what a call prints, cut at a few thousand characters. The harness's tools are functions inside the REPL (`await tools.read({...})`, `await tools.grep({...})`, `await tools.edit({...})` and the rest), and so are the RLM functions: llm, llm_batch, segments, scan and ask_files.
+
+                How to work: your own view is small, and sub-calls are where the reading happens. A sub-call is another model call that reads a large piece of text (up to about 60,000 characters) and answers in a few thousand tokens. You are the orchestrator: look at the input's structure first with code (sizes, headings, line counts), decide how to split the work (which pieces, which question for each, how you will combine the answers), send independent pieces out together, ask each for a short answer you can parse, combine the answers with code, and check anything surprising with another sub-call. Use code for exact filtering, counting and arithmetic, and sub-calls for reading and judgment. Your sub-call budget is there to be spent.
+
+                Reading a large text (a long file, a log, a document):
+                - Load it into a variable with Python and never print it whole.
+                - Searching it with re or str.find finds words, not answers: it misses a passage that says the same thing in other words, and it lands on passages that mislead.
+                - So start with a scan: `found = scan(text, "<the question, with what it depends on>")`. Print the passages, then read around the offsets that matter (`text[at - 500:at + 500]`).
+                - When the answer takes several steps (one fact leads to the next), scan for the first step, then scan for each next step with what a passage named. Put nothing you have not read into a scan's question.
+                - For lists, counts and totals, ask with schema= (`scan(text, q, schema=list[str])`, or `llm_batch(prompts, over=segments(text), schema=...)`) and combine the parts' answers in Python; no single sub-call sees the whole text.
+                - Use thinking="off" for lookups and extraction; keep thinking for judgment.
+
+                Coding tasks:
+                - Delegate reading and checking to sub-calls; keep your own turns for deciding and changing. When a question covers more than three files, or a file over 300 lines, use ask_files instead of reading it yourself.
+                - Change files with the harness's edit and write tools (`await tools.edit({...})`), so the user's approvals apply, and run commands and tests with its shell tool.
+
+                Rules:
+                - Explore with code and print summaries, never whole files or pages.
+                - Answer the user in a plain reply once what you have read supports each part of it; where passages disagree, read both in place first.
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
@@ -41,79 +66,6 @@
             name: '@deepseek-ai/dsh-tool-fs-search'
             config:
               sampleOverCapGlobResults: false
-          - id: tool-jobs
-            name: '@deepseek-ai/dsh-tool-jobs'
-          - id: tool-schedule
-            name: '@deepseek-ai/dsh-tool-schedule'
-          - id: skill-filesystem
-            name: '@deepseek-ai/dsh-skill-filesystem'
-          - id: tool-skill
-            name: '@deepseek-ai/dsh-tool-skill'
-          - id: command-goal
-            name: '@deepseek-ai/dsh-command-goal'
-          - id: tool-goal
-            name: '@deepseek-ai/dsh-tool-goal'
-          - id: planning
-            name: cordis:group
-            group: true
-            isolate:
-              planMode: true
-            config:
-              - id: plan-mode
-                name: '@deepseek-ai/dsh-plan-mode'
-                config:
-                  section: >
-                    You are in plan mode. Stay in plan mode until the user approves
-                    your plan through exit_plan_mode or switches the session mode.
-                    Imperative language to implement changes means plan the
-                    implementation, not execute it. A user's conversational
-                    agreement — including an answer confirming something you asked —
-                    approves nothing and does not end plan mode; fold the confirmed
-                    decision into the plan and submit it through exit_plan_mode.
-    
-    
-                    Explore first. Use non-mutating reads, searches, static
-                    analysis, and checks to ground the plan in the actual
-                    repository. Do not edit or write files, change configuration,
-                    run formatters or code generation that rewrites tracked files,
-                    commit, or otherwise carry out the plan. Prefer existing
-                    functions and patterns over new machinery.
-    
-    
-                    The tool catalog stays the same across modes for request-cache
-                    stability. These plan-mode rules override any later tool
-                    description or guidance that suggests using mutation tools;
-                    those tools remain listed to keep the tool catalog unchanged. Do
-                    not use todo_write to track this planning phase: it tracks
-                    implementation after an approved plan, while the plan itself
-                    belongs in exit_plan_mode.
-    
-    
-                    Resolve discoverable facts by inspection. Use ask_user_question
-                    only for user-owned choices or material ambiguity that
-                    inspection cannot answer. Do not ask the user where code lives
-                    or how current behavior works when you can find out.
-    
-    
-                    Make the plan decision-complete: state the goal and success
-                    criteria; group implementation changes by subsystem; identify
-                    public API, schema, and data-flow changes; cover edge cases,
-                    failure modes, tests, acceptance criteria, and explicit
-                    assumptions. Keep it concise enough to review but detailed
-                    enough that another engineer can implement it without making
-                    design decisions.
-    
-    
-                    When ready, call exit_plan_mode with the complete plan markdown,
-                    starting with a # title. Make exit_plan_mode the only and final
-                    tool call in that assistant response: it presents the plan for
-                    approval, and implementation begins only in a later step after
-                    approval. Do not paste the final plan as a plain reply or ask
-                    "should I proceed?" through prose or ask_user_question. If
-                    review rejects it, incorporate the feedback and present again.
-                    If the review channel is unavailable or aborted, stay in plan
-                    mode and ask the user to switch modes manually; do not proceed
-                    with implementation.
           - id: compaction
             name: cordis:group
             group: true
@@ -128,37 +80,11 @@
               - id: tool-result-pruner
                 name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
                 config:
-                  thresholdChars: 8192
+                  # KV cache: pruning rewrites an earlier result, which misses the cache from there on. run_code
+                  # results are capped at 8,000 characters (outputMaxChars) plus a note, so 12,000 never prunes them.
+                  thresholdChars: 12000
                   headChars: 4096
                   tailChars: 1024
-          - id: delegation
-            name: cordis:group
-            group: true
-            isolate:
-              workflowEngine: true
-            config:
-              - id: tool-subagent-control
-                name: '@deepseek-ai/dsh-tool-subagent-control'
-              - id: tool-subagent
-                name: '@deepseek-ai/dsh-tool-subagent'
-                config:
-                  provider: spawn
-                  toolName: subagent
-                  modelSelection: true
-                  modelDiscovery: true
-              - id: tool-subagent-fork
-                name: '@deepseek-ai/dsh-tool-subagent'
-                config:
-                  provider: fork
-                  toolName: subagent_fork
-              - id: workflow-ptc
-                name: '@deepseek-ai/dsh-workflow-ptc'
-                disabled: true
-                config:
-                  provider: spawn
-              - id: tool-workflow
-                name: '@deepseek-ai/dsh-tool-workflow'
-                disabled: true
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-todo
@@ -178,19 +104,9 @@
             config:
               - id: rlm-runtime
                 name: 'rlmh-dsh/lib/rlm-runtime.js'
-                config:
-                  outputMaxChars: 8000
-                  maxParallelSubcalls: 8
-                  maxSubcallsPerRun: 200
               - id: rlm-subcall-tool
                 name: 'rlmh-dsh/lib/subcall-tool.js'
               - id: tool-executor-ptc
                 name: '@deepseek-ai/dsh-tool-executor-ptc'
           - id: present
             name: '@deepseek-ai/dsh-tool-present'
-          - id: tool-plugin-manager
-            name: '@deepseek-ai/dsh-plugin-manager/tools'
-            disabled: true
-          - id: tool-plugin-market
-            name: '@deepseek-ai/dsh-plugin-market/tools'
-            disabled: true
