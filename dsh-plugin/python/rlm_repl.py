@@ -177,6 +177,8 @@ def _blocking(frame):
 SUBCALL_TOOL = "llm"  # the dsh tool behind the sub-call API (lib/subcall-tool.js), when the session has it
 MISSING_PREFIX = "unknown prefix_id"  # lib/blobs.js: the host lost a prefix; send it again
 _subcall_global = [None]  # the binding namespace that offers it, set per run
+RLM_TOOL = "rlm"  # the dsh tool behind rlm() (lib/rlm-tool.js)
+_tool_global = {}  # tool name -> the binding namespace that offers it, set per run
 _sent_prefixes = set()  # prefix ids the host has been sent
 
 
@@ -224,6 +226,22 @@ def _subcalls_once(items):
             value = f.get("value")
             out.append(("value", value.get("text", "") if isinstance(value, dict) else str(value)))
     return out
+
+
+def rlm(task, context=None):
+    """A child run: a new agent in RLM mode, with its own REPL and turns, does `task` and its final answer comes back
+    (a str). `context` (a str) is the child's input text: it gets it as a file to load into its REPL, not in its
+    prompt. Use it for a job of several steps; use llm for one question about text you already have."""
+    glob = _tool_global.get(RLM_TOOL)
+    if glob is None:
+        raise RuntimeError("rlm() needs RLM mode's rlm tool, which this session does not have")
+    args = {"task": str(task)}
+    if context is not None:
+        if not isinstance(context, str):
+            raise TypeError(f"context takes a str, not {type(context).__name__}")
+        args["context"] = context
+    value = _blocking({"t": "call", "global": glob, "name": RLM_TOOL, "args": args})
+    return value.get("text", "") if isinstance(value, dict) else str(value)
 
 
 def _subcalls(items):
@@ -326,6 +344,7 @@ import rlmapi  # noqa: E402  (rlmh's sub-call toolkit, next to this file)
 
 NS = {"__name__": "__main__", "__builtins__": __builtins__}
 NS.update(rlmapi.build(_subcalls))
+NS["rlm"] = rlm
 FLAGS = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
 
 
@@ -339,9 +358,13 @@ def _format_error(exc):
 
 def _bind(bindings):
     _subcall_global[0] = None
+    _tool_global.clear()
     for b in bindings or []:
-        if SUBCALL_TOOL in (b.get("names") or []) and _subcall_global[0] is None:
-            _subcall_global[0] = b["global"]
+        for tool in (SUBCALL_TOOL, RLM_TOOL):
+            if tool in (b.get("names") or []):
+                _tool_global.setdefault(tool, b["global"])
+    _subcall_global[0] = _tool_global.get(SUBCALL_TOOL)
+    for b in bindings or []:
         ec = b.get("errorClass") or {}
         name = ec.get("name") or "ToolCallError"
         err = NS.get(name)

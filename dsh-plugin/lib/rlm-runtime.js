@@ -45,6 +45,8 @@ export const INSTRUCTIONS = [
   '  thinking= ("off" to "max") sets how much a sub-call may think; "off" for lookups and extraction.',
   '- scan(text, question) -> the passages, quoted with offsets, that bear on the question, from every segment.',
   '- ask_files(files, question) -> {path: answer}: one sub-call per file (a glob or a list of paths).',
+  '- rlm(task, context=None) -> str: a child run, a new agent with its own REPL and turns, for a job of several steps;',
+  '  context (a str) is its input text, which it gets as a file. Use llm for one question about text you already have.',
   'Use these to read, classify, summarize or check large text piece by piece, then combine the results in Python,',
   'instead of printing the whole text into the conversation.',
 ].join('\n')

@@ -294,5 +294,39 @@ class ToolkitTest(unittest.TestCase):
         self.assertEqual(sum(1 for f in self.r.frames if f["t"] == "blob"), 2)
 
 
+class RlmChildTest(unittest.TestCase):
+    """rlm(): one blocking call to the dsh `rlm` tool."""
+
+    def setUp(self):
+        self.r = Repl()
+
+    def tearDown(self):
+        self.r.close()
+
+    def test_rlm_calls_the_tool_and_returns_the_text(self):
+        seen = []
+
+        def rlm_tool(args):
+            seen.append(args)
+            return {"text": "done: " + args["task"], "childId": "c1"}
+
+        done = self.r.run('rlm("fix it", context="INPUT")', tools={"rlm": rlm_tool})
+        self.assertIsNone(done["error"], done)
+        self.assertEqual(done["value"], "done: fix it")
+        self.assertEqual(seen, [{"task": "fix it", "context": "INPUT"}])
+
+    def test_rlm_without_the_tool_says_so(self):
+        self.assertIn("needs RLM mode's rlm tool", self.r.run('rlm("x")')["error"])
+
+    def test_rlm_checks_context(self):
+        self.assertIn("context takes a str", self.r.run('rlm("x", context=3)', tools={"rlm": lambda a: {}})["error"])
+
+    def test_a_failing_child_raises_in_the_cell(self):
+        def rlm_tool(args):
+            raise ValueError("the child run ended without an answer (error)")
+
+        self.assertIn("ended without an answer", self.r.run('rlm("x")', tools={"rlm": rlm_tool})["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

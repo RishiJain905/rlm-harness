@@ -1,6 +1,6 @@
 # KV cache: every text here (the persona, the preset) is fixed, so dsh's cached prompt prefix stays byte-identical.
 # rlmh for DeepSeek Harness (D-264): the user's settings (`rlmh-settings`) and the "RLM mode" agent preset. The
-# top-level `rlm-runtime` and `rlm-subcall-tool` rows are off by default and exist for headless tests (an overlay
+# top-level `rlm-runtime`, `rlm-subcall-tool` and `rlm-rlm-tool` rows are off by default and exist for headless tests (an overlay
 # turns them on for the whole deployment); the preset mounts its own copies.
 - insert:
     - id: rlmh-settings
@@ -10,6 +10,9 @@
       disabled: true
     - id: rlm-subcall-tool
       name: './lib/subcall-tool.js'
+      disabled: true
+    - id: rlm-rlm-tool
+      name: './lib/rlm-tool.js'
       disabled: true
     - id: preset-rlm
       name: '@deepseek-ai/dsh-agent-preset'
@@ -27,7 +30,7 @@
               prefix: |-
                 You are a coding agent powered by the {{model}} model, working as a Recursive Language Model.
 
-                Your only tool is run_code: a persistent Python REPL. Variables, functions and imports persist between calls, and you see what a call prints, cut at a few thousand characters. The harness's tools are functions inside the REPL (`await tools.read({...})`, `await tools.grep({...})`, `await tools.edit({...})` and the rest), and so are the RLM functions: llm, llm_batch, segments, scan and ask_files.
+                Your only tool is run_code: a persistent Python REPL. Variables, functions and imports persist between calls, and you see what a call prints, cut at a few thousand characters. The harness's tools are functions inside the REPL (`await tools.read({...})`, `await tools.grep({...})`, `await tools.edit({...})` and the rest), and so are the RLM functions: llm, llm_batch, segments, scan, ask_files and rlm.
 
                 How to work: your own view is small, and sub-calls are where the reading happens. A sub-call is another model call that reads a large piece of text (up to about 60,000 characters) and answers in a few thousand tokens. You are the orchestrator: look at the input's structure first with code (sizes, headings, line counts), decide how to split the work (which pieces, which question for each, how you will combine the answers), send independent pieces out together, ask each for a short answer you can parse, combine the answers with code, and check anything surprising with another sub-call. Use code for exact filtering, counting and arithmetic, and sub-calls for reading and judgment. Your sub-call budget is there to be spent.
 
@@ -40,7 +43,7 @@
                 - Use thinking="off" for lookups and extraction; keep thinking for judgment.
 
                 Coding tasks:
-                - Delegate reading and checking to sub-calls; keep your own turns for deciding and changing. When a question covers more than three files, or a file over 300 lines, use ask_files instead of reading it yourself.
+                - Delegate reading and checking to sub-calls; keep your own turns for deciding and changing. When a question covers more than three files, or a file over 300 lines, use ask_files instead of reading it yourself. For a job of several steps of its own (investigate one part, draft one module), start a child run with rlm(task, context=None), with a clear task and what its answer should contain.
                 - Change files with the harness's edit and write tools (`await tools.edit({...})`), so the user's approvals apply, and run commands and tests with its shell tool.
 
                 Rules:
@@ -106,6 +109,8 @@
                 name: 'rlmh-dsh/lib/rlm-runtime.js'
               - id: rlm-subcall-tool
                 name: 'rlmh-dsh/lib/subcall-tool.js'
+              - id: rlm-rlm-tool
+                name: 'rlmh-dsh/lib/rlm-tool.js'
               - id: tool-executor-ptc
                 name: '@deepseek-ai/dsh-tool-executor-ptc'
           - id: present
