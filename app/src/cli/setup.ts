@@ -471,6 +471,7 @@ async function install(o: SetupOptions, upgrade: boolean): Promise<number> {
     if (python === null) {
       const installEnv = {
         ...stripKeys(env),
+        UV_NO_CONFIG: "1", // no uv.toml or pyproject.toml from the current folder steers the download (mirror, insecure hosts; SR-3)
         UV_PYTHON_INSTALL_DIR: pythonDir(home),
         UV_PYTHON_BIN_DIR: join(pythonDir(home), "bin"),
         UV_PYTHON_INSTALL_BIN: "0",
@@ -504,7 +505,8 @@ async function install(o: SetupOptions, upgrade: boolean): Promise<number> {
     }
     let committed = false;
     try {
-      const probe = await runPython([python, "-E", "-s", "-c", PROBE, dest], stripKeys(env), { quiet: true });
+      // -I: nothing from the folder rlmh was started in is importable (a planted platform.py there would run as the user, SR-3)
+      const probe = await runPython([python, "-I", "-c", PROBE, dest], stripKeys(env), { quiet: true });
       const [version = "", shell = ""] = probe.stdout.split(/\r?\n/).map((s) => s.trim());
       if (probe.code !== 0 || version === "") {
         out(`The Python at ${python} did not run (exit ${probe.code}). Run "rlmh setup --force" to install it again.`);
@@ -565,6 +567,7 @@ async function existingPython(home: string, env: Record<string, string | undefin
 async function uvFind(uv: string, home: string, env: Record<string, string | undefined>, runUv: UvRunner) {
   const r = await runUv([uv, "python", "find", "3.12"], {
     ...stripKeys(env),
+    UV_NO_CONFIG: "1",
     UV_PYTHON_INSTALL_DIR: pythonDir(home),
     UV_MANAGED_PYTHON: "1",
     UV_PYTHON_DOWNLOADS: "never",

@@ -225,6 +225,8 @@ describe("runSetup", () => {
     const find = uv.calls.find((c) => c.argv[2] === "find")!;
     expect(find.env.UV_MANAGED_PYTHON).toBe("1");
     expect(find.env.UV_PYTHON_DOWNLOADS).toBe("never");
+    // SR-3: no uv.toml or pyproject.toml in the current folder steers either uv call
+    for (const c of uv.calls) expect(c.env.UV_NO_CONFIG).toBe("1");
     const marker = JSON.parse(readFileSync(markerOf(h), "utf8"));
     expect(marker.python).toBe(join(h, "python", "cpython-3.12.99-test", "bin", `python${EXE}`));
     expect(marker).toMatchObject({ app_version: APP_VERSION, bundle_sha256: o.bundle!.sha256, python_version: "3.12.99" });
@@ -237,6 +239,18 @@ describe("runSetup", () => {
     expect(await runSetup(o2)).toBe(0);
     expect(o2.lines.join("\n")).toContain("already installed");
     expect(again.calls).toEqual([]);
+  });
+
+  test("SR-3: the Python probe runs isolated, so nothing in the current folder is importable", async () => {
+    const h = homeWithUv();
+    const argvs: string[][] = [];
+    const runPython: UvRunner = async (argv) => {
+      argvs.push(argv);
+      return { code: 0, stdout: "3.12.99\nsh\n" };
+    };
+    expect(await runSetup(options(h, { yes: true, runUv: standInUv().run, runPython }))).toBe(0);
+    expect(argvs.length).toBe(1);
+    expect(argvs[0]!.slice(1, 3)).toEqual(["-I", "-c"]);
   });
 
   test("force_reinstalls", async () => {
