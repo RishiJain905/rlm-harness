@@ -70,6 +70,8 @@ function paxRecords(data: Uint8Array): Map<string, string> {
 }
 
 const WINDOWS_BAD = /[<>:"|?*\u0000-\u001f]/;
+/** Windows device names: `CON`, `NUL.txt` and the like open the device, not a file, whatever the folder (SR-4). */
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
 
 /** The entry's path as `/` parts, or throws: no absolute path, drive letter, `..`, or a name Windows can't hold. */
 export function safePath(raw: string): string {
@@ -81,6 +83,7 @@ export function safePath(raw: string): string {
   if (parts.some((p) => p === "..")) throw new Error(`tar: ${JSON.stringify(raw)} has a .. part`);
   for (const p of parts) {
     if (WINDOWS_BAD.test(p) || /[. ]$/.test(p)) throw new Error(`tar: ${JSON.stringify(raw)} has a name that some OSes can't hold`);
+    if (WINDOWS_DEVICE.test(p)) throw new Error(`tar: ${JSON.stringify(raw)} has a name that is a device on Windows`);
   }
   return parts.join("/");
 }

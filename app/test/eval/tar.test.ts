@@ -54,6 +54,15 @@ test("it refuses ../x, /etc/x, C:x, a symlink and two names that differ only in 
   expect(() => readTar(writeTar([{ path: "A/x.py", data: "" }, { path: "a/y.py", data: "" }]))).toThrow("same folder on a case-insensitive disk");
 });
 
+test("SR-4: it refuses Windows device names in any folder, and keeps names that merely start like one", () => {
+  for (const path of ["CON", "src/nul", "a/NUL.txt", "com1.py", "lpt9", "Aux.md"]) {
+    expect(() => readTar(writeTar([{ path, data: "" }])), path).toThrow("device on Windows");
+  }
+  for (const path of ["console.py", "nullable.ts", "con-fig", "com10", "src/lptx"]) {
+    expect(readTar(writeTar([{ path, data: "" }])).map((e) => e.path)).toEqual([path]);
+  }
+});
+
 test("a .tar.gz round trip works", () => {
   const gz = Bun.gzipSync(writeTar([{ path: "a/b.txt", data: ODD }]) as Uint8Array<ArrayBuffer>);
   const entries = extractTar(new Uint8Array(gz), join(tmp, "gz"));
