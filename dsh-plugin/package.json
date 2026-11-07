@@ -9,6 +9,7 @@
   "files": [
     "lib/",
     "python/rlm_repl.py",
+    "python/rlmapi.py",
     "cordis.patch.yml"
   ],
   "scripts": {
@@ -19,12 +20,15 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh-ptc-runtime": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-ptc-runtime": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
     "@deepseek-ai/dsh-ptc-runtime": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-sandbox": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-sandbox": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1"
   },
   "dsh": {
     "bundle": {

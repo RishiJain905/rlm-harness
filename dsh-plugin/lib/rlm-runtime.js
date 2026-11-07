@@ -12,6 +12,9 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
+import { SEPARATOR, completeSubcall, subcallRoute, withThinking } from './subcalls.js'
+import { MISSING_PREFIX, getBlob, putBlob } from './blobs.js'
+import { LLM_TOOL } from './tool-names.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPL = join(HERE, '..', 'python', 'rlm_repl.py')
@@ -30,11 +33,19 @@ export const INSTRUCTIONS = [
   'persist across run_code calls. Top-level await works. print() output is the program output, and a final',
   'bare expression is also shown. Each result is cut at a few thousand characters, so keep large data in variables',
   'instead of printing it. Tool results are dicts whose keys also read as attributes (r.lines or r["lines"]).',
-  'Besides tools, the REPL has these built-in RLM functions (synchronous, no await):',
-  '- llm(prompt: str) -> str: one sub-call to a language model; returns its reply text.',
-  '- llm_batch(prompts: list[str]) -> list[str]: many sub-calls run concurrently, replies in order.',
-  'Use llm/llm_batch to read, classify, summarize or check large text piece by piece (for example one chunk per',
-  'prompt), then combine the results in Python, instead of printing the whole text into the conversation.',
+  'Besides tools, the REPL has these built-in RLM functions (synchronous, no await). A sub-call is another model',
+  'call that reads up to about 60,000 characters and answers briefly:',
+  '- llm(prompt, over=None, schema=None, thinking=None) -> str: one sub-call.',
+  '- llm_batch(prompts, shared=None, over=None, schema=None, thinking=None) -> list: sub-calls in parallel, in order.',
+  '- segments(text, size=None) -> list: text cut into ~40,000-character slices at line ends (.id, .start, .end).',
+  '  over=segment (or one per prompt) sends the segment first, byte for byte, so asking about it again is cached;',
+  '  shared=text is sent first in every prompt of a batch.',
+  '- schema= (str, int, bool, list[str], {"key": type}, ["yes", "no"] or a JSON Schema) returns parsed values.',
+  '  thinking= ("off" to "max") sets how much a sub-call may think; "off" for lookups and extraction.',
+  '- scan(text, question) -> the passages, quoted with offsets, that bear on the question, from every segment.',
+  '- ask_files(files, question) -> {path: answer}: one sub-call per file (a glob or a list of paths).',
+  'Use these to read, classify, summarize or check large text piece by piece, then combine the results in Python,',
+  'instead of printing the whole text into the conversation.',
 ].join('\n')
 
 // D-29: the variables rlmh never passes to code it runs. Git's GIT_CONFIG_COUNT/KEY_n/VALUE_n set goes as a whole
@@ -148,43 +159,21 @@ export default class RlmPythonRuntime extends PtcRuntime {
     }
   }
 
-  /** The route a sub-call uses: the configured one, else the owning agent's model and reasoning effort. */
+  /** The route a direct sub-call uses (subcalls.js): the configured one, else the agent's model and effort. */
   subcallRoute(owner) {
-    const c = this.config
-    let current
-    try { current = owner?.model?.current?.() } catch {}
-    const provider = c.subProvider ?? current?.provider
-    const model = c.subModel ?? current?.model
-    if (!provider || !model) return undefined
-    const sameModel = provider === current?.provider && model === current?.model
-    const reasoningEffort = c.subReasoningEffort ?? (sameModel ? current?.reasoningEffort : undefined)
-    // KV cache: the session id is the provider's affinity / prompt_cache_key (pi-ai sends it to OpenRouter). Sub-calls
-    // get a key of their own, stable for the agent: they stay on one warm backend without moving the root off its
-    // backend, which a shared key could do (rlmh D-118).
-    const sessionId = typeof owner?.id === 'string' ? `${owner.id}:sub` : undefined
-    return { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}), ...(sessionId ? { sessionId } : {}) }
+    return subcallRoute(this.config, owner)
   }
 
-  /** One sub-call through dsh's model service. Overridable in tests. */
+  /**
+   * A direct sub-call, used only when the session has no `llm` tool (lib/subcall-tool.js), for example a headless
+   * profile without the RLM preset. Overridable in tests.
+   */
   async complete(prompt, route, signal) {
-    let text = ''
-    let failure
-    for await (const c of this.ctx.llm.stream({
-      ...route,
-      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-      maxTokens: this.config.subcallMaxTokens,
-      signal,
-    })) {
-      if (c.type === 'text-delta') text += c.text
-      else if (c.type === 'usage') {
-        this.usage.inputTokens += c.usage.inputTokens ?? 0
-        this.usage.outputTokens += c.usage.outputTokens ?? 0
-        this.usage.cacheReadTokens += c.usage.cacheReadTokens ?? 0
-      } else if (c.type === 'finish' && (c.reason?.kind === 'error' || c.reason?.kind === 'aborted')) failure = c.reason.failure ?? c.reason
-    }
+    const { text, usage } = await completeSubcall(this.ctx.llm, prompt, route, signal, this.config.subcallMaxTokens)
     this.usage.subcalls += 1
-    if (process.env.RLMH_DSH_DEBUG) console.error(`[rlmh-dsh] sub-call ${route.provider}/${route.model} totals ${JSON.stringify(this.usage)}`)
-    if (failure) throw new Error(failure.message ?? String(failure.code ?? 'sub-call failed'))
+    this.usage.inputTokens += usage.inputTokens
+    this.usage.outputTokens += usage.outputTokens
+    this.usage.cacheReadTokens += usage.cacheReadTokens
     return text
   }
 }
@@ -279,6 +268,15 @@ class Repl {
     })
   }
 
+  /** Count sub-calls against this run_code call's budget; throws (the REPL sees the message) when it is used up. */
+  countSubcalls(p, n) {
+    const { maxSubcallsPerRun } = this.runtime.config
+    if (p.subcalls + n > maxSubcallsPerRun) {
+      throw new Error(`sub-call budget for this run_code call is used up (${maxSubcallsPerRun}); combine what you have, or continue in another run_code call`)
+    }
+    p.subcalls += n
+  }
+
   async onFrame(line) {
     let f
     try { f = JSON.parse(line) } catch { return } // not a frame: ignore
@@ -299,29 +297,36 @@ class Repl {
       const fn = ns && Object.hasOwn(ns.functions, f.name) ? ns.functions[f.name] : undefined
       try {
         if (!fn) throw new Error(`no such function ${f.global}.${f.name}`)
+        if (f.name === LLM_TOOL) this.countSubcalls(p, 1)
         this.send({ t: 'reply', cid: f.cid, value: (await fn(f.args)) ?? null })
       } catch (e) {
         this.send({ t: 'reply', cid: f.cid, error: String(e?.message ?? e) })
       }
-    } else if (f.t === 'llm' && Number.isInteger(f.cid) && Array.isArray(f.prompts)) {
+    } else if (f.t === 'blob') {
+      putBlob(f.id, f.text) // a wrong id stores nothing; the sub-call that names it then fails and says so
+    } else if (f.t === 'llm' && Number.isInteger(f.cid) && Array.isArray(f.items)) {
+      // Direct sub-calls, when the session has no `llm` tool: the same items the tool takes.
       try {
-        const { maxSubcallsPerRun } = this.runtime.config
-        if (p.subcalls + f.prompts.length > maxSubcallsPerRun) {
-          throw new Error(`sub-call budget for this run_code call is used up (${maxSubcallsPerRun}); combine what you have, or continue in another run_code call`)
-        }
-        p.subcalls += f.prompts.length
-        const route = this.runtime.subcallRoute(p.spec.stateOwner)
-        if (!route) throw new Error('no model is selected for sub-calls')
-        const one = async (prompt) => {
+        this.countSubcalls(p, f.items.length)
+        const base = this.runtime.subcallRoute(p.spec.stateOwner)
+        if (!base) throw new Error('no model is selected for sub-calls')
+        const one = async (item) => {
+          let prompt = String(item?.prompt ?? '')
+          if (item?.prefix_id !== undefined) {
+            const prefix = getBlob(item.prefix_id)
+            if (prefix === undefined) throw new Error(`${MISSING_PREFIX}: send the prefix again`)
+            prompt = prefix + SEPARATOR + prompt
+          }
+          const route = await withThinking(this.runtime.ctx.llm, base, item?.thinking)
           await this.gate.take()
           try {
             if (p.signal.aborted) throw new Error('run_code was stopped')
-            return await this.runtime.complete(String(prompt), route, p.signal)
+            return await this.runtime.complete(prompt, route, p.signal)
           } finally {
             this.gate.give()
           }
         }
-        this.send({ t: 'reply', cid: f.cid, value: await Promise.all(f.prompts.map(one)) })
+        this.send({ t: 'reply', cid: f.cid, value: await Promise.all(f.items.map(one)) })
       } catch (e) {
         this.send({ t: 'reply', cid: f.cid, error: String(e?.message ?? e) })
       }

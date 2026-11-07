@@ -49,19 +49,72 @@ dsh (Node, Cordis)                                   rlmh bundle (npm: rlmh-dsh)
 - **The preset.** "RLM mode": a minimal preset that lists only what it needs (our isolated runtime group, `tool-executor-ptc`, a curated tool set and our persona), not a 190-line copy of dsh's `ptc` preset that drifts every release. The persona is rlmh's `default` `system.md` and `guidance.md` adapted to `run_code`; `submit` becomes the final reply. Two reading paths (`tools.read` vs `segments`) and two delegation paths (`tools.subagent` vs `llm`) would confuse the model, so the preset narrows the tool set and the prompt names one way to do each. Check whether a plugin can replace dsh's generic `run_code` SDK instructions, which contradict rlmh's reading recipe.
 - **A fixed tool set.** Everything is registered at load, so the tool list (and the cached prompt prefix) never changes during a session.
 
-## 4. Build steps
+## 4. Roadmap (the build order, agreed 2026-11-07)
 
-| Step | What | Done when |
+Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in this order. A step marked **needs Rishi** stops for him; everything else goes ahead without asking. Update the Status column when a step starts or ends, with its commit.
+
+| # | Step | Status |
 |---|---|---|
-| 1 | **Bundle skeleton**: `packages/dsh/` in this repo (or its own repo, decision below), TypeScript, `engines.dsh`, peer deps, build to `lib/`, `dsh plugin add` from a local path and from a packed `.tgz` | installs into a fresh profile on Windows, macOS, Linux; CI checks it |
-| 2 | **Runtime + worker**: `PtcRuntime` provider; a worker built from rlmh's fd discipline, output cap and error formatting; async `tools` bindings; cell interrupt on timeout; abort; sandbox mode | the spike's three tests pass; a `subprocess` printing in a cell can't corrupt the protocol; offline tests on a fake `ctx.llm` |
-| 3 | **Sub-calls as dsh tools**: `llm`, `llm_batch`, `scan`, `ask_files` registered as tools, with `segments`, `over=`, `shared=`, `schema=`, `thinking=`, and synchronous REPL wrappers; budgets; `rlm()` as a dsh subagent on the RLM preset | sub-calls appear in the Trajectory view and dsh's usage totals; a sub-call cache test shows hits on repeated segments |
-| 4 | **RLM mode preset**: a minimal preset (isolated runtime group, PTC executor, curated tools, persona from `default`'s prompt adapted to `run_code`), settings for sub-call model, thinking, cap and budgets | selectable in desktop and web; the long-document test delegates without hints |
-| 5 | **Visibility check**: confirm sub-call tokens and cost reach dsh's usage display and the `--json` events (step 3 should give this for free) | a run's sub-calls show in the GUI with tokens |
-| 6 | **Permissions and safety**: map rlmh's permission modes onto dsh's sandbox policy and approvals; env stripping at the worker hop | a write outside the workspace asks or is denied per dsh's mode |
-| 7 | **Cache guard**: a test that records every request in a session and asserts each is a byte-prefix extension of the previous, except at dsh compactions | runs in CI on a fake provider |
-| 8 | **Eval**: `rlmh eval` drives `dsh headless --json` (RLM mode vs Standard) on `harness-eval-v1` | a held-out comparison with cost |
-| 9 | **Release**: npm publish (same trusted-publishing route as rlmh), README, a `dsh-plugin` GitHub topic, plugin market listing | `dsh plugin add rlmh-dsh` works on a clean machine |
+| 0 | Spike fixes (protocol fds, waits, abort, budgets, Python lookup, sub-call affinity key) | done, `b5f4de8` |
+| 1 | Plugin tests in the verify gate and CI | done locally (gate stage passes); CI on three OSes waits for a push |
+| 2 | Sub-calls as dsh tools | done (uncommitted) |
+| 3 | rlmh's sub-call toolkit | done (uncommitted), except `rlm()` child runs, moved to step 4b |
+| 4 | A proper RLM mode preset, with settings | todo |
+| 4b | `rlm()` child runs as dsh subagents on the RLM preset | todo |
+| 5 | Works right after install (**needs Rishi**: installing into his dsh desktop) | todo |
+| 6 | Cache guard | todo |
+| 7 | Permissions (dsh's read-only and plan modes inside the REPL) | todo |
+| 8 | Eval: RLM mode vs Standard (**needs Rishi**: spend estimate and go) | todo |
+| 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | todo |
+
+### Progress notes (2026-11-07)
+- **Step 2 result.** Each sub-call is an `llm` dsh tool call: the Trajectory view lists it as a `SUBTOOL llm` row with its prompt, answer and a `[sub-call tokens: N in, M of them cached; K out]` line (checked in the web UI). dsh's own usage total (the status bar) still counts only the main conversation: its token meter replays the session's main requests, so tool-internal model calls can't reach it without a dsh change.
+- **Step 3 result.** `python/rlmapi.py` ports `segments`, `llm`/`llm_batch` with `over=`, `shared=`, `schema=` and `thinking=`, `scan` and `ask_files`. Shared prefixes go to the host once, by SHA-256 (checked), and tool calls carry only the id, so dsh's session log doesn't grow by a whole segment per sub-call. Live: a second pass over the same four 20k-character segments read 95-99% of its input from cache on 3 of 4 calls (the miss was a ~470-token tail segment). `thinking="off"` cut a counting answer to 2 output tokens, against about 6k at the inherited high effort.
+- **Deferred:** `rlm()` child runs need dsh's subagent API; they are step 4b.
+
+### Step 1. Plugin tests in the verify gate and CI
+- A `dsh-plugin` stage in both `scripts/verify.ps1` and `scripts/verify.sh`: `npm ci --offline` in `dsh-plugin/` (from npm's cache, so the gate stays offline), then the Node tests (`node --test`) and the Python tests (`python -m unittest`, on uv's Python 3.12 from the engine project).
+- A `dsh-plugin` job in `.github/workflows/ci.yml` on Windows, macOS and Linux: Node 24, `npm ci`, the same two test commands. Actions pinned by SHA like the rest; zizmor stays clean.
+- Done when: the gate runs and passes the stage locally, and CI is green on the branch on all three OSes.
+
+### Step 2. Sub-calls as dsh tools
+- A plugin in the preset registers `llm` as an ordinary dsh tool. Its route is the agent's model and reasoning effort, or the preset's sub-call setting, with its own affinity key `<session>:sub`. The REPL's `llm()` and `llm_batch()` become thin synchronous wrappers that call this tool through the `run_code` binding, one call per prompt, so dsh's executor dispatches them.
+- What that buys: each sub-call is logged as a `tool/ptc-dispatch` (it shows in the Trajectory view), is cancelled with the run, and runs under dsh's sub-call parallelism cap (`tool-executor-ptc.maxParallelSubCalls`).
+- Find out whether dsh's usage display counts tokens spent inside a tool. If not, report them another way (the tool result, or the session's usage events) so users see what sub-calls cost.
+- Done when: a live run's sub-calls show in the Trajectory view, their tokens are visible in dsh, and offline tests cover the wrappers.
+
+### Step 3. rlmh's sub-call toolkit
+- Port from rlmh's worker (`engine/rlm_engine/worker/agentapi.py`, `cacheapi.py`), adapted to the tool path: `segments(size)` (text cut at line ends, about 40,000 characters each), `llm(prompt, over=seg)` and `llm_batch(prompts, over=segs)` (the segment's bytes first, the same every time, so the provider caches them), `llm_batch(prompts, shared=text)`, `schema=` (parsed answers), `thinking=` per call, `scan(question)`, `ask_files(files, question)`.
+- `rlm(task, ...)` child runs as a dsh subagent on the RLM preset (not rlmh's `child.py`), if dsh's subagent API allows it cleanly from a plugin; otherwise a later step.
+- Done when: offline tests for each helper, and a live run shows cache hits on repeated `over=` segments.
+
+### Step 4. A proper RLM mode preset, with settings
+- Replace the 190-line copy of dsh's `ptc` preset with a minimal one: the isolated runtime group, `tool-executor-ptc`, the sub-call tool, a curated set of dsh tools (one way to read, through the REPL's helpers), and the persona: rlmh `default`'s `system.md` and `guidance.md` adapted to `run_code`.
+- Settings a user can change in dsh's GUI: sub-call model (default: the agent's own), sub-call reasoning effort, output cap, budgets.
+- Check whether a plugin can replace dsh's generic `run_code` SDK instructions, which contradict rlmh's reading recipe.
+- Done when: the long-document test (§2) delegates with no hints in the task, in the web UI, with the settings visible.
+
+### Step 5. Works right after install (needs Rishi)
+- Install from dsh desktop's own plugin manager or plugin market, with no terminal. The desktop profile refuses changes from the `dsh` CLI ("managed exclusively by the Electron application"), so this is tested through the GUI on Rishi's machine.
+- No Python on the machine: fetch Python 3.12 through uv automatically (bundling uv as rlmh's npm packages do), asking once in the GUI before downloading.
+- Done when: a fresh profile installs the plugin from a packed `.tgz` through the GUI and runs RLM mode with no other step.
+
+### Step 6. Cache guard
+- A test that records every request in a session (fake provider) and asserts each starts with the previous one byte for byte, except right after dsh's own compactions.
+- In real runs, check per-step `cacheReadTokens` (what the provider actually cached) and find the cause of any miss without a history rewrite. If OpenRouter routing causes main-conversation misses, pin the endpoint (D-120).
+- Done when: the fake-provider test runs in the gate, and a live long run shows no unexplained misses.
+
+### Step 7. Permissions
+- Honour dsh's `sandboxMode`: read-only and plan mode must reach the REPL (today a plan-mode `run_code` can write files). Either run the worker under dsh's sandbox runner, or have the REPL's audit hooks ask through dsh's approval service.
+- Done when: a write outside the workspace asks or is denied per dsh's mode, tested offline and live.
+
+### Step 8. Eval (needs Rishi)
+- `rlmh eval` drives `dsh headless --json` on `harness-eval-v1`, RLM mode against Standard, reading and coding tasks, with cost from both the root and sub-calls.
+- Done when: a held-out comparison with cost, run after Rishi has seen the estimate and said go.
+
+### Step 9. Release (needs Rishi)
+- npm publish (trusted publishing, like rlmh's packages), a README, the `dsh-plugin` GitHub topic, a listing in dsh's plugin market.
+- Done when: `dsh plugin add rlmh-dsh` works on a clean machine.
 
 ## 5. Caching rules for the plugin
 

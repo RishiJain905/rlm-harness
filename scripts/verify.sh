@@ -5,7 +5,7 @@
 # Usage: scripts/verify.sh [TEST_PATH]
 #   TEST_PATH (optional) scopes the test stages: engine/... runs only that pytest path,
 #   app/... runs only that bun test path. Only a full run with no TEST_PATH ends a task.
-# Stages: secrets, engine-tests, app-typecheck, app-tests, workflows. The engine and app stages report
+# Stages: secrets, engine-tests, app-typecheck, app-tests, workflows, dsh-plugin. The engine and app stages report
 # SKIP until engine/ or app/ exists (step 2 of the v0 build).
 set -u
 
@@ -89,6 +89,27 @@ elif ! command -v uv >/dev/null 2>&1; then
   fail workflows "uv not on PATH"
 else
   uv run --locked --project engine zizmor --offline --no-progress .github/ || fail workflows "zizmor reported findings"
+fi
+
+# 6. dsh-plugin (branch dsh-plugin, D-264): the RLM mode bundle's offline tests. npm ci --offline installs its dev
+#    dependencies from npm's cache (run `npm ci` in dsh-plugin/ once online to fill it); the Python tests run on the
+#    engine project's Python. A scope of dsh-plugin/... runs only this stage.
+stage dsh-plugin
+if [ -n "$SCOPE" ] && [[ "$SCOPE" != dsh-plugin/* ]]; then
+  echo "SKIP (scoped to $SCOPE)"
+elif [ ! -f dsh-plugin/package.json ]; then
+  echo "SKIP (dsh-plugin/ not on this branch)"
+elif ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  fail dsh-plugin "node or npm not on PATH"
+elif ! command -v uv >/dev/null 2>&1; then
+  fail dsh-plugin "uv not on PATH"
+else
+  if (cd dsh-plugin && npm ci --offline --no-audit --no-fund --ignore-scripts --loglevel=error); then
+    (cd dsh-plugin && node --test 'test/*.test.mjs') || fail dsh-plugin "node tests failed"
+  else
+    fail dsh-plugin "npm ci --offline failed (run npm ci in dsh-plugin/ once online)"
+  fi
+  uv run --locked --project engine python -m unittest discover -s dsh-plugin/test -p 'test_*.py' || fail dsh-plugin "python tests failed"
 fi
 
 echo

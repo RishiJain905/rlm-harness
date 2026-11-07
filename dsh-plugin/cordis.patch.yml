@@ -1,9 +1,13 @@
 # KV cache: every text here (persona, preset) is fixed, so dsh's cached prompt prefix stays byte-identical.
-# rlmh for DeepSeek Harness: the "RLM mode" agent preset. The `rlm-runtime` row below is off by default and exists
-# for headless tests (an overlay turns it on for the whole deployment); the preset mounts its own copy.
+# rlmh for DeepSeek Harness: the "RLM mode" agent preset. The top-level `rlm-runtime` and `rlm-subcall-tool` rows
+# are off by default and exist for headless tests (an overlay turns them on for the whole deployment); the preset
+# mounts its own copies.
 - insert:
     - id: rlm-runtime
       name: './lib/rlm-runtime.js'
+      disabled: true
+    - id: rlm-subcall-tool
+      name: './lib/subcall-tool.js'
       disabled: true
     - id: preset-rlm
       name: '@deepseek-ai/dsh-agent-preset'
@@ -178,6 +182,8 @@
                   outputMaxChars: 8000
                   maxParallelSubcalls: 8
                   maxSubcallsPerRun: 200
+              - id: rlm-subcall-tool
+                name: 'rlmh-dsh/lib/subcall-tool.js'
               - id: tool-executor-ptc
                 name: '@deepseek-ai/dsh-tool-executor-ptc'
           - id: present

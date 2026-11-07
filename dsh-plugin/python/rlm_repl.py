@@ -17,6 +17,7 @@ Standard library only. Runs under -I.
 import _thread
 import ast
 import asyncio
+import hashlib
 import inspect
 import io
 import json
@@ -173,15 +174,76 @@ def _blocking(frame):
     return f["value"]
 
 
-def llm(prompt):
-    """One sub-call to a language model; returns its reply text."""
-    return _blocking({"t": "llm", "prompts": [str(prompt)]})[0]
+SUBCALL_TOOL = "llm"  # the dsh tool behind the sub-call API (lib/subcall-tool.js), when the session has it
+MISSING_PREFIX = "unknown prefix_id"  # lib/blobs.js: the host lost a prefix; send it again
+_subcall_global = [None]  # the binding namespace that offers it, set per run
+_sent_prefixes = set()  # prefix ids the host has been sent
 
 
-def llm_batch(prompts):
-    """Many sub-calls run concurrently; replies come back in order."""
-    prompts = [str(p) for p in prompts]
-    return _blocking({"t": "llm", "prompts": prompts}) if prompts else []
+def _prefix_id(text):
+    """Send a prefix to the host once (by its SHA-256) and return its id."""
+    pid = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if pid not in _sent_prefixes:
+        send({"t": "blob", "id": pid, "text": text})
+        _sent_prefixes.add(pid)
+    return pid
+
+
+def _wait_all(boxes):
+    frames = []
+    for box in boxes:
+        while not box[0].wait(0.25):  # short waits, so an interrupt is seen on Windows too
+            pass
+        frames.append(box[1])
+    return frames
+
+
+def _subcalls_once(items):
+    args = []
+    for item in items:
+        a = {"prompt": item["prompt"]}
+        if item.get("prefix") is not None:
+            a["prefix_id"] = _prefix_id(item["prefix"])
+        if item.get("thinking") is not None:
+            a["thinking"] = item["thinking"]
+        args.append(a)
+    glob = _subcall_global[0]
+    if glob is None:  # no `llm` tool in this session: the runtime answers directly
+        return [("value", t) for t in _blocking({"t": "llm", "items": args})]
+    boxes = []
+    for a in args:  # all sent at once, so dsh runs them in parallel under its own cap
+        box = [threading.Event(), None]
+        cid = _new_waiter("event", box)
+        send({"t": "call", "cid": cid, "global": glob, "name": SUBCALL_TOOL, "args": a})
+        boxes.append(box)
+    out = []
+    for f in _wait_all(boxes):
+        if "error" in f:
+            out.append(("error", f["error"]))
+        else:
+            value = f.get("value")
+            out.append(("value", value.get("text", "") if isinstance(value, dict) else str(value)))
+    return out
+
+
+def _subcalls(items):
+    """Run sub-calls (items: {"prompt", "prefix", "thinking"}), replies in order. Through the dsh `llm` tool when the
+    session has one (each is then a logged, cancellable dsh dispatch), else through the runtime directly."""
+    if not items:
+        return []
+    try:
+        results = _subcalls_once(items)
+    except RuntimeError as e:
+        if MISSING_PREFIX not in str(e):
+            raise
+        results = [("error", str(e))]
+    if any(kind == "error" and MISSING_PREFIX in str(v) for kind, v in results):
+        _sent_prefixes.clear()  # the host dropped some: send them all again, once
+        results = _subcalls_once(items)
+    errors = [v for kind, v in results if kind == "error"]
+    if errors:
+        raise RuntimeError(f"{len(errors)} of {len(items)} sub-calls failed; first: {errors[0]}")
+    return [v for _kind, v in results]
 
 
 class _Capped(io.TextIOBase):
@@ -259,7 +321,11 @@ class _FdCapture:
         self._sink = None
 
 
-NS = {"__name__": "__main__", "__builtins__": __builtins__, "llm": llm, "llm_batch": llm_batch}
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I leaves our own folder off sys.path
+import rlmapi  # noqa: E402  (rlmh's sub-call toolkit, next to this file)
+
+NS = {"__name__": "__main__", "__builtins__": __builtins__}
+NS.update(rlmapi.build(_subcalls))
 FLAGS = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
 
 
@@ -272,7 +338,10 @@ def _format_error(exc):
 
 
 def _bind(bindings):
+    _subcall_global[0] = None
     for b in bindings or []:
+        if SUBCALL_TOOL in (b.get("names") or []) and _subcall_global[0] is None:
+            _subcall_global[0] = b["global"]
         ec = b.get("errorClass") or {}
         name = ec.get("name") or "ToolCallError"
         err = NS.get(name)

@@ -4,7 +4,7 @@
 # Usage: scripts\verify.ps1 [TEST_PATH]
 #   TEST_PATH (optional) scopes the test stages: engine/... runs only that pytest path,
 #   app/... runs only that bun test path. Only a full run with no TEST_PATH ends a task.
-# Stages: secrets, engine-tests, app-typecheck, app-tests, workflows. The engine and app stages report
+# Stages: secrets, engine-tests, app-typecheck, app-tests, workflows, dsh-plugin. The engine and app stages report
 # SKIP until engine/ or app/ exists (step 2 of the v0 build). Windows PowerShell 5.1 compatible.
 param([string]$Scope = "")
 
@@ -99,6 +99,35 @@ if ($Scope) {
 } else {
     uv run --locked --project engine zizmor --offline --no-progress .github/
     if ($LASTEXITCODE -ne 0) { Fail "workflows" "zizmor reported findings" }
+}
+
+# 6. dsh-plugin (branch dsh-plugin, D-264): the RLM mode bundle's offline tests. npm ci --offline installs its dev
+#    dependencies from npm's cache (run `npm ci` in dsh-plugin/ once online to fill it); the Python tests run on the
+#    engine project's Python. A scope of dsh-plugin/... runs only this stage.
+Stage "dsh-plugin"
+if ($Scope -and -not $Scope.StartsWith("dsh-plugin/")) {
+    Write-Output "SKIP (scoped to $Scope)"
+} elseif (-not (Test-Path "dsh-plugin/package.json")) {
+    Write-Output "SKIP (dsh-plugin/ not on this branch)"
+} elseif (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Fail "dsh-plugin" "node or npm not on PATH"
+} elseif (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Fail "dsh-plugin" "uv not on PATH"
+} else {
+    Push-Location dsh-plugin
+    try {
+        npm ci --offline --no-audit --no-fund --ignore-scripts --loglevel=error
+        if ($LASTEXITCODE -ne 0) {
+            Fail "dsh-plugin" "npm ci --offline failed (run npm ci in dsh-plugin/ once online)"
+        } else {
+            node --test "test/*.test.mjs"
+            if ($LASTEXITCODE -ne 0) { Fail "dsh-plugin" "node tests failed" }
+        }
+    } finally {
+        Pop-Location
+    }
+    uv run --locked --project engine python -m unittest discover -s dsh-plugin/test -p "test_*.py"
+    if ($LASTEXITCODE -ne 0) { Fail "dsh-plugin" "python tests failed" }
 }
 
 Write-Output ""

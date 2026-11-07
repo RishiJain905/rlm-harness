@@ -12,12 +12,14 @@ import time
 import unittest
 
 REPL = os.path.join(os.path.dirname(__file__), "..", "python", "rlm_repl.py")
+SEPARATOR = "\n\n"  # rlmapi.SEPARATOR, between a prefix and its prompt
 
 
 class Repl:
     """A REPL child. `run()` sends one cell and answers call/llm frames with the given fakes until it is done."""
 
     def __init__(self):
+        self.blobs = {}  # prefix id -> text, as the host stores them
         self.p = subprocess.Popen([sys.executable, "-I", "-u", "-X", "utf8", REPL], stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.frames = []
@@ -49,8 +51,16 @@ class Repl:
                     self.send({"t": "reply", "cid": f["cid"], "value": tools[f["name"]](f["args"])})
                 except Exception as e:  # noqa: BLE001 - a fake tool's failure becomes a tool error
                     self.send({"t": "reply", "cid": f["cid"], "error": str(e)})
+            elif f["t"] == "blob":
+                self.blobs[f["id"]] = f["text"]
             elif f["t"] == "llm" and llm is not None:
-                self.send({"t": "reply", "cid": f["cid"], "value": [llm(p) for p in f["prompts"]]})
+                self.send({"t": "reply", "cid": f["cid"], "value": [llm(self.full(i)) for i in f["items"]]})
+
+    def full(self, item):
+        """The prompt a sub-call sends: the stored prefix first, then the prompt (lib/subcall-tool.js)."""
+        if "prefix_id" in item:
+            return self.blobs[item["prefix_id"]] + SEPARATOR + item["prompt"]
+        return item["prompt"]
 
     def close(self):
         for stream in (self.p.stdin,):
@@ -157,6 +167,131 @@ class ReplTest(unittest.TestCase):
         done = self.r.read()
         self.assertIn("closed this REPL", done["error"])
         self.assertEqual(self.r.p.wait(10), 0)
+
+
+class ToolkitTest(unittest.TestCase):
+    """rlmapi.py through the REPL: the sub-calls it makes, as the fake host sees them."""
+
+    def setUp(self):
+        self.r = Repl()
+        self.prompts = []
+
+    def tearDown(self):
+        self.r.close()
+
+    def answer(self, reply):
+        def llm(prompt):
+            self.prompts.append(prompt)
+            return reply(prompt) if callable(reply) else reply
+        return llm
+
+    def test_segments_cut_at_line_ends(self):
+        done = self.r.run('text = "".join(f"line {i}\\n" for i in range(400))\n'
+                          's = segments(text, 1000)\n'
+                          '[len(s), s[0].id, s[0].start, s[0].end, s[0].endswith("\\n"), "".join(s) == text]')
+        n, first_id, start, end, at_line_end, whole = done["value"]
+        self.assertGreater(n, 1)
+        self.assertEqual((first_id, start), (0, 0))
+        self.assertLessEqual(end, 1000)
+        self.assertTrue(at_line_end and whole)
+        self.assertIn("at least", self.r.run('segments("x", 10)')["error"])
+
+    def test_over_sends_the_segment_first_and_only_once(self):
+        llm = self.answer("ok")
+        done = self.r.run('seg = segments("A" * 3000 + "\\n" + "B" * 10, 2000)[0]\n'
+                          'llm("q1", over=seg); llm_batch(["q2", "q3"], over=seg)', llm=llm)
+        self.assertIsNone(done["error"], done)
+        self.assertEqual(len(self.r.blobs), 1, "the segment was sent more than once, or not at all")
+        blobs_sent = [f for f in self.r.frames if f["t"] == "blob"]
+        self.assertEqual(len(blobs_sent), 1)
+        for prompt, q in zip(self.prompts, ("q1", "q2", "q3")):
+            self.assertTrue(prompt.startswith("A" * 2000), "the segment did not come first")
+            self.assertTrue(prompt.endswith(SEPARATOR + q))
+
+    def test_shared_goes_first_and_with_over_goes_after_the_segment(self):
+        llm = self.answer("ok")
+        self.r.run('llm_batch(["a", "b"], shared="RULES")', llm=llm)
+        self.assertEqual(self.prompts, ["RULES" + SEPARATOR + "a", "RULES" + SEPARATOR + "b"])
+        self.prompts.clear()
+        self.r.run('llm_batch(["a"], shared="RULES", over="SEG")', llm=llm)
+        self.assertEqual(self.prompts, ["SEG" + SEPARATOR + "RULES" + SEPARATOR + "a"])
+
+    def test_schema_parses_and_asks_again_once(self):
+        replies = iter(["no json here", '```json\n{"n": 3, "ok": true}\n```'])
+        done = self.r.run('llm("count", schema={"n": int, "ok": bool})', llm=self.answer(lambda p: next(replies)))
+        self.assertEqual(done["value"], {"n": 3, "ok": True})
+        self.assertEqual(len(self.prompts), 2)
+        self.assertIn("It was not valid", self.prompts[1])
+        done = self.r.run('llm_batch(["a", "b"], schema=["yes", "no"])', llm=self.answer(lambda p: '"yes"' if p.startswith("a") else "maybe"))
+        self.assertEqual(done["value"], ["yes", None])
+        self.assertIn("did not match the schema", done["output"])
+
+    def test_thinking_is_passed_and_checked(self):
+        self.r.run('llm("a", thinking="low")', llm=self.answer("ok"))
+        item = [f for f in self.r.frames if f["t"] == "llm"][-1]["items"][0]
+        self.assertEqual(item["thinking"], "low")
+        self.assertIn("thinking must be one of", self.r.run('llm("a", thinking="huge")')["error"])
+
+    def test_scan_returns_quotes_with_offsets(self):
+        text = "alpha\n" * 300 + "the key fact is 42\n" + "omega\n" * 300
+
+        def reply(prompt):
+            return json.dumps({"quotes": ["the key fact is 42"] if "key fact" in prompt.split(SEPARATOR)[0] else [],
+                               "note": "found"})
+
+        done = self.r.run(f'text = {text!r}\nfound = scan(text, "what is the key fact?", size=1000)\n'
+                          'found2 = [(f["quotes"][0]["at"], text[f["quotes"][0]["at"]:][:18]) for f in found]\nfound2',
+                          llm=self.answer(reply))
+        self.assertIsNone(done["error"], done)
+        ((at, quoted),) = done["value"]
+        self.assertEqual(quoted, "the key fact is 42")
+        self.assertIn("scan:", done["output"])
+
+    def test_ask_files_reads_a_glob_and_sends_each_file_first(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (("a.py", "print(1)\n"), ("b.py", "print(2)\n"), ("c.txt", "skip\n")):
+                with open(os.path.join(d, name), "w") as f:
+                    f.write(body)
+            pattern = os.path.join(d, "*.py").replace("\\", "/")
+            done = self.r.run(f'r = ask_files({pattern!r}, "what does it print?")\nsorted(v for v in r.values())',
+                              llm=self.answer(lambda p: p.split("print(")[1][0]))
+        self.assertEqual(done["value"], ["1", "2"])
+        self.assertTrue(all(p.startswith("=== ") for p in self.prompts))
+
+    def test_a_lost_prefix_is_sent_again(self):
+        state = {"dropped": False}
+
+        def on_frame(r, f):
+            if f["t"] == "llm" and not state["dropped"]:
+                state["dropped"] = True
+                r.blobs.clear()  # the host lost it
+                r.send({"t": "reply", "cid": f["cid"], "error": "unknown prefix_id: send the prefix again"})
+
+        llm = self.answer("ok")
+
+        def run_frame(r, f):
+            on_frame(r, f)
+
+        # the first llm frame is refused before the fake answers it; the REPL resends the blob and asks again
+        def run(program):
+            self.r.send({"t": "run", "program": program, "cwd": os.getcwd(), "cap": None, "bindings": []})
+            while True:
+                f = self.r.read()
+                if f["t"] == "done":
+                    return f
+                if f["t"] == "blob":
+                    self.r.blobs[f["id"]] = f["text"]
+                elif f["t"] == "llm":
+                    if not state["dropped"]:
+                        run_frame(self.r, f)
+                    else:
+                        self.r.send({"t": "reply", "cid": f["cid"], "value": [llm(self.r.full(i)) for i in f["items"]]})
+
+        done = run('llm("q", over="SEGMENT")')
+        self.assertIsNone(done["error"], done)
+        self.assertEqual(self.prompts, ["SEGMENT" + SEPARATOR + "q"])
+        self.assertEqual(sum(1 for f in self.r.frames if f["t"] == "blob"), 2)
 
 
 if __name__ == "__main__":

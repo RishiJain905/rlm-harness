@@ -141,3 +141,24 @@ test('the instructions are fixed text', () => {
   assert.equal(make().executionInstructions, INSTRUCTIONS)
   assert.doesNotMatch(INSTRUCTIONS, /\d{4}-\d{2}-\d{2}/)
 })
+
+test('with an llm tool in the bindings, llm()/llm_batch() go through it, one call each, and count toward the budget', async () => {
+  const rt = make({ maxSubcallsPerRun: 3 })
+  const seen = []
+  const llm = async ({ prompt }) => { seen.push(prompt); return { text: prompt.toUpperCase(), usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0 } } }
+  const o = owner()
+  const res = await run(rt, 'print(llm("a"), llm_batch(["b", "c"]))', { stateOwner: o, bindings: tools({ llm }) })
+  assert.deepEqual(res.logs, ["A ['B', 'C']"])
+  assert.deepEqual(seen.sort(), ['a', 'b', 'c'])
+  assert.equal(rt.calls.length, 0, 'the direct path was used')
+  const over = await run(rt, 'llm_batch(["d", "e", "f", "g"])', { stateOwner: o, bindings: tools({ llm }) })
+  assert.match(over.error.message, /budget/)
+  await rt.release(o)
+})
+
+test('a failing llm tool call raises in the cell', async () => {
+  const rt = make()
+  const llm = async () => { throw new Error('rate limited') }
+  const res = await run(rt, 'llm_batch(["a", "b"])', { stateOwner: owner(), bindings: tools({ llm }) })
+  assert.match(res.error.message, /2 of 2 sub-calls failed; first: rate limited/)
+})

@@ -244,3 +244,34 @@ jobs:
           version=$(sed -n 's/^export const APP_VERSION = "\(.*\)";$/\1/p' app/src/version.ts)
           bash scripts/npm-pack.sh assets "$version" out
           bash scripts/npm-check.sh out assets
+
+  # D-264: the RLM mode bundle for DeepSeek Harness (branch dsh-plugin). Its offline tests: Node against a fake
+  # model service, Python against the REPL, on every OS (the REPL's fd handling differs on Windows).
+  dsh-plugin:
+    name: dsh-plugin ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - name: Install the plugin's dev dependencies
+        working-directory: dsh-plugin
+        run: npm ci --no-audit --no-fund --ignore-scripts
+      - name: Node tests
+        working-directory: dsh-plugin
+        run: node --test 'test/*.test.mjs'
+      - name: Python tests
+        run: uv run --locked --project engine python -m unittest discover -s dsh-plugin/test -p 'test_*.py' -v
