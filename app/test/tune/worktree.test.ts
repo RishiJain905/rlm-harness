@@ -325,6 +325,20 @@ describe("pruneStale", () => {
     expect(await pruneStale(t.home)).toEqual([]);
     expect(existsSync(tuneDir(t.home))).toBe(false);
   });
+
+  test("SR-5: a work.json whose path points outside its own folder removes nothing there", async () => {
+    const t = scratch();
+    const victim = join(t.dir, "victim");
+    write(join(victim, "keep.txt"), "keep\n");
+    const repoDir = repo(t);
+    const gone = Bun.spawnSync({ cmd: [process.execPath, "-e", "0"] }).pid;
+    const dir = join(tuneDir(t.home), "work", "t_9", "probe-inv");
+    write(join(dir, "work.json"), JSON.stringify({ folder: repoDir, kind: "worktree", path: victim, pid: gone }));
+    const removed = await pruneStale(t.home);
+    expect(removed).toEqual([dir]);
+    expect(readFileSync(join(victim, "keep.txt"), "utf8")).toBe("keep\n");
+    expect(existsSync(dir)).toBe(false);
+  });
 });
 
 describe("runTest", () => {

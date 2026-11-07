@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { splitCommand, stripKeys } from "../engine.ts";
 import { killTree, removeQuietly, spawnRunner, toolCommand, type Ran } from "../eval/work.ts";
 import { home as defaultHome, tuneDir } from "../paths.ts";
@@ -390,6 +390,12 @@ async function dropWorktree(top: string, path: string): Promise<void> {
 
 // -- leftovers --
 
+/** Whether `path` is strictly inside `dir`, by path text (case folded on Windows); no link is followed. */
+function isBelow(path: string, dir: string): boolean {
+  const fold = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+  return fold(resolve(path)).startsWith(fold(resolve(dir)) + sep);
+}
+
 /** Folders holding a work.json under `root`, not looking inside them; links are not followed. */
 function marked(root: string): string[] {
   const out: string[] = [];
@@ -446,7 +452,11 @@ export async function pruneStale(home: string): Promise<string[]> {
     for (const dir of marked(root)) {
       const info = readWorkJson(dir);
       if (info !== null && otherAlive(info.pid)) continue;
-      if (info?.kind === "worktree" && typeof info.folder === "string" && typeof info.path === "string") await dropWorktree(info.folder, info.path);
+      // only a worktree below this work.json's own folder is removed: the file is data, and a path in it must never
+      // point the recursive removal anywhere else (SR-5)
+      if (info?.kind === "worktree" && typeof info.folder === "string" && typeof info.path === "string" && isBelow(info.path, dir)) {
+        await dropWorktree(info.folder, info.path);
+      }
       if (removeQuietly(dir)) removed.push(dir);
     }
     removeEmpty(root);
