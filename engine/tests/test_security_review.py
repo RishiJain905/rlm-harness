@@ -75,6 +75,16 @@ def test_sr1_tools_git_runs_with_the_configure_time_environment(tmp_path: Path, 
         assert "RLMH_SET_LATER" not in call["env"]
 
 
+def test_sr1_taskkill_is_resolved_at_configure_time(tmp_path: Path) -> None:
+    """SR-1 residual: the Windows taskkill fallback after a timed-out shell() runs quietly too, so it is found
+    when the tools are configured; elsewhere it is None and never used."""
+    rt.configure(root=str(tmp_path), shell=SH)
+    if POSIX:
+        assert rt._config["taskkill"] is None
+    else:
+        assert rt._config["taskkill"] and rt._config["taskkill"].lower().endswith("taskkill.exe")
+
+
 # ----------------------------------------------------------------------------- SR-2: writes under .git
 
 

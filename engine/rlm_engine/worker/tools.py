@@ -74,7 +74,8 @@ else:
     _NEW_GROUP = {"start_new_session": True}
 
 _config = {"root": REPO_DIR, "base": None, "time_left": None, "on_call": None, "scratch": None, "shell": SH,
-           "alias": REPO_DIR, "approve": None, "remote_fetch": None, "objects": None, "git": None, "env": {}}
+           "alias": REPO_DIR, "approve": None, "remote_fetch": None, "objects": None, "git": None, "env": {},
+           "taskkill": None}
 _local = threading.local()
 
 
@@ -98,7 +99,8 @@ def configure(root: str = REPO_DIR, base: str | None = None, time_left=None, on_
     _config.update(root=os.path.abspath(root), base=base, time_left=time_left, on_call=on_call,
                    scratch=os.path.abspath(scratch) if scratch else None, shell=shell, alias=alias, approve=approve,
                    remote_fetch=remote_fetch, objects=os.path.abspath(objects) if objects else None,
-                   git=shutil.which("git"), env=dict(os.environ))
+                   git=shutil.which("git"), env=dict(os.environ),
+                   taskkill=shutil.which("taskkill") if sys.platform == "win32" else None)
 
 
 def namespace() -> dict:
@@ -655,9 +657,11 @@ def shell(cmd: str, timeout: float = SHELL_TIMEOUT_S) -> ShellResult:
             if job is not None:  # the whole tree, as killpg does below; children Git Bash reparented too
                 job.kill()
             else:
+                # the taskkill and environment configure() found, as for _git (SR-1): this runs quietly
                 with _quiet(), contextlib.suppress(OSError):
-                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+                    subprocess.run([_config["taskkill"] or "taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   creationflags=_NO_WINDOW, env=_config["env"] or None)
             with contextlib.suppress(OSError):
                 proc.kill()
         else:
