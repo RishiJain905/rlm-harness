@@ -6,6 +6,7 @@
 import { Box, useInput } from "ink";
 import { useState } from "react";
 import type { ApprovalParams, ApprovalResult } from "../protocol.ts";
+import { placeNote } from "./approvals.ts";
 import { truncate, wrapText } from "./format.ts";
 import { Lines } from "./Lines.tsx";
 import { paint, span, useTheme, type Line } from "./theme.ts";
@@ -32,7 +33,7 @@ export function approvalLines(p: ApprovalParams, waiting: number, width: number,
   const head: Line = [
     span(p.kind, { bold: true, color: color(KIND_COLORS[p.kind]) }),
     span(`  turn ${p.turn}`, { dim: true }),
-    ...(p.inside_workspace ? [] : [span("  outside the workspace", { color: color("yellow") })]),
+    ...(placeNote(p) === null ? [] : [span(`  ${placeNote(p)}`, { color: color("yellow") })]),
     ...(waiting > 0 ? [span(`  +${waiting} waiting`, { dim: true })] : []),
   ];
   const detail = p.detail.length > DETAIL_MAX ? `${p.detail.slice(0, DETAIL_MAX)} (+${p.detail.length - DETAIL_MAX} chars)` : p.detail;

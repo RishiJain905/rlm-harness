@@ -4,6 +4,20 @@
 
 import type { ApprovalParams, ApprovalResult } from "../protocol.ts";
 
+/**
+ * Whether a write's detail (a path, or `src -> dst` for a rename, D-47) touches a `.git` folder. The engine sends
+ * such a write as outside the workspace (SR-2); the prompt names the real reason instead.
+ */
+export function touchesGitDir(detail: string): boolean {
+  return detail.split(" -> ").some((path) => path.split(/[\\/]/).some((part) => part.toLowerCase() === ".git"));
+}
+
+/** The head-line note for a write the engine marked outside the workspace, or null when it is inside. */
+export function placeNote(p: ApprovalParams): string | null {
+  if (p.inside_workspace) return null;
+  return p.kind === "write" && touchesGitDir(p.detail) ? "in the repository's .git folder" : "outside the workspace";
+}
+
 const DENY: ApprovalResult = { allow: false, remember_for_run: false };
 
 interface Pending {

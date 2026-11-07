@@ -67,8 +67,8 @@ result. The accidental version is real too: a cell that prepends a repository's 
 whatever `git` that repository ships.
 
 Fix: `configure()` records `shutil.which("git")` and a copy of `os.environ`; `_git` and `diff()` use only
-those. Residual, Windows only: the `taskkill` fallback after a timed-out `shell()` is still found on PATH
-(`tools.py:653`); the same one-line treatment applies, left out because it cannot be tested here.
+those. Follow-up (Rishi's answer 5): the Windows `taskkill` fallback after a timed-out `shell()` is resolved at
+`configure()` too, with the same environment; it cannot run on Windows here, so the PC run checks it.
 
 Variant hunt: `inputs._git_names`, `workspace._git` and `mentions.gitFiles` run in the engine and app processes,
 whose environment the model does not control; `shell()` asks first and shows the command, so its PATH does not
@@ -84,8 +84,9 @@ against exactly these settings (`core.hooksPath`, `core.fsmonitor=false`, `--no-
 shows the repository's config is in the threat model; the user's own git has none of that.
 
 Fix: in `hooks._write`, a path with a `.git` segment (case folded) is never `inside`, so it asks like a write
-outside the workspace, in accept-edits and default alike; `bypass` still asks nothing. The prompt's wording
-says "outside the workspace" for it (`Approval.tsx:35`); an "in .git" label would read better. A "for the rest
+outside the workspace, in accept-edits and default alike; `bypass` still asks nothing. Follow-up (Rishi's answer 2): the
+prompt's head line now says "in the repository's .git folder" for such a write (`approvals.ts:placeNote`), read
+from the path itself, so no wire change was needed. A "for the rest
 of this run" answer on such a prompt is remembered as the outside-write key (D-14), as for any outside write.
 
 Variant hunt: the engine's `workspace.fingerprint` already skips `.git`, so a `.git` write never showed as a
