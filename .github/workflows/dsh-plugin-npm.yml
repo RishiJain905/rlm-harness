@@ -7,8 +7,15 @@ name: dsh-plugin npm
 # as rlmh-dsh's trusted publisher on npmjs.com (workflow dsh-plugin-npm.yml, environment npm). npm sets that up per
 # package and only once the package exists, so the first version goes up by hand (documentation/v1.1/release.md).
 # Run: gh workflow run dsh-plugin-npm.yml --ref dsh-plugin [-f publish=true]
+# A push to dsh-plugin that changes the package or this file runs the pack job only. That also registers the workflow,
+# which GitHub needs before it can be dispatched from a branch other than the default one.
 
 on:
+  push:
+    branches: [dsh-plugin]
+    paths:
+      - dsh-plugin/package.json
+      - .github/workflows/dsh-plugin-npm.yml
   workflow_dispatch:
     inputs:
       publish:
@@ -66,7 +73,7 @@ jobs:
 
   publish:
     needs: pack
-    if: inputs.publish && github.ref == 'refs/heads/dsh-plugin'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/dsh-plugin'
     runs-on: ubuntu-latest
     environment: npm
     permissions:
