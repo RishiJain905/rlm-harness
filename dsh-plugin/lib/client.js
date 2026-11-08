@@ -22,7 +22,13 @@ window.__ModuleLoader__.load({
       subModel: 'Sub-call model',
       subModelHint: 'The model id for sub-calls (for example ~deepseek/deepseek-flash-latest). Leave blank to use the agent\'s own model.',
       subReasoningEffort: 'Sub-call reasoning effort',
-      subReasoningEffortHint: 'An effort the sub-call model offers, such as low, medium or high. Leave blank to use the agent\'s effort. Lower effort costs less output.',
+      subReasoningEffortHint: 'How much each sub-call may think. "Agent" uses the agent\'s own effort. Each level is fitted to what the sub-call model offers. Lower effort costs less output, and sub-call output is most of RLM mode\'s cost.',
+      effortAgent: 'Agent',
+      effortOff: 'Off',
+      effortLow: 'Low',
+      effortMedium: 'Medium',
+      effortHigh: 'High',
+      effortMax: 'Max',
       outputMaxChars: 'Result size (characters)',
       outputMaxCharsHint: 'How much of one run_code result the agent sees; the rest is cut so it reads through sub-calls. Default 8000.',
       maxSubcallsPerRun: 'Sub-calls per run_code call',
@@ -39,19 +45,27 @@ window.__ModuleLoader__.load({
       invalidNumber: 'Enter a number, or leave blank to use the default.',
     }
 
-    const TEXT = ['subProvider', 'subModel', 'subReasoningEffort']
+    const TEXT = ['subProvider', 'subModel']
+    const EFFORT = 'subReasoningEffort'
+    // The levels offered; '' is the agent's own. lib/subcalls.js fitEffort maps each onto the model's own levels.
+    const EFFORTS = ['', 'off', 'low', 'medium', 'high', 'max']
     const NUMBERS = ['outputMaxChars', 'maxSubcallsPerRun', 'maxParallelSubcalls']
+
+    /** The effort field: a stored value keeps its text (an older profile may hold a model's own effort id). */
+    function effortField() {
+      return { field: EFFORT, format: (v) => (typeof v === 'string' ? v : ''), parse: (t) => (t.trim() === '' ? { kind: 'clear' } : { kind: 'set', value: t.trim() }) }
+    }
 
     /** Bridges the `rlmh-settings` entry's form onto the page's staged form. */
     class RlmhCardController {
       constructor(scope) {
-        this.form = new P.SettingsFormModel(scope, [...TEXT.map((f) => P.settingsTextField(f)), ...NUMBERS.map((f) => P.settingsNumberField(f))])
+        this.form = new P.SettingsFormModel(scope, [...TEXT.map((f) => P.settingsTextField(f)), effortField(), ...NUMBERS.map((f) => P.settingsNumberField(f))])
         this.store = this.form.bind(() => this.projection())
       }
 
       projection() {
         const out = { ...this.form.shell() }
-        for (const f of [...TEXT, ...NUMBERS]) out[f] = this.form.field(f)
+        for (const f of [...TEXT, EFFORT, ...NUMBERS]) out[f] = this.form.field(f)
         return out
       }
 
@@ -83,12 +97,43 @@ window.__ModuleLoader__.load({
         onEdit: (text) => { props.edit(name, text) },
         onReset: () => { props.resetField(name) },
       }, name)
+      // The effort is picked from fixed levels (a segmented control) instead of typed. A value saved before that is
+      // none of them still shows, as one more option, until the user picks another or resets it.
+      const effort = () => {
+        const f = state[EFFORT]
+        const label = (v) => t(`effort${v ? v[0].toUpperCase() + v.slice(1) : 'Agent'}`)
+        const options = EFFORTS.map((v) => ({ value: v, label: label(v) }))
+        if (f.text && !EFFORTS.includes(f.text)) options.push({ value: f.text, label: f.text })
+        return jsxs('div', {
+          // the same spacing, divider and type sizes as dsh's SettingsValueField (dsh 0.2.2-rc.1)
+          style: { display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 0', borderTop: '1px solid rgba(127, 127, 127, 0.2)' },
+          children: [
+            jsxs('div', {
+              style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+              children: [
+                jsx('span', { style: { fontSize: 13, fontWeight: 500, lineHeight: 1.5 }, children: t(EFFORT) }),
+                f.overridden ? jsx('button', { type: 'button', disabled, onClick: () => { props.resetField(EFFORT) }, style: { font: 'inherit', fontSize: 12, color: 'inherit', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline', opacity: 0.7 }, children: t('reset') }) : null,
+              ],
+            }),
+            // scrolls sideways rather than clipping when the page is narrower than the levels (phones)
+            jsx('div', { style: { overflowX: 'auto', maxWidth: '100%' }, children: jsx(P.SegmentedControl, {
+              id: 'plugin-config-rlmh-effort',
+              label: t(EFFORT),
+              value: f.text,
+              options,
+              disabled,
+              onChange: (v) => { if (v === '') props.resetField(EFFORT); else props.edit(EFFORT, v) },
+            }) }),
+            jsx('p', { style: { margin: 0, fontSize: 12, lineHeight: 1.5, opacity: 0.55 }, children: t(`${EFFORT}Hint`) }),
+          ],
+        }, EFFORT)
+      }
       return jsxs(P.SettingsForm, {
         labels: { unavailable: t('unavailable'), readOnly: t('readOnly'), saveFailed: t('saveFailed'), save: t('save'), saving: t('saving') },
         state,
         onSave: props.save,
         onDiscard: props.discard,
-        children: [...TEXT.map((f) => field(f, false)), ...NUMBERS.map((f) => field(f, true))],
+        children: [...TEXT.map((f) => field(f, false)), effort(), ...NUMBERS.map((f) => field(f, true))],
       })
     }
 

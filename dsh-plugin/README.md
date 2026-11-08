@@ -45,7 +45,7 @@ Each sub-call is an `llm` tool call in dsh's Trajectory view, with its prompt, a
 | Setting | Default |
 |---|---|
 | Sub-call provider and model | the agent's own |
-| Sub-call reasoning effort | the agent's own when the model is the agent's |
+| Sub-call reasoning effort (Agent, Off, Low, Medium, High or Max; each fitted to the model's own levels) | Agent: the agent's own effort |
 | Result size (characters of one `run_code` result the agent sees) | 8,000 |
 | Sub-calls per `run_code` call | 200 |
 | Parallel sub-calls (when dsh has no sub-call limit of its own) | 8 |
