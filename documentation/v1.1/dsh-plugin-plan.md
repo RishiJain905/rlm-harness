@@ -66,7 +66,7 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 | 5b | Python for installs without dsh desktop: download it through uv after asking once in the GUI | done (D-265), checked in `dsh web` |
 | 6 | Cache guard | done, `390f2f5` (runs in CI, not the offline gate) |
 | 7 | Permissions (dsh's read-only and plan modes inside the REPL) | done, `ac5c530` |
-| 8 | Eval: RLM mode vs Standard (**needs Rishi**: spend estimate and go) | todo |
+| 8 | Eval: RLM mode vs Standard (**needs Rishi**: spend estimate and go) | cloud proxy done 2026-11-08 ($1.19, 4 paired tasks); `harness-eval-v1` still needs Rishi's PC |
 | 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | ready to publish (D-266): package 0.1.0, README, `dsh-plugin-release.yml`; waits on Rishi's first publish |
 
 ### Progress notes (2026-11-07)
@@ -109,6 +109,22 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
   - **What it fixed:** the `[sub-call tokens: …]` line said "M of them cached". dsh's counts are disjoint (`inputTokens` is uncached input only), so it now reads "N new in, M cached in, K out".
   - **What it says about the open sub-call effort question:** sub-call output is the main cost.
 - **Sub-call effort as a picker (2026-11-08).** The settings card's sub-call effort is now a segmented control (dsh's `SegmentedControl` primitive) with Agent, Off, Low, Medium, High and Max, not a text box. It sits on the same staged form, so Save, Discard and Reset work as on the other fields. Picking Agent unsets the field. A value saved earlier that isn't one of the six (a model's own effort id) still shows as an extra option. Checked in `dsh web`: Low and Save wrote `subReasoningEffort: low` to the profile, and Agent and Save removed it. At 390 px the six options need 398 px, so the control scrolls sideways inside its field, and the page itself doesn't scroll. The default stays the agent's own effort, still Rishi's decision. `thinking=` per call still overrides it.
+- **Step 8, cloud proxy eval (2026-11-08, Rishi's go: estimate about $3 for 16 runs, cap $10; Rishi then cut it to 4 tasks per mode).** `harness-eval-v1` exists only on Rishi's D: drive (with git-ignored private seeds), so this was a proxy eval in a cloud container.
+  - **Set `dsh-proxy-v1`:** the RLM repo's own `aggregation_heldout` generator via `tasks.fixed_set` (HuffPost headlines, a source never trained on, data checked against `dataset-manifest.json`), levels 1 and 2, two tasks each, 189K to 359K characters. Every question needs each headline classified, then a count or a list.
+  - **Prompt:** the same for both modes, with one added line asking for a final `ANSWER:` line. Graded with `reward.score_answer`.
+  - **Runs:** `dsh web` 0.2.2-rc.1, driven by Playwright like a user (headless dsh refuses agent presets: "the one-shot runner does not compose" them). OpenRouter `~deepseek/deepseek-flash-latest`, effort High, output cap 65,536, one task at a time.
+  - **Where the tooling lives:** the task builder, driver, grader and outputs are all in the session's scratch folder, not in either repo.
+
+  | Mode | Exact | Cost | Sub-call share of cost | Mean steps | Sub-calls | Wall time |
+  |---|---|---|---|---|---|---|
+  | RLM | 4/4 | $0.71 | $0.65 | 24.2 | 728 | 20.6 min |
+  | Standard | 3/4 | $0.15 | n/a | 22.2 | 0 | 24.0 min |
+
+  - **Accuracy:** RLM got every task right. Standard missed one count task (L2-01, scored 0). RLM was also right on a level-3 task (485K characters, $0.32, 249 sub-calls), but that run has no Standard pair: it was the only run on that task when the eval was cut. The cancelled Standard run on that task had used $0.007.
+  - **Per-run cost:** RLM $0.035 to $0.41, Standard $0.023 to $0.065. Main-conversation cache share was 79-94% for RLM and 70-93% for Standard.
+  - **What drives RLM's cost:** sub-call output, set by the thinking level the agent picks for sub-calls. With `thinking="off"` (L2-01) the sub-calls wrote 3k tokens and the run cost $0.035, about the same as Standard. With `low` (L1-00) they wrote 289k ($0.20). With `off`, then a second pass at `medium` (L2-00), 591k ($0.41).
+  - **Conclusions:** the default sub-call effort is the main cost lever, which is Rishi's open decision. A default of `off` or `low`, with the persona naming classification as extraction, would likely bring RLM near Standard's cost.
+  - **Caveats:** with a 1M-token window, Standard can hold these inputs whole. A smaller-window model, or the 400K+ levels, would test RLM's advantage more fairly. Four tasks are a sign, not a result.
 - **dsh's plugin market is not a central store.** In 0.2.2-rc.1 the Discover tab reads index URLs the user adds (format 1, `dsh-plugin-market-index`), none is configured by default, and the bundle that mounts it is off in shipped profiles. So npm is the channel: users enter `rlmh-dsh` under Plugins, Add plugin, "Install a third-party plugin", or run `dsh plugin add rlmh-dsh`. Our own market index is possible later, but nobody would see it without adding its URL.
 
 ### Step 1. Plugin tests in the verify gate and CI
