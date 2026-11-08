@@ -1,8 +1,8 @@
 // KV cache: none (a release tool; nothing here reaches a model request).
 //
-// Writes market/index.json, a dsh plugin market index (format 1) that lists rlmh's published versions, so a dsh
+// Writes market/index.json, a dsh plugin market index (format 1) that lists rlmh-dsh's published versions, so a dsh
 // user can add its raw URL under Plugins -> Discover -> Index sources. Each version's publish time comes from npm
-// (`npm view rlmh time`), so run this after a version is on npm. Versions already in the file are kept.
+// (`npm view rlmh-dsh time`), so run this after a version is on npm. Versions already in the file are kept.
 // The result is checked with dsh's own validator (@deepseek-ai/dsh-plugin-market-index) before it is written.
 // Usage (in dsh-plugin/): node scripts/market-index.mjs [--timestamp <unix seconds>]   (--timestamp: offline, tests)
 import { execSync } from 'node:child_process'

@@ -97,6 +97,6 @@ export async function completeSubcall(llm, prompt, route, signal, maxTokens = SU
     } else if (c.type === 'finish' && (c.reason?.kind === 'error' || c.reason?.kind === 'aborted')) failure = c.reason.failure ?? c.reason
   }
   if (failure) throw new Error(failure.message ?? String(failure.code ?? 'sub-call failed'))
-  if (process.env.RLMH_DSH_DEBUG) console.error(`[rlmh] sub-call ${route.provider}/${route.model} ${JSON.stringify(usage)}`)
+  if (process.env.RLMH_DSH_DEBUG) console.error(`[rlmh-dsh] sub-call ${route.provider}/${route.model} ${JSON.stringify(usage)}`)
   return { text, usage }
 }

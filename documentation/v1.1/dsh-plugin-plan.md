@@ -67,7 +67,7 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 | 6 | Cache guard | done, `390f2f5` (runs in CI, not the offline gate) |
 | 7 | Permissions (dsh's read-only and plan modes inside the REPL) | done, `ac5c530` |
 | 8 | Eval: RLM mode vs Standard (**needs Rishi**: spend estimate and go) | closed by Rishi 2026-11-08, not run. The live checks of steps 4 to 7 and the cache A/B stand in |
-| 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | done: `rlmh-dsh` 1.1.0 on npm (2026-11-08, published by Rishi by hand, approved as a staged release); installed from npm into a clean profile, the cache guard passes; plugin index in `dsh-plugin/market/index.json`. Being renamed to `rlmh` (D-266). Left: publish `rlmh`, deprecate `rlmh-dsh`, trusted publisher on npmjs.com, the GitHub topic |
+| 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | done: `rlmh-dsh` 1.1.0 on npm (2026-11-08, published by Rishi by hand, approved as a staged release); installed from npm into a clean profile, the cache guard passes; plugin index in `dsh-plugin/market/index.json`. Left: trusted publisher on npmjs.com, the GitHub topic |
 
 ### Progress notes (2026-11-07)
 - **Step 2 result.** Each sub-call is an `llm` dsh tool call: the Trajectory view lists it as a `SUBTOOL llm` row with its prompt, answer and a `[sub-call tokens: N in, M of them cached; K out]` line (checked in the web UI). dsh's own usage total (the status bar) still counts only the main conversation: its token meter replays the session's main requests, so tool-internal model calls can't reach it without a dsh change.

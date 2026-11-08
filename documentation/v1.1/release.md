@@ -1,6 +1,6 @@
-# Releasing rlmh (v1.1, step 9)
+# Releasing rlmh-dsh (v1.1, step 9)
 
-`rlmh` is the npm package for RLM mode in DeepSeek Harness. It is built from `dsh-plugin/` on branch `dsh-plugin` and never from `main` (D-264, D-265).
+`rlmh-dsh` is the npm package for RLM mode in DeepSeek Harness. It is built from `dsh-plugin/` on branch `dsh-plugin` and never from `main` (D-264, D-265).
 
 Each item below needs Rishi's OK:
 - every publish;
@@ -9,19 +9,17 @@ Each item below needs Rishi's OK:
 
 ## Status
 
-**Renamed to `rlmh` (2026-11-08, D-266).** npm can't rename a package, so `rlmh` is a new package with the same code, and `rlmh-dsh` gets deprecated with a pointer to it. npm refused the name `rlmh` once before (D-151, "too similar to existing package rlp"), for rlm-harness's CLI. If it refuses again, Rishi picks another name (`rlm-mode` is free).
-
-What happened under the old name:
-
 **1.1.0 is on npm (2026-11-08).** Rishi published it by hand from the CI tarball (run 42459536517, byte-identical to a local pack). npm held it as a **staged release**:
 - the registry showed only a `0.0.0-stage` placeholder until it was approved;
 - after approval, `latest` is 1.1.0.
 
 Installed from npm into a clean dsh profile, it passes the cache guard. The plugin index is committed. Still to do: steps 3, 4 and 6 below.
 
+**The name stays `rlmh-dsh` (D-266).** npm refused `rlmh` ("too similar to existing package rlp"), and Rishi kept the name that works.
+
 ## What was built (2026-11-08)
 
-- **The package.** Version 1.1.0, unscoped name `rlmh`, about 34 kB, 15 files.
+- **The package.** Version 1.1.0, unscoped name `rlmh-dsh`, about 34 kB, 15 files.
   - It includes a README for npm and the MIT LICENSE.
   - It is no longer `private`.
   - Its peer ranges on dsh packages follow `engines.dsh` (`>=0.2.2-rc.1 <0.3.0`) instead of pinning `0.2.2-rc.1`, so a dsh update within 0.2.x doesn't break the install.
@@ -34,13 +32,6 @@ Installed from npm into a clean dsh profile, it passes the cache guard. The plug
 - **`dsh-plugin/scripts/market-index.mjs`.** Writes `dsh-plugin/market/index.json`, a dsh plugin index (format 1), checked by dsh's own validator.
   - Run it after a version is on npm: it reads the publish time from npm.
 
-## Moving from `rlmh-dsh` to `rlmh`
-
-1. Publish `rlmh` as in "First release" below, steps 1 to 3. The pack job runs on the push that renamed it, so its tarball is that run's artifact.
-2. Deprecate the old package: `npm deprecate rlmh-dsh "renamed to rlmh: dsh plugin add rlmh"`.
-3. Regenerate `market/index.json` (`node scripts/market-index.mjs`), which then lists `rlmh` only, and commit it.
-4. On npmjs.com, set up the trusted publisher on `rlmh`, not `rlmh-dsh`.
-
 ## First release (one time)
 
 npm sets up trusted publishing per package, and only once the package exists. So the first version goes up by hand, the way rlm-harness's packages did (npm-install.md step 4).
@@ -51,21 +42,21 @@ npm sets up trusted publishing per package, and only once the package exists. So
    gh workflow run dsh-plugin-npm.yml --ref dsh-plugin
    ```
 
-   Then download the run's `rlmh-tarball` artifact.
+   Then download the run's `rlmh-dsh-tarball` artifact.
 2. **Publish that file by hand,** logged in to npm as the account that owns the `rlmh` org:
 
    ```bash
-   npm publish ./rlmh-1.1.0.tgz --access public
+   npm publish ./rlmh-dsh-1.1.0.tgz --access public
    ```
 
-   npm may hold the version as a staged release, showing only a `0.0.0-stage` placeholder. Approve it under the package's **Staged Packages** tab on npmjs.com, or run `npm stage list rlmh` and then `npm stage approve <stage-id>` (npm 11.15 or later). Either way asks for 2FA.
+   npm may hold the version as a staged release, showing only a `0.0.0-stage` placeholder. Approve it under the package's **Staged Packages** tab on npmjs.com, or run `npm stage list rlmh-dsh` and then `npm stage approve <stage-id>` (npm 11.15 or later). Either way asks for 2FA.
 
-   If npm refuses the name as too similar to an existing package (as it once refused `rlmh`, D-151), pick another name. Renaming means changing:
+   If npm refuses the name as too similar to an existing package (as it refused `rlmh`, D-151), the fallback is `@rlmh/dsh`, in the existing org. Renaming means changing:
    - `package.json`'s `name`;
-   - the package rows and paths in `cordis.patch.yml`, and the client module id in `lib/client.js`;
+   - the `rlmh-dsh` rows and paths in `cordis.patch.yml`;
    - the cache guard's checks;
    - the README.
-3. **Turn on trusted publishing.** On npmjs.com, open `rlmh` → Settings, and add a GitHub Actions trusted publisher:
+3. **Turn on trusted publishing.** On npmjs.com, open `rlmh-dsh` → Settings, and add a GitHub Actions trusted publisher:
    - owner `RishiJain905`, repository `rlm-harness`, workflow `dsh-plugin-npm.yml`, environment `npm`;
    - under Allowed actions, tick direct `npm publish`.
    - A new configuration expires unless it publishes within 2 days. If it expires, add it again just before the next release.
@@ -88,4 +79,4 @@ npm sets up trusted publishing per package, and only once the package exists. So
    Then approve the `npm` environment in that run. If npm stages the version, approve it as in step 2 of the first release. Approval needs your 2FA, so CI can't do it.
 4. Run `node scripts/market-index.mjs` in `dsh-plugin/`, then commit and push `market/index.json`.
 
-Users update with `dsh plugin --profile <name> update rlmh` (`dsh plugin` passes its arguments to pnpm), or through the desktop app's plugin manager. The desktop route hasn't been checked yet.
+Users update with `dsh plugin --profile <name> update rlmh-dsh` (`dsh plugin` passes its arguments to pnpm), or through the desktop app's plugin manager. The desktop route hasn't been checked yet.

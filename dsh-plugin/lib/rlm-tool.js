@@ -25,7 +25,7 @@ export const RLM_DEFAULTS = Object.freeze({
 export { RLM_TOOL }
 
 /** Where a child's input text goes: one file per distinct text, under the OS temp folder. */
-export function contextFile(text, dir = join(tmpdir(), 'rlmh-context')) {
+export function contextFile(text, dir = join(tmpdir(), 'rlmh-dsh-context')) {
   mkdirSync(dir, { recursive: true })
   const path = join(dir, `${blobId(text).slice(0, 32)}.txt`)
   writeFileSync(path, text, 'utf8')

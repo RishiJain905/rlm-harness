@@ -1,6 +1,6 @@
-# rlmh: RLM mode for DeepSeek Harness
+# rlmh-dsh: RLM mode for DeepSeek Harness
 
-`rlmh` adds **RLM mode** to [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (dsh). RLM mode is the Recursive Language Model method from [rlm-harness](https://github.com/RishiJain905/rlm-harness), running inside dsh.
+`rlmh-dsh` adds **RLM mode** to [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (dsh). RLM mode is the Recursive Language Model method from [rlm-harness](https://github.com/RishiJain905/rlm-harness), running inside dsh.
 
 The model doesn't read long inputs. It works through a persistent Python REPL, the `run_code` tool:
 - loading files into variables;
@@ -14,14 +14,14 @@ The model's own context stays small and its prompt cache stays warm, even on inp
 
 **dsh desktop:**
 1. Open **Plugins** → **Add plugin** → **Install a third-party plugin**.
-2. Enter `rlmh`, then click **Install** and **Enable now**.
+2. Enter `rlmh-dsh`, then click **Install** and **Enable now**.
 
 There is no restart and no terminal. RLM mode needs Python, and the desktop app ships one.
 
 **dsh CLI or web:**
 
 ```bash
-dsh plugin --profile web add rlmh
+dsh plugin --profile web add rlmh-dsh
 ```
 
 Use your own profile's name in place of `web`.
@@ -31,8 +31,6 @@ Needs dsh 0.2.2-rc.1 or later, below 0.3.0.
 **From dsh's plugin Discover tab** (needs the experimental "Custom plugin indexes" plugin to be on):
 1. Add this index source: `https://raw.githubusercontent.com/RishiJain905/rlm-harness/dsh-plugin/dsh-plugin/market/index.json`.
 2. Install RLM mode from Discover.
-
-This package used to be called `rlmh-dsh`. If you have that one installed, remove it before installing `rlmh`: both set up the same RLM mode, and dsh shouldn't load them together.
 
 ## Use it
 

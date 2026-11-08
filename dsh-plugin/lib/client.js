@@ -1,11 +1,11 @@
 // KV cache: none (a settings page in the browser; it changes settings, never prompt or tool text)
-// RLM mode's settings page, the browser half of rlmh (step 4c). It edits the volatile fields of the
+// RLM mode's settings page, the browser half of rlmh-dsh (step 4c). It edits the volatile fields of the
 // `rlmh-settings` profile entry (lib/settings.js) through dsh's shared settings form: values are staged until Save,
 // an overridden field carries a badge and a reset, and an empty field saves as a reset. The page sits in the Plugins
 // page (`plugins.item` slot) while the Host serves that entry's form. dsh supplies React and the UI primitives, so
 // this file is loaded as-is (no build step), in the module format dsh's client loader expects.
 window.__ModuleLoader__.load({
-  id: 'rlmh',
+  id: 'rlmh-dsh',
   factory: (require) => {
     const { jsx, jsxs } = require('react/jsx-runtime')
     const P = require('@deepseek-ai/dsh-client-ui-primitives')
@@ -97,9 +97,9 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       const t = ctx.locale.bind(NS)
       // English only for now; every language dsh ships reads the same copy.
-      ctx.effect(() => ctx.locale.register(NS, { en, zh: en, ja: en, es: en, fr: en, de: en, ru: en, pt: en }), 'rlmh: dictionaries')
+      ctx.effect(() => ctx.locale.register(NS, { en, zh: en, ja: en, es: en, fr: en, de: en, ru: en, pt: en }), 'rlmh-dsh: dictionaries')
       const card = new RlmhCardController(ctx.configForms.get(ENTRY))
-      ctx.effect(() => () => { card.dispose() }, 'rlmh: form subscription')
+      ctx.effect(() => () => { card.dispose() }, 'rlmh-dsh: form subscription')
       ctx.effect(() => ctx.configForms.whileServed([ENTRY], () => ctx.slots.inject('plugins.item', () => ctx.slots.register({
         name: 'plugins.item',
         id: 'rlmh',
@@ -107,7 +107,7 @@ window.__ModuleLoader__.load({
         label: () => t('title'),
         locale: NS,
         inject: () => card.inject(),
-      }, RlmhCard))), 'rlmh: page')
+      }, RlmhCard))), 'rlmh-dsh: page')
     }
 
     return { NS, inject, apply }
