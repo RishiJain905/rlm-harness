@@ -19,6 +19,7 @@ import { SEPARATOR, completeSubcall, fitEffort, subcallRoute, withThinking } fro
 import { MISSING_PREFIX, getBlob, putBlob } from './blobs.js'
 import { effective } from './settings.js'
 import { LLM_TOOL } from './tool-names.js'
+import { askText, canInstall, homePython, installPython } from './python-setup.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPL = join(HERE, '..', 'python', 'rlm_repl.py')
@@ -72,7 +73,10 @@ export function replEnv(env = process.env) {
   return out
 }
 
-/** Candidate interpreters, most preferred first: the configured one, dsh desktop's bundled CPython, rlmh's, PATH. */
+/**
+ * Candidate interpreters, most preferred first: the configured one, dsh desktop's bundled CPython, an installed rlmh's,
+ * the one in <home>/python (step 5b or `rlmh setup`), uv's own, PATH.
+ */
 export function pythonCandidates(config = {}, env = process.env) {
   const list = []
   if (config.pythonBin) list.push(config.pythonBin)
@@ -90,7 +94,9 @@ export function pythonCandidates(config = {}, env = process.env) {
       if (typeof python === 'string') list.push(python)
     } catch {}
   }
-  // A Python uv manages (`uv python find` only looks; it never downloads).
+  // Pythons uv manages (`uv python find` only looks; it never downloads): <home>/python's, then uv's default place.
+  const home = homePython(replEnv(env))
+  if (home) list.push(home)
   const uv = uvPython(env)
   if (uv) list.push(uv)
   list.push(...(win ? ['python', 'py'] : ['python3', 'python']))
@@ -110,6 +116,9 @@ export function uvPython(env = process.env) {
 
 /** What the agent is told when no Python 3.10+ is found, so it can tell the user what to do. */
 export const NO_PYTHON = 'RLM mode needs Python 3.10 or later, and none was found on this computer. DeepSeek Harness desktop includes one, so installing the desktop app is the simplest fix; otherwise install Python 3.12 (python.org, or `uv python install 3.12`), then start a new session.'
+
+/** What the agent is told after the user said no to downloading Python (step 5b); they are not asked again in this session. */
+export const PYTHON_DECLINED = 'RLM mode needs Python 3.12, and the user chose not to download it. Tell the user that RLM mode can\'t run code until Python 3.12 is installed (DeepSeek Harness desktop includes one; or python.org, or `uv python install 3.12`), and that a new session will offer the download again.'
 
 /** The first candidate that runs CPython 3.10 or later, with its version; undefined when none does. */
 export function findPython(config = {}, env = process.env) {
@@ -139,6 +148,7 @@ export default class RlmPythonRuntime extends PtcRuntime {
     this.everRan = new WeakSet() // owners whose REPL existed once (so a new one is a restart)
     this.all = new Set()
     this.python = undefined
+    this.declined = new WeakSet() // sessions whose user said no to downloading Python (step 5b)
     this.usage = { subcalls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }
     ctx.effect(() => () => Promise.all([...this.all].map((r) => r.kill())))
   }
@@ -176,9 +186,9 @@ export default class RlmPythonRuntime extends PtcRuntime {
   }
 
   async run(spec) {
-    this.python ??= findPython(this.config) ?? null
     if (!this.python) {
-      return { logs: [], error: { kind: 'worker-exit', message: NO_PYTHON } }
+      const failure = await this.preparePython(spec)
+      if (failure) return { logs: [], error: { kind: 'worker-exit', message: failure } }
     }
     const owner = spec.stateOwner
     let repl = owner ? this.procs.get(owner) : undefined
@@ -202,6 +212,45 @@ export default class RlmPythonRuntime extends PtcRuntime {
       if (!owner) await repl.kill()
     }
   }
+
+  /** Finds Python, else (step 5b) asks the user once and downloads it. Resolves with a message for the agent on failure. */
+  async preparePython(spec) {
+    this.python = this.findPython() ?? null
+    if (this.python) return undefined
+    // one question at a time: concurrent run_code calls share it
+    this.fetching ??= this.fetchPython(spec).finally(() => { this.fetching = undefined })
+    return this.fetching
+  }
+
+  async fetchPython(spec) {
+    if (spec.stateOwner && this.declined.has(spec.stateOwner)) return PYTHON_DECLINED
+    const env = replEnv()
+    const approval = this.ctx.get?.('approval')
+    if (!approval?.request || !spec.stateOwner || !canInstall(env)) return NO_PYTHON
+    let outcome
+    try {
+      const reason = askText(env)
+      outcome = await approval.request({ agent: spec.stateOwner, toolName: 'run_code', reason, displayReason: { en: reason }, signal: spec.signal })
+    } catch {
+      outcome = 'unavailable' // no open turn or no answerer: fail closed, as dsh does
+    }
+    if (outcome === 'rejected') { this.declined.add(spec.stateOwner); return PYTHON_DECLINED }
+    if (outcome !== 'allowed-once') return NO_PYTHON
+    try {
+      await this.installPython({ env, signal: spec.signal })
+    } catch (e) {
+      if (spec.signal?.aborted) return 'The Python 3.12 download was cancelled.'
+      return `Downloading Python 3.12 for RLM mode failed: ${e.message}. Tell the user; a new run_code call asks again.`
+    }
+    this.python = this.findPython() ?? null
+    return this.python ? undefined : `Python 3.12 was downloaded, but RLM mode still can't find it. ${NO_PYTHON}`
+  }
+
+  /** The interpreter to use (overridable in tests). */
+  findPython() { return findPython(this.config) }
+
+  /** Downloads Python 3.12 (python-setup.js; overridable in tests). */
+  installPython(opts) { return installPython(opts) }
 
   /** The route a direct sub-call uses (subcalls.js): the configured one, else the agent's model and effort. */
   subcallRoute(owner) {

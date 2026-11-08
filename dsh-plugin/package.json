@@ -1,8 +1,23 @@
 {
   "name": "rlmh-dsh",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "RLM mode for DeepSeek Harness: a persistent Python REPL with recursive sub-calls (llm, llm_batch).",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "rlm",
+    "recursive-language-model",
+    "llm",
+    "repl"
+  ],
+  "homepage": "https://github.com/RishiJain905/rlm-harness/tree/dsh-plugin/dsh-plugin#readme",
+  "bugs": "https://github.com/RishiJain905/rlm-harness/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RishiJain905/rlm-harness.git",
+    "directory": "dsh-plugin"
+  },
+  "author": "Rishi Jain",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",

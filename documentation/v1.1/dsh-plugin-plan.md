@@ -1,6 +1,6 @@
 # v1.1 plan: rlmh as a DeepSeek Harness plugin
 
-Status: draft for Rishi, 2026-11-07. Written after a spike on Rishi's PC (Windows 11), dsh desktop 0.2.2-rc.1, model `openrouter / ~deepseek/deepseek-flash-latest`, reasoning `high`. Nothing here is built in this repo yet; the spike code lives outside it, in `F:\Personal\RLM\dsh-spike\`.
+Status: being built (see §4), 2026-11-08; drafted 2026-11-07. Written after a spike on Rishi's PC (Windows 11), dsh desktop 0.2.2-rc.1, model `openrouter / ~deepseek/deepseek-flash-latest`, reasoning `high`. Nothing here is built in this repo yet; the spike code lives outside it, in `F:\Personal\RLM\dsh-spike\`.
 
 ## 1. The idea in one paragraph
 
@@ -62,12 +62,12 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 | 4 | A proper RLM mode preset, with settings | done, `7b24bf7`, except a settings page in the GUI (step 4c) |
 | 4c | A settings page in dsh's GUI (a client UI plugin) | done, `75cde1e` |
 | 4b | `rlm()` child runs as dsh subagents on the RLM preset | done, `9a24f3b` |
-| 5 | Works right after install (**needs Rishi**: installing into his dsh desktop) | done for dsh desktop (uncommitted) |
-| 5b | Python for installs without dsh desktop: download it through uv after asking once in the GUI | todo |
+| 5 | Works right after install (**needs Rishi**: installing into his dsh desktop) | done for dsh desktop, `a7da56f` |
+| 5b | Python for installs without dsh desktop: download it through uv after asking once in the GUI | done (D-265), checked in `dsh web` |
 | 6 | Cache guard | done, `390f2f5` (runs in CI, not the offline gate) |
 | 7 | Permissions (dsh's read-only and plan modes inside the REPL) | done, `ac5c530` |
 | 8 | Eval: RLM mode vs Standard (**needs Rishi**: spend estimate and go) | todo |
-| 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | todo |
+| 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | ready to publish (D-266): package 0.1.0, README, `dsh-plugin-release.yml`; waits on Rishi's first publish |
 
 ### Progress notes (2026-11-07)
 - **Step 2 result.** Each sub-call is an `llm` dsh tool call: the Trajectory view lists it as a `SUBTOOL llm` row with its prompt, answer and a `[sub-call tokens: N in, M of them cached; K out]` line (checked in the web UI). dsh's own usage total (the status bar) still counts only the main conversation: its token meter replays the session's main requests, so tool-internal model calls can't reach it without a dsh change.
@@ -95,6 +95,11 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 
   A recording proxy between dsh and OpenRouter (body and `x-session-id` only; the key passes through in memory) showed every main-conversation request in a 50-step RLM run starting with the previous one byte for byte, reasoning replay included, with the tool list unchanged. OpenRouter serves this model from third-party hosts (Wafer, Modal, DeepInfra, Cohere), not DeepSeek: the main conversation stayed on one host and missed nothing after its first request, while sub-calls went to another host (DeepInfra), as their own affinity key intends. A miss in the first batch was total (nothing cached) and the next step recovered, the signature of OpenRouter moving a request to a host without our cache. Conclusion: RLM mode's own caching is as good as Standard mode's, and better on long runs (96-98% at 47-50 steps); the 68% desktop figure was a short 12-step session plus routing. Pinning the host would remove the routing misses: pi-ai's OpenRouter route accepts `openRouterRouting` (`order`, `only`, `allow_fallbacks`), the same idea as rlmh's D-120. That's the user's model configuration; worth a README note and maybe a check at start-up.
 - **Pinning test (2026-11-07).** OpenRouter lists 51 hosts for `deepseek/deepseek-v4.1-flash-1017`, at different quantizations (fp4, fp8, full) and prices, and load-balances across them by default. dsh refuses `openRouterRouting` both on the route and on the model entry ("not configurable here: pi-ai's installed catalog sets it for the vendors that need it"), so a dsh user can't pin hosts in dsh's model settings. The test pinned through the recording proxy instead, adding OpenRouter's documented `provider: {order, allow_fallbacks: false}` to each request, which is what an OpenRouter account preference does. Pinned to DeepSeek's own endpoint, every request failed: Rishi's OpenRouter account excludes it (and Alibaba, Baidu and others) for "ZDR violation, paid model training violation (account settings)". Pinned to Wafer: two RLM runs, 16 and 34 steps, 96.7% and 97.9% raw cache share, no misses at all (not even the early one unpinned runs had), every request including sub-calls on Wafer, sub-calls hitting the cache when they shared a prefix (21 of 53 and 10 of 14), the count right both times. So the way for a dsh user to get stable caching on OpenRouter is OpenRouter's own account preferences (a default provider order, or allowed providers), or dsh's built-in DeepSeek provider with a DeepSeek key. Step 9's README should say so; it also matters for quality, since some hosts serve fp4.
+
+### Progress notes (2026-11-08, cloud session, after Rishi's PC went off)
+- **Step 5b result (D-265).** `lib/python-setup.js`. When no Python is found, the first `run_code` in a session asks through dsh's approval service (`ctx.approval.request`, tool `run_code`): an orange "Waiting for approval" card with Reject and Allow once. On Allow it puts uv 0.13.6 in `<home>/bin` (curl from uv's GitHub release, the same pinned SHA-256s as `install.sh`/`install.ps1`; skipped when uv is already on PATH), then runs `uv python install 3.12` into `<home>/python` with `rlmh setup`'s settings, so rlmh and the plugin share it. `<home>` is `RLMH_HOME` or `~/.rlm-harness`. On Reject, that session gets a "chose not to download" message and isn't asked again; a new session asks again. Headless dsh has no answerer, so it fails closed with the install advice (checked against the real dsh 0.2.2-rc.1). The lookup order now has `<home>/python` before uv's default place. Live checks in a Linux container: a real download took 3.7 s (uv 38 MB plus Python, about 140 MB on disk). In `dsh web`, driven with Playwright against a fake model and with no Python or uv on PATH, Allow produced `42` from `print(6*7)` in 4.4 s, and Reject behaved as described. An unpack failure now includes tar's stderr: a PATH without gzip failed with only "tar exited 2".
+- **Step 9 prep (D-266).** `package.json` is public at 0.1.0, with repository, homepage and keywords (`dsh-plugin`, `deepseek-harness`). It ships `README.md` (install, Python, settings, the two caching settings from the 2026-11-07 notes, permissions) and `LICENSE`. `npm pack` is 36.6 kB (16 files), and the packed `.tgz` passes the cache guard in a clean profile. `.github/workflows/dsh-plugin-release.yml` runs on a tag `rlmh-dsh-vX.Y.Z`. Its `pack` job checks the tag against `package.json`, runs the tests, packs, and installs the tarball into a clean dsh profile. Its `publish` job runs in the `npm` environment with trusted publishing. `rlmh-dsh` was free on npm on 2026-11-08.
+- **dsh's plugin market is not a central store.** In 0.2.2-rc.1 the Discover tab reads index URLs the user adds (format 1, `dsh-plugin-market-index`), none is configured by default, and the bundle that mounts it is off in shipped profiles. So npm is the channel: users enter `rlmh-dsh` under Plugins, Add plugin, "Install a third-party plugin", or run `dsh plugin add rlmh-dsh`. Our own market index is possible later, but nobody would see it without adding its URL.
 
 ### Step 1. Plugin tests in the verify gate and CI
 - A `dsh-plugin` stage in both `scripts/verify.ps1` and `scripts/verify.sh`: `npm ci --offline` in `dsh-plugin/` (from npm's cache, so the gate stays offline), then the Node tests (`node --test`) and the Python tests (`python -m unittest`, on uv's Python 3.12 from the engine project).
@@ -138,6 +143,11 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 
 ### Step 9. Release (needs Rishi)
 - npm publish (trusted publishing, like rlmh's packages), a README, the `dsh-plugin` GitHub topic, a listing in dsh's plugin market.
+- How to release (D-266):
+  1. Push the `dsh-plugin` branch, then tag `rlmh-dsh-v0.1.0` on it and push the tag. The `npm` environment must allow that tag if it has deployment-branch rules.
+  2. **First version only:** the `publish` job fails, because npm has no trusted publisher for a package that doesn't exist yet. Download the `rlmh-dsh-tarball` artifact from the run's `pack` job and run `npm publish ./rlmh-dsh-0.1.0.tgz --access public` once, logged in as the npm owner.
+  3. On npmjs.com, `rlmh-dsh`, Settings: add a GitHub Actions trusted publisher with owner `RishiJain905`, repository `rlm-harness`, workflow `dsh-plugin-release.yml` and environment `npm`, and allow direct `npm publish`. Do this within 2 days of the next tag.
+  4. Later versions: bump `version` in `dsh-plugin/package.json`, then tag `rlmh-dsh-vX.Y.Z` and approve the `npm` environment.
 - Done when: `dsh plugin add rlmh-dsh` works on a clean machine.
 
 ## 5. Caching rules for the plugin

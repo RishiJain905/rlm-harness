@@ -1,0 +1,98 @@
+name: dsh-plugin release
+
+# D-266. Publishes rlmh-dsh (dsh-plugin/, D-264) to npm from a tag rlmh-dsh-vX.Y.Z on the dsh-plugin branch. That
+# branch never merges into main, so this runs on the tag push rather than as a dispatch from main. The tag must match
+# dsh-plugin/package.json's version. `pack` runs the plugin's tests, packs it, and installs the tarball into a clean
+# dsh profile (the cache guard), as a user gets it; `publish` runs in the `npm` environment, whose reviewer approves
+# each run, with npm trusted publishing (no token). On npmjs.com, rlmh-dsh's trusted publisher must be this workflow
+# (dsh-plugin-release.yml, environment npm, direct `npm publish` allowed). npm registers one only for a package that
+# exists, so the first version is published by hand from this run's artifact (documentation/v1.1/dsh-plugin-plan.md).
+
+on:
+  push:
+    tags: ['rlmh-dsh-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: dsh-plugin
+    steps:
+      - run: git config --global core.autocrlf false
+        working-directory: .
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false # a release never restores a cache (zizmor cache-poisoning)
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: false # a release never restores a cache (zizmor cache-poisoning)
+      - name: The tag matches package.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          test "$TAG" = "rlmh-dsh-v$version" || { echo "tag $TAG does not match package.json version $version"; exit 1; }
+      - run: npm ci --no-audit --no-fund --ignore-scripts
+      - run: node --test 'test/*.test.mjs'
+      - run: uv run --locked --project engine python -m unittest discover -s dsh-plugin/test -p 'test_*.py'
+        working-directory: .
+      - name: Pack
+        run: |
+          npm pack --pack-destination out
+          set -- out/*.tgz
+          test "$#" = 1
+      - name: Install DeepSeek Harness (pinned)
+        run: npm install -g @deepseek-ai/dsh@0.2.2-rc.1 pnpm@11.28.5 --no-audit --no-fund # zizmor: ignore[adhoc-packages] exact versions, for the install check
+      - name: Install the tarball into a clean profile (cache guard)
+        run: |
+          set -- "$PWD"/out/*.tgz
+          RLMH_DSH_PLUGIN="$1" DSH_CLI=dsh node test/e2e/cache-guard.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rlmh-dsh-tarball
+          path: dsh-plugin/out/*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: pack
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rlmh-dsh-tarball
+          path: out
+      # trusted publishing needs Node 22.14 or later and npm 11.5.1 or later
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false # a release never restores a cache (zizmor cache-poisoning)
+      - run: npm install -g npm@11.7.0 # zizmor: ignore[adhoc-packages] an exact version, for trusted publishing
+      - name: Publish
+        # a version already on npm is skipped, so a re-run after the first, hand-made publish finishes cleanly
+        run: |
+          set -- out/*.tgz
+          version=$(tar -xzOf "$1" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
+          dist_tag=latest
+          case "$version" in *-*) dist_tag=next ;; esac
+          if npm view "rlmh-dsh@$version" version >/dev/null 2>&1; then
+            echo "rlmh-dsh@$version is already on npm"
+            exit 0
+          fi
+          npm publish "./$1" --access public --provenance --tag "$dist_tag" # ./ so npm reads a file (D-167)

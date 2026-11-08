@@ -162,3 +162,65 @@ test('a failing llm tool call raises in the cell', async () => {
   const res = await run(rt, 'llm_batch(["a", "b"])', { stateOwner: owner(), bindings: tools({ llm }) })
   assert.match(res.error.message, /2 of 2 sub-calls failed; first: rate limited/)
 })
+
+// Step 5b: no Python found -> ask once through dsh's approval service, then download.
+function noPython(answer, install) {
+  const asked = []
+  const ctx = new Context()
+  ctx.provide('approval')
+  ctx.approval = { request: async (req) => { asked.push(req); return typeof answer === 'function' ? answer(req) : answer } }
+  const rt = new RlmPythonRuntime(ctx, {})
+  made.push(rt)
+  let found = false
+  const real = findPython()
+  rt.findPython = () => (found ? real : undefined)
+  rt.installs = []
+  rt.installPython = async (opts) => { rt.installs.push(opts); if (install) await install(opts); found = true }
+  rt.asked = asked
+  return rt
+}
+
+test('no Python: the user is asked, and a yes downloads it and runs the cell', async () => {
+  const rt = noPython('allowed-once')
+  const a = owner()
+  const r = await run(rt, '6 * 7', { stateOwner: a })
+  assert.equal(r.error, undefined)
+  assert.equal(r.value, 42)
+  assert.equal(rt.asked.length, 1)
+  assert.equal(rt.asked[0].agent, a)
+  assert.equal(rt.asked[0].toolName, 'run_code')
+  assert.match(rt.asked[0].reason, /Python 3\.12/)
+  assert.equal(rt.installs.length, 1)
+  assert.equal(rt.installs[0].env.OPENROUTER_API_KEY, undefined)
+  assert.equal((await run(rt, '1 + 1', { stateOwner: a })).value, 2)
+  assert.equal(rt.asked.length, 1, 'asked again after the download')
+})
+
+test('no Python: a no is not asked again in that session, and nothing is downloaded', async () => {
+  const rt = noPython('rejected')
+  const a = owner(), b = owner()
+  assert.match((await run(rt, '1', { stateOwner: a })).error.message, /chose not to download/)
+  assert.match((await run(rt, '1', { stateOwner: a })).error.message, /chose not to download/)
+  assert.equal(rt.asked.length, 1)
+  await run(rt, '1', { stateOwner: b })
+  assert.equal(rt.asked.length, 2, 'another session is asked')
+  assert.equal(rt.installs.length, 0)
+})
+
+test('no Python and no answerer: fails closed with the install advice', async () => {
+  const rt = noPython('unavailable')
+  assert.match((await run(rt, '1', { stateOwner: owner() })).error.message, /needs Python 3\.10 or later/)
+  assert.equal(rt.installs.length, 0)
+  const bare = new RlmPythonRuntime(new Context(), {})
+  bare.findPython = () => undefined
+  assert.match((await run(bare, '1', { stateOwner: owner() })).error.message, /needs Python 3\.10 or later/)
+})
+
+test('no Python: concurrent cells share one question, and a failed download says why', async () => {
+  const rt = noPython('allowed-once', async () => { throw new Error('curl exited 6') })
+  const a = owner()
+  const [x, y] = await Promise.all([run(rt, '1', { stateOwner: a }), run(rt, '2', { stateOwner: a })])
+  assert.equal(rt.asked.length, 1)
+  assert.match(x.error.message, /Downloading Python 3\.12 for RLM mode failed: curl exited 6/)
+  assert.equal(y.error.message, x.error.message)
+})
