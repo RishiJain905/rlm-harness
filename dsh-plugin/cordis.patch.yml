@@ -1,21 +1,12 @@
 # KV cache: every text here (the persona, the preset) is fixed, so dsh's cached prompt prefix stays byte-identical.
-# rlmh for DeepSeek Harness (D-264): the user's settings (`rlmh-settings`) and the "RLM mode" agent preset. The
-# top-level `rlm-runtime`, `rlm-subcall-tool` and `rlm-rlm-tool` rows are off by default and exist for headless tests (an overlay
-# turns them on for the whole deployment); the preset mounts its own copies.
+# rlmh for DeepSeek Harness (D-264): the user's settings (`rlmh-settings`) and the "RLM mode" agent preset, whose
+# `rlm-execution` group mounts the runtime and the llm and rlm tools inside each RLM session. Nothing else is top-level:
+# the headless cache guard inserts its own top-level runtime and llm rows in its test profile (D-267).
 - insert:
     # The package root is the settings service (lib/index.js). It must be the only active top-level entry from this
-    # package, because the package has a browser half (the settings page); the rows below are off by default.
+    # package, because the package has a browser half (the settings page).
     - id: rlmh-settings
       name: 'rlmh-dsh'
-    - id: rlm-runtime
-      name: './lib/rlm-runtime.js'
-      disabled: true
-    - id: rlm-subcall-tool
-      name: './lib/subcall-tool.js'
-      disabled: true
-    - id: rlm-rlm-tool
-      name: './lib/rlm-tool.js'
-      disabled: true
     - id: preset-rlm
       name: '@deepseek-ai/dsh-agent-preset'
       config:

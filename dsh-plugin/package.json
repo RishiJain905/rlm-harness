@@ -1,6 +1,6 @@
 {
   "name": "rlmh-dsh",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "RLM mode for DeepSeek Harness: the model works through a persistent Python REPL and hands long inputs to recursive sub-calls (llm, llm_batch, rlm) instead of reading them.",
   "keywords": [
     "dsh",

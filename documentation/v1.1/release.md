@@ -15,6 +15,8 @@ Each item below needs Rishi's OK:
 
 Installed from npm into a clean dsh profile, it passes the cache guard. The plugin index is committed. Still to do: steps 3, 4 and 6 below.
 
+**1.2.0 (D-267)** removes the three top-level test rows and is the first version published by the workflow. Trusted publishing and the `npm` environment's `dsh-plugin` branch rule are set up.
+
 **The name stays `rlmh-dsh` (D-266).** npm refused `rlmh` ("too similar to existing package rlp"), and Rishi kept the name that works.
 
 ## What was built (2026-11-08)

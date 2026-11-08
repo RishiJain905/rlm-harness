@@ -153,10 +153,13 @@ async function main() {
   disabled: true
 - id: tool-executor-ptc
   disabled: false
-- id: rlm-runtime
-  disabled: false
-- id: rlm-subcall-tool
-  disabled: false
+# the package ships no top-level runtime rows (D-267), so the test mounts the runtime and the llm tool for the whole
+# deployment itself, from the installed package
+- insert:
+    - id: rlm-runtime
+      name: 'rlmh-dsh/lib/rlm-runtime.js'
+    - id: rlm-subcall-tool
+      name: 'rlmh-dsh/lib/subcall-tool.js'
 `)
     r = await dsh(cli, ['--profile', 'cacheguard', '--json', '--permission-mode', 'read-only', 'Run the scripted steps.'], { env, cwd: work, timeout: 300_000 })
     check(r.code === 0, `the headless run finished (${r.code})`)
