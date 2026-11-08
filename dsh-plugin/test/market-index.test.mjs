@@ -10,7 +10,7 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 test('the index passes dsh\'s own validator and installs this version from npm', () => {
   const index = parseMarketIndex(buildIndex(pkg, 1794000000), INDEX_URL)
   const [plugin] = index.plugins
-  assert.equal(plugin.name, 'rlmh-dsh')
+  assert.equal(plugin.name, 'rlmh')
   assert.deepEqual(plugin.versions[0], { version: pkg.version, publishTimestamp: 1794000000, source: { type: 'npm' }, engines: { dsh: pkg.engines.dsh } })
 })
 

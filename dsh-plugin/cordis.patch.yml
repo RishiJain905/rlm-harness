@@ -6,7 +6,7 @@
     # The package root is the settings service (lib/index.js). It must be the only active top-level entry from this
     # package, because the package has a browser half (the settings page); the rows below are off by default.
     - id: rlmh-settings
-      name: 'rlmh-dsh'
+      name: 'rlmh'
     - id: rlm-runtime
       name: './lib/rlm-runtime.js'
       disabled: true
@@ -108,11 +108,11 @@
               ptcRuntime: true
             config:
               - id: rlm-runtime
-                name: 'rlmh-dsh/lib/rlm-runtime.js'
+                name: 'rlmh/lib/rlm-runtime.js'
               - id: rlm-subcall-tool
-                name: 'rlmh-dsh/lib/subcall-tool.js'
+                name: 'rlmh/lib/subcall-tool.js'
               - id: rlm-rlm-tool
-                name: 'rlmh-dsh/lib/rlm-tool.js'
+                name: 'rlmh/lib/rlm-tool.js'
               - id: tool-executor-ptc
                 name: '@deepseek-ai/dsh-tool-executor-ptc'
           - id: present
