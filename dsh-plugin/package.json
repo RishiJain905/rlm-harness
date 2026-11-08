@@ -1,8 +1,26 @@
 {
   "name": "rlmh-dsh",
-  "version": "0.0.1",
-  "private": true,
-  "description": "RLM mode for DeepSeek Harness: a persistent Python REPL with recursive sub-calls (llm, llm_batch).",
+  "version": "1.1.0",
+  "description": "RLM mode for DeepSeek Harness: the model works through a persistent Python REPL and hands long inputs to recursive sub-calls (llm, llm_batch, rlm) instead of reading them.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "rlm",
+    "recursive-language-model",
+    "repl",
+    "llm"
+  ],
+  "homepage": "https://github.com/RishiJain905/rlm-harness/tree/dsh-plugin/dsh-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/RishiJain905/rlm-harness/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RishiJain905/rlm-harness.git",
+    "directory": "dsh-plugin"
+  },
+  "author": "Rishi Jain",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -17,7 +35,9 @@
     "lib/",
     "python/rlm_repl.py",
     "python/rlmapi.py",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs"
@@ -27,18 +47,22 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh-ptc-runtime": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/schemastery": "~3.19.0",
-    "@deepseek-ai/dsh-sandbox": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-ptc-runtime": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-sandbox": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/schemastery": "~3.19.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-plugin-market-index": "0.2.2-rc.1",
     "@deepseek-ai/dsh-ptc-runtime": "0.2.2-rc.1",
     "@deepseek-ai/dsh-sandbox": "0.2.2-rc.1",
     "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
     "@deepseek-ai/schemastery": "3.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dsh": {
     "bundle": {

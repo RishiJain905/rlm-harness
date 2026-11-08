@@ -1,6 +1,6 @@
 # v1.1 plan: rlmh as a DeepSeek Harness plugin
 
-Status: draft for Rishi, 2026-11-07. Written after a spike on Rishi's PC (Windows 11), dsh desktop 0.2.2-rc.1, model `openrouter / ~deepseek/deepseek-flash-latest`, reasoning `high`. Nothing here is built in this repo yet; the spike code lives outside it, in `F:\Personal\RLM\dsh-spike\`.
+Status (2026-11-08): built through step 7 and ready for npm (step 9). Steps 5b and 8 were closed by Rishi without being built or run. Written 2026-11-07 after a spike on Rishi's PC (Windows 11), dsh desktop 0.2.2-rc.1, model `openrouter / ~deepseek/deepseek-flash-latest`, reasoning `high`. The bundle is `dsh-plugin/` on branch `dsh-plugin`. The release steps are in `release.md`.
 
 ## 1. The idea in one paragraph
 
@@ -62,12 +62,12 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 | 4 | A proper RLM mode preset, with settings | done, `7b24bf7`, except a settings page in the GUI (step 4c) |
 | 4c | A settings page in dsh's GUI (a client UI plugin) | done, `75cde1e` |
 | 4b | `rlm()` child runs as dsh subagents on the RLM preset | done, `9a24f3b` |
-| 5 | Works right after install (**needs Rishi**: installing into his dsh desktop) | done for dsh desktop (uncommitted) |
-| 5b | Python for installs without dsh desktop: download it through uv after asking once in the GUI | todo |
+| 5 | Works right after install (**needs Rishi**: installing into his dsh desktop) | done for dsh desktop, `a7da56f` |
+| 5b | Python for installs without dsh desktop: download it through uv after asking once in the GUI | closed by Rishi 2026-11-08, not built. RLM mode uses desktop's Python or the user's own, and says so when there is none (README) |
 | 6 | Cache guard | done, `390f2f5` (runs in CI, not the offline gate) |
 | 7 | Permissions (dsh's read-only and plan modes inside the REPL) | done, `ac5c530` |
-| 8 | Eval: RLM mode vs Standard (**needs Rishi**: spend estimate and go) | todo |
-| 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | todo |
+| 8 | Eval: RLM mode vs Standard (**needs Rishi**: spend estimate and go) | closed by Rishi 2026-11-08, not run. The live checks of steps 4 to 7 and the cache A/B stand in |
+| 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | ready to publish (1.1.0): package, README, `dsh-plugin-npm.yml`, plugin index script. Publishing waits for Rishi (`release.md`) |
 
 ### Progress notes (2026-11-07)
 - **Step 2 result.** Each sub-call is an `llm` dsh tool call: the Trajectory view lists it as a `SUBTOOL llm` row with its prompt, answer and a `[sub-call tokens: N in, M of them cached; K out]` line (checked in the web UI). dsh's own usage total (the status bar) still counts only the main conversation: its token meter replays the session's main requests, so tool-internal model calls can't reach it without a dsh change.
@@ -95,6 +95,23 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 
   A recording proxy between dsh and OpenRouter (body and `x-session-id` only; the key passes through in memory) showed every main-conversation request in a 50-step RLM run starting with the previous one byte for byte, reasoning replay included, with the tool list unchanged. OpenRouter serves this model from third-party hosts (Wafer, Modal, DeepInfra, Cohere), not DeepSeek: the main conversation stayed on one host and missed nothing after its first request, while sub-calls went to another host (DeepInfra), as their own affinity key intends. A miss in the first batch was total (nothing cached) and the next step recovered, the signature of OpenRouter moving a request to a host without our cache. Conclusion: RLM mode's own caching is as good as Standard mode's, and better on long runs (96-98% at 47-50 steps); the 68% desktop figure was a short 12-step session plus routing. Pinning the host would remove the routing misses: pi-ai's OpenRouter route accepts `openRouterRouting` (`order`, `only`, `allow_fallbacks`), the same idea as rlmh's D-120. That's the user's model configuration; worth a README note and maybe a check at start-up.
 - **Pinning test (2026-11-07).** OpenRouter lists 51 hosts for `deepseek/deepseek-v4.1-flash-1017`, at different quantizations (fp4, fp8, full) and prices, and load-balances across them by default. dsh refuses `openRouterRouting` both on the route and on the model entry ("not configurable here: pi-ai's installed catalog sets it for the vendors that need it"), so a dsh user can't pin hosts in dsh's model settings. The test pinned through the recording proxy instead, adding OpenRouter's documented `provider: {order, allow_fallbacks: false}` to each request, which is what an OpenRouter account preference does. Pinned to DeepSeek's own endpoint, every request failed: Rishi's OpenRouter account excludes it (and Alibaba, Baidu and others) for "ZDR violation, paid model training violation (account settings)". Pinned to Wafer: two RLM runs, 16 and 34 steps, 96.7% and 97.9% raw cache share, no misses at all (not even the early one unpinned runs had), every request including sub-calls on Wafer, sub-calls hitting the cache when they shared a prefix (21 of 53 and 10 of 14), the count right both times. So the way for a dsh user to get stable caching on OpenRouter is OpenRouter's own account preferences (a default provider order, or allowed providers), or dsh's built-in DeepSeek provider with a DeepSeek key. Step 9's README should say so; it also matters for quality, since some hosts serve fp4.
+- **Pinning on Rishi's account (2026-11-08).**
+  - **No account-wide order.** OpenRouter's Routing page offers only a default sort, which isn't an order. A **preset** holds an order: `@preset/wafer-deepinfra` (Wafer first, DeepInfra second, fallbacks allowed, any model). It was created on Rishi's OpenRouter workspace on his word ("Wafer and deepinfra as the backup").
+  - **How a request uses it.** The model id is `~deepseek/deepseek-flash-latest@preset/wafer-deepinfra`. In dsh that id is outside the installed catalog, so:
+    - the route needs `api: openai-completions`;
+    - the entry needs `reasoningEfforts` (`off: none`, `low`, `high`, `max`);
+    - the entry needs `compat` (`supportsDeveloperRole: false`, `thinkingFormat: openrouter`, `supportsStrictMode: true`).
+    dsh refuses `sendSessionAffinityHeaders` there, but pi-ai still sent `x-session-id`.
+  - **Live result.** One RLM run through the recording proxy, on the test profile: all 18 main requests and all 3 sub-calls went to Wafer, and the answer was right.
+  - **Catch.** `api` is a route-level field, and the desktop's `openrouter` route also serves Claude models on `anthropic-messages`, so setting it there would break them. Applying the preset in dsh desktop needs either a second route for the pinned model (with the key entered for it) or a change in dsh. Left to Rishi.
+- **Step 9 prep (2026-11-08).**
+  - **The package.** Version 1.1.0, no longer private, with a README and LICENSE. Peer ranges on dsh packages follow `engines.dsh`, so a 0.2.x update doesn't break the install.
+  - **Checked on the packed file:**
+    - the cache guard passes on a throwaway headless profile;
+    - a fresh `web` profile starts with the package and shows the RLM mode card and the installed plugin, so step 4c's start-up failure can't come back unnoticed.
+  - **The workflow.** `.github/workflows/dsh-plugin-npm.yml` packs, tests and installs the packed file. It publishes only by dispatch from `dsh-plugin`, in the `npm` environment, with trusted publishing.
+  - **The plugin index.** `scripts/market-index.mjs` writes a dsh plugin index (format 1), validated with dsh's `@deepseek-ai/dsh-plugin-market-index`. dsh's Discover tab is its experimental "Custom plugin indexes" plugin: users turn it on, then add the index URL.
+  - **Release steps:** `release.md`.
 
 ### Step 1. Plugin tests in the verify gate and CI
 - A `dsh-plugin` stage in both `scripts/verify.ps1` and `scripts/verify.sh`: `npm ci --offline` in `dsh-plugin/` (from npm's cache, so the gate stays offline), then the Node tests (`node --test`) and the Python tests (`python -m unittest`, on uv's Python 3.12 from the engine project).
