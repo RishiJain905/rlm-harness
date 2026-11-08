@@ -1,6 +1,6 @@
 # v1.1 plan: rlmh as a DeepSeek Harness plugin
 
-Status (2026-11-08): built through step 7 and ready for npm (step 9). Steps 5b and 8 were closed by Rishi without being built or run. Written 2026-11-07 after a spike on Rishi's PC (Windows 11), dsh desktop 0.2.2-rc.1, model `openrouter / ~deepseek/deepseek-flash-latest`, reasoning `high`. The bundle is `dsh-plugin/` on branch `dsh-plugin`. The release steps are in `release.md`.
+Status (2026-11-08): released as `rlmh-dsh` 1.1.0 on npm (step 9). Steps 5b and 8 were closed by Rishi without being built or run. Written 2026-11-07 after a spike on Rishi's PC (Windows 11), dsh desktop 0.2.2-rc.1, model `openrouter / ~deepseek/deepseek-flash-latest`, reasoning `high`. The bundle is `dsh-plugin/` on branch `dsh-plugin`. The release steps are in `release.md`.
 
 ## 1. The idea in one paragraph
 
@@ -67,7 +67,7 @@ Work happens on branch `dsh-plugin`, folder `dsh-plugin/` (D-264). Steps run in 
 | 6 | Cache guard | done, `390f2f5` (runs in CI, not the offline gate) |
 | 7 | Permissions (dsh's read-only and plan modes inside the REPL) | done, `ac5c530` |
 | 8 | Eval: RLM mode vs Standard (**needs Rishi**: spend estimate and go) | closed by Rishi 2026-11-08, not run. The live checks of steps 4 to 7 and the cache A/B stand in |
-| 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | ready to publish (1.1.0): package, README, `dsh-plugin-npm.yml`, plugin index script. Publishing waits for Rishi (`release.md`) |
+| 9 | Release: npm and dsh's plugin market (**needs Rishi**: publish OK) | done: `rlmh-dsh` 1.1.0 on npm (2026-11-08, published by Rishi by hand, approved as a staged release); installed from npm into a clean profile, the cache guard passes; plugin index in `dsh-plugin/market/index.json`. Left: trusted publisher on npmjs.com, the GitHub topic |
 
 ### Progress notes (2026-11-07)
 - **Step 2 result.** Each sub-call is an `llm` dsh tool call: the Trajectory view lists it as a `SUBTOOL llm` row with its prompt, answer and a `[sub-call tokens: N in, M of them cached; K out]` line (checked in the web UI). dsh's own usage total (the status bar) still counts only the main conversation: its token meter replays the session's main requests, so tool-internal model calls can't reach it without a dsh change.

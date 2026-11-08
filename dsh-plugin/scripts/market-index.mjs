@@ -5,7 +5,7 @@
 // (`npm view rlmh-dsh time`), so run this after a version is on npm. Versions already in the file are kept.
 // The result is checked with dsh's own validator (@deepseek-ai/dsh-plugin-market-index) before it is written.
 // Usage (in dsh-plugin/): node scripts/market-index.mjs [--timestamp <unix seconds>]   (--timestamp: offline, tests)
-import { execFileSync } from 'node:child_process'
+import { execSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,8 +42,8 @@ export function buildIndex(pkg, publishTimestamp, previous) {
 
 /** The version's publish time on npm, in Unix seconds. */
 function npmPublishTime(name, version) {
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  const out = execFileSync(npm, ['view', name, 'time', '--json'], { encoding: 'utf8', shell: process.platform === 'win32' })
+  if (!/^[a-z0-9@/._-]+$/.test(name)) throw new Error(`unexpected package name ${name}`)
+  const out = execSync(`npm view ${name} time --json`, { encoding: 'utf8' }) // npm is npm.cmd on Windows, so a shell
   const iso = JSON.parse(out)[version]
   if (!iso) throw new Error(`${name}@${version} is not on npm yet; publish it first`)
   return Math.floor(Date.parse(iso) / 1000)

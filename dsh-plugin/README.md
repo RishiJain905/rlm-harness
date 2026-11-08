@@ -28,6 +28,10 @@ Use your own profile's name in place of `web`.
 
 Needs dsh 0.2.2-rc.1 or later, below 0.3.0.
 
+**From dsh's plugin Discover tab** (needs the experimental "Custom plugin indexes" plugin to be on):
+1. Add this index source: `https://raw.githubusercontent.com/RishiJain905/rlm-harness/dsh-plugin/dsh-plugin/market/index.json`.
+2. Install RLM mode from Discover.
+
 ## Use it
 
 Start a session with the **RLM mode** agent preset. The model gets `run_code` and the REPL, plus these helpers:

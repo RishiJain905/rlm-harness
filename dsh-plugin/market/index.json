@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "title": "rlm-harness",
+  "description": "Plugins from rlm-harness (github.com/RishiJain905/rlm-harness).",
+  "plugins": [
+    {
+      "name": "rlmh-dsh",
+      "title": "RLM mode",
+      "description": "RLM mode for DeepSeek Harness: the model works through a persistent Python REPL and hands long inputs to recursive sub-calls (llm, llm_batch, rlm) instead of reading them.",
+      "author": "Rishi Jain",
+      "homepage": "https://github.com/RishiJain905/rlm-harness/tree/dsh-plugin/dsh-plugin#readme",
+      "repository": {
+        "url": "https://github.com/RishiJain905/rlm-harness",
+        "directory": "dsh-plugin"
+      },
+      "metadata": {
+        "keywords": [
+          "dsh",
+          "dsh-plugin",
+          "deepseek-harness",
+          "rlm",
+          "recursive-language-model",
+          "repl",
+          "llm"
+        ]
+      },
+      "versions": [
+        {
+          "version": "1.1.0",
+          "publishTimestamp": 1794123687,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.3.0"
+          }
+        }
+      ]
+    }
+  ]
+}

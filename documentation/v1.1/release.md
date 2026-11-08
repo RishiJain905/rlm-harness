@@ -7,7 +7,15 @@ Each item below needs Rishi's OK:
 - every `workflow_dispatch` run;
 - any change on npmjs.com.
 
-## What is ready (2026-11-08)
+## Status
+
+**1.1.0 is on npm (2026-11-08).** Rishi published it by hand from the CI tarball (run 42459536517, byte-identical to a local pack). npm held it as a **staged release**:
+- the registry showed only a `0.0.0-stage` placeholder until it was approved;
+- after approval, `latest` is 1.1.0.
+
+Installed from npm into a clean dsh profile, it passes the cache guard. The plugin index is committed. Still to do: steps 3, 4 and 6 below.
+
+## What was built (2026-11-08)
 
 - **The package.** Version 1.1.0, unscoped name `rlmh-dsh`, about 34 kB, 15 files.
   - It includes a README for npm and the MIT LICENSE.
@@ -39,6 +47,8 @@ npm sets up trusted publishing per package, and only once the package exists. So
    npm publish ./rlmh-dsh-1.1.0.tgz --access public
    ```
 
+   npm may hold the version as a staged release, showing only a `0.0.0-stage` placeholder. Approve it under the package's **Staged Packages** tab on npmjs.com, or run `npm stage list rlmh-dsh` and then `npm stage approve <stage-id>` (npm 11.15 or later). Either way asks for 2FA.
+
    If npm refuses the name as too similar to an existing package (as it refused `rlmh`, D-151), the fallback is `@rlmh/dsh`, in the existing org. Renaming means changing:
    - `package.json`'s `name`;
    - the `rlmh-dsh` rows and paths in `cordis.patch.yml`;
@@ -64,7 +74,7 @@ npm sets up trusted publishing per package, and only once the package exists. So
    gh workflow run dsh-plugin-npm.yml --ref dsh-plugin -f publish=true
    ```
 
-   Then approve the `npm` environment in that run.
+   Then approve the `npm` environment in that run. If npm stages the version, approve it as in step 2 of the first release. Approval needs your 2FA, so CI can't do it.
 4. Run `node scripts/market-index.mjs` in `dsh-plugin/`, then commit and push `market/index.json`.
 
 Users update with `dsh plugin --profile <name> update rlmh-dsh` (`dsh plugin` passes its arguments to pnpm), or through the desktop app's plugin manager. The desktop route hasn't been checked yet.
