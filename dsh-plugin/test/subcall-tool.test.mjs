@@ -81,7 +81,7 @@ test('completeSubcall adds up usage chunks', async () => {
 test('the rendered result carries the usage line for the Trajectory view', () => {
   const tool = llmTool(fakeLlm())
   const value = { text: 'answer', usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 7 } }
-  assert.deepEqual(tool.output.render({ prompt: 'q' }, value), [{ type: 'text', text: 'answer\n\n[sub-call tokens: 10 in, 7 of them cached; 2 out]' }])
+  assert.deepEqual(tool.output.render({ prompt: 'q' }, value), [{ type: 'text', text: 'answer\n\n[sub-call tokens: 10 new in, 7 cached in, 2 out]' }])
 })
 
 test('a stored prefix is sent first; an unknown or forged one fails', async () => {

@@ -17,7 +17,7 @@ export { LLM_TOOL }
 
 /** One sub-call's provider-reported usage, as shown in dsh's Trajectory view. */
 export function usageLine(usage) {
-  return `[sub-call tokens: ${usage.inputTokens} in, ${usage.cacheReadTokens} of them cached; ${usage.outputTokens} out]`
+  return `[sub-call tokens: ${usage.inputTokens} new in, ${usage.cacheReadTokens} cached in, ${usage.outputTokens} out]`
 }
 
 /** The tool definition, given where its model calls go (ctx.llm, or a fake in tests). */
