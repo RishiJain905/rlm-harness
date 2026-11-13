@@ -17,6 +17,8 @@ Installed from npm into a clean dsh profile, it passes the cache guard. The plug
 
 **1.2.0 (D-267)** removes the three top-level test rows and is the first version published by the workflow. Trusted publishing and the `npm` environment's `dsh-plugin` branch rule are set up.
 
+**1.2.1 (D-268)** changes only RLM mode's persona: coding work routes understanding through `ask_files`, and the persona says the RLM functions are bound despite dsh's SDK note.
+
 **The name stays `rlmh-dsh` (D-266).** npm refused `rlmh` ("too similar to existing package rlp"), and Rishi kept the name that works.
 
 ## What was built (2026-11-08)
